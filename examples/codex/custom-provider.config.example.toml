@@ -1,0 +1,22 @@
+# Local development: copy this into ~/.codex/config.toml or ~/.codex/<profile-name>.config.toml.
+# Deployment: render/mount this as $CODEX_HOME/config.toml for the web service.
+# Do not commit real provider secrets or put them in project .codex/config.toml.
+
+model_provider = "commerce_proxy"
+model = "your-model-id"
+
+[model_providers.commerce_proxy]
+name = "Commerce LLM Proxy"
+base_url = "https://proxy.example.com/v1"
+env_key = "COMMERCE_PROXY_API_KEY"
+wire_api = "responses"
+request_max_retries = 4
+stream_max_retries = 10
+stream_idle_timeout_ms = 300000
+
+# Optional static and env-backed headers.
+# http_headers = { "X-Static-Header" = "value" }
+# env_http_headers = { "X-Feature-Flags" = "COMMERCE_PROXY_FEATURES" }
+
+# Optional capability flag, only if the provider implements a compatible endpoint.
+# supports_standalone_web_search = true

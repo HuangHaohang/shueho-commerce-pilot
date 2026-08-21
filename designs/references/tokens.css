@@ -1,0 +1,136 @@
+/* shueho-commerce-pilot design tokens.
+ * Project authority for the ChatGPT-like commerce agent web UI.
+ * Implementation should map these values into Tailwind v4 and shadcn CSS variables.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Base surfaces */
+  --cp-bg: #ffffff;
+  --cp-bg-subtle: #f7f7f8;
+  --cp-bg-muted: #f3f3f3;
+  --cp-sidebar: #f9f9f9;
+  --cp-surface: #ffffff;
+  --cp-surface-subtle: #f7f7f8;
+  --cp-surface-hover: #ececec;
+  --cp-surface-active: #e9e9e9;
+  --cp-surface-disabled: #f4f4f4;
+
+  /* Text */
+  --cp-text: #0d0d0d;
+  --cp-text-soft: #2f2f2f;
+  --cp-text-muted: #6b6b6b;
+  --cp-text-faint: #9b9b9b;
+  --cp-text-disabled: #b4b4b4;
+  --cp-text-inverse: #ffffff;
+
+  /* Borders and focus */
+  --cp-border-subtle: #eeeeee;
+  --cp-border: #e5e5e5;
+  --cp-border-strong: #d1d1d1;
+  --cp-ring: #0d0d0d;
+  --cp-focus: #8f8f8f;
+
+  /* Semantic status */
+  --cp-success: #10a37f;
+  --cp-warning: #b7791f;
+  --cp-danger: #d92d20;
+  --cp-info: #3f6f91;
+  --cp-success-bg: #edf7f2;
+  --cp-warning-bg: #fff7e6;
+  --cp-danger-bg: #fff1f0;
+  --cp-info-bg: #eef4ff;
+
+  /* Typography */
+  --cp-font-sans: Inter, "SF Pro Text", "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC", "Microsoft YaHei", Arial, sans-serif;
+  --cp-font-mono: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+  --cp-text-xs: 11px;
+  --cp-text-sm: 13px;
+  --cp-text-md: 15px;
+  --cp-text-lg: 17px;
+  --cp-text-xl: 22px;
+  --cp-line-tight: 1.25;
+  --cp-line-base: 1.5;
+  --cp-line-relaxed: 1.65;
+  --cp-letter-spacing: 0;
+
+  /* Spacing */
+  --cp-space-0: 0;
+  --cp-space-1: 4px;
+  --cp-space-2: 8px;
+  --cp-space-3: 12px;
+  --cp-space-4: 16px;
+  --cp-space-5: 20px;
+  --cp-space-6: 24px;
+  --cp-space-8: 32px;
+  --cp-space-10: 40px;
+  --cp-space-12: 48px;
+  --cp-space-16: 64px;
+
+  /* Radius */
+  --cp-radius-xs: 6px;
+  --cp-radius-item: 8px;
+  --cp-radius-control: 10px;
+  --cp-radius-panel: 12px;
+  --cp-radius-popover: 16px;
+  --cp-radius-segment: 999px;
+  --cp-radius-composer: 24px;
+
+  /* Layout */
+  --cp-sidebar-width: 258px;
+  --cp-sidebar-collapsed-width: 56px;
+  --cp-topbar-height: 56px;
+  --cp-content-max: 820px;
+  --cp-readable-max: 760px;
+  --cp-composer-min-height: 128px;
+  --cp-composer-action-size: 36px;
+  --cp-sidebar-item-height: 36px;
+  --cp-sidebar-icon-size: 18px;
+
+  /* Shadows */
+  --cp-shadow-none: none;
+  --cp-shadow-border: 0 0 0 1px rgba(0, 0, 0, 0.05);
+  --cp-shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --cp-shadow-composer: 0 10px 30px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --cp-shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.06);
+
+  /* Motion */
+  --cp-duration-fast: 120ms;
+  --cp-duration-base: 180ms;
+  --cp-duration-slow: 240ms;
+  --cp-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --cp-ease-out: cubic-bezier(0, 0, 0.2, 1);
+}
+
+:root {
+  /* shadcn compatibility aliases */
+  --background: var(--cp-bg);
+  --foreground: var(--cp-text);
+  --card: var(--cp-surface);
+  --card-foreground: var(--cp-text);
+  --popover: var(--cp-surface);
+  --popover-foreground: var(--cp-text);
+  --primary: var(--cp-text);
+  --primary-foreground: var(--cp-text-inverse);
+  --secondary: var(--cp-bg-subtle);
+  --secondary-foreground: var(--cp-text-soft);
+  --muted: var(--cp-bg-subtle);
+  --muted-foreground: var(--cp-text-muted);
+  --accent: var(--cp-surface-hover);
+  --accent-foreground: var(--cp-text);
+  --destructive: var(--cp-danger);
+  --destructive-foreground: var(--cp-text-inverse);
+  --border: var(--cp-border);
+  --input: var(--cp-border);
+  --ring: var(--cp-focus);
+  --radius: var(--cp-radius-control);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --cp-duration-fast: 1ms;
+    --cp-duration-base: 1ms;
+    --cp-duration-slow: 1ms;
+  }
+}

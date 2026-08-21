@@ -1,0 +1,57 @@
+{
+  "name": "shueho-commerce-pilot · ChatGPT-like 电商 Agent 网页设计规范",
+  "version": "1.0.0",
+  "style": "chatgpt_like_commerce_agent_web",
+  "status": "project-authority",
+  "description": "面向电商 agent 网页应用的前端技术架构、UI 套件、视觉风格、组件契约和开发规范。视觉方向参考 ChatGPT 网页端的克制工作台风格，但不复制品牌资产。",
+  "source": {
+    "type": "screenshot-reference-plus-local-template-structure",
+    "referenceImage": "/var/folders/pg/bkqfff793n7gc9yw_n82095w0000gn/T/codex-clipboard-8ef2046f-6aa7-4080-9f99-91b40325a96a.png",
+    "templateStructureOnly": "/Users/shueho/.wpscomate/workspace/2945511731370683/docs/designs",
+    "confirmedDirection": "browser_web_app_chatgpt_like",
+    "confirmedAt": "2026-08-21"
+  },
+  "resources": {
+    "designSpec": "DESIGN.md",
+    "tokens": "references/tokens.css",
+    "frontendArchitecture": "references/frontend-architecture.md",
+    "layoutSystem": "references/layout-system.md",
+    "componentContracts": "references/component-contracts.md",
+    "stateMatrix": "references/state-matrix.md"
+  },
+  "frontendArchitecture": {
+    "webApp": "Next.js 15 App Router + React 19 + TypeScript",
+    "styling": "Tailwind CSS v4 + CSS custom properties",
+    "uiKit": "shadcn/ui on Radix UI primitives",
+    "icons": "lucide-react",
+    "serverState": "TanStack Query",
+    "streaming": "native EventSource + typed hooks for backend SSE",
+    "forms": "React Hook Form + Zod",
+    "localUiState": "Zustand only for non-authoritative UI state",
+    "tests": "Vitest + Testing Library + Playwright"
+  },
+  "visualBaseline": {
+    "background": "#ffffff",
+    "subtleBackground": "#f7f7f8",
+    "sidebar": "#f9f9f9",
+    "surface": "#ffffff",
+    "text": "#0d0d0d",
+    "mutedText": "#6b6b6b",
+    "border": "#e5e5e5",
+    "focus": "#8f8f8f",
+    "sidebarWidth": "258px",
+    "contentMaxWidth": "820px",
+    "composerRadius": "24px",
+    "itemRadius": "8px"
+  },
+  "constraints": [
+    "Web application only; no Electron/Tauri/native desktop shell as product surface",
+    "Frontend must call the app backend/gateway, never Codex App Server directly",
+    "Codex provider secrets and commerce system tokens stay server-side",
+    "shadcn/ui + Radix + Tailwind tokens is the primary UI system",
+    "No Ant Design/MUI/Bootstrap/Mantine as primary UI kit without explicit user approval",
+    "No ChatGPT/OpenAI trademark, logo, or proprietary asset copying",
+    "No decorative gradients, gradient orbs, nested cards, marketing hero first screen, or green composer input focus rectangle",
+    "All frontend changes must conform to DESIGN.md and references before implementation"
+  ]
+}

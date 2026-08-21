@@ -1,0 +1,81 @@
+allow_managed_hooks_only = true
+allowed_approval_policies = ["never"]
+allowed_sandbox_modes = ["read-only"]
+allowed_web_search_modes = ["live"]
+
+[features]
+hooks = true
+shell_tool = false
+unified_exec = false
+apps = false
+multi_agent = true
+remote_plugin = false
+
+[hooks]
+managed_dir = "/var/lib/shueho-commerce-pilot/codex/managed-hooks"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.PermissionRequest]]
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.PostToolUse]]
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.PreCompact]]
+[[hooks.PreCompact.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.PostCompact]]
+[[hooks.PostCompact.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.SessionEnd]]
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 2
+
+[[hooks.SubagentStart]]
+[[hooks.SubagentStart.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5
+
+[[hooks.SubagentStop]]
+[[hooks.SubagentStop.hooks]]
+type = "command"
+command = "/usr/local/bin/node /var/lib/shueho-commerce-pilot/codex/managed-hooks/commerce-runtime-hook.mjs /var/lib/shueho-commerce-pilot/codex/hook-audit/events.jsonl"
+timeout = 5

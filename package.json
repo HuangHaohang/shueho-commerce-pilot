@@ -1,0 +1,38 @@
+{
+  "name": "shueho-commerce-pilot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Commerce agent gateway built on the open-source Codex App Server harness.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
+    "check": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "dev": "npm run build && node dist/src/gateway/server.js",
+    "smoke:codex": "npm run build && node dist/scripts/smoke-codex-app-server.js",
+    "smoke:provider": "npm run build && node dist/scripts/smoke-commerce-provider.js",
+    "security:runtime": "npm run build && node dist/scripts/verify-runtime-security.js",
+    "start": "node dist/src/gateway/server.js",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "auth:migrate": "npm --workspace @shueho-commerce-pilot/web run auth:migrate",
+    "web:dev": "npm --workspace @shueho-commerce-pilot/web run dev",
+    "web:build": "npm --workspace @shueho-commerce-pilot/web run build",
+    "web:check": "npm --workspace @shueho-commerce-pilot/web run check",
+    "web:test": "npm --workspace @shueho-commerce-pilot/web run test"
+  },
+  "dependencies": {
+    "@openai/codex": "0.149.0",
+    "dotenv": "^17.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "typescript": "^5.9.2"
+  }
+}
