@@ -112,9 +112,11 @@ commerce_web.search MCP -> POST /v1/responses
                         -> grounded answer + cited source URLs
 ```
 
-The Gateway does not scrape arbitrary pages with deployment-host shell commands. It asks the configured provider to execute its OpenAI-compatible Web Search tool, returns the grounded answer and sanitized source URLs to Codex, and lets Codex continue the turn. The browser receives the App Server `dynamicToolCall` lifecycle and renders `正在搜索网页` followed by a collapsible completed search activity.
+The Gateway does not scrape arbitrary pages with deployment-host shell commands. It asks the configured provider to execute its OpenAI-compatible Web Search tool, returns the grounded answer and sanitized source URLs to Codex, and lets Codex continue the turn. The browser receives the App Server `mcpToolCall` lifecycle and renders `正在搜索网页` followed by a collapsible completed search activity.
 
 The MCP capability comes from app-owned config rather than `dynamicTools`, because current App Server versions only accept dynamic tools at `thread/start`. Persisted-thread reads execute managed resume before `thread/read`, so the current MCP catalog is loaded for old conversations without rewriting history. `PreToolUse` and `PostToolUse` Hooks allow and audit the MCP tool name while recording only lifecycle metadata; queries and results are not written to the Hook audit log. Native `web_search = "live"` remains enabled as a provider-supported capability, and the old dynamic handler remains only for already-persisted threads that contain it.
+
+Gateway calls `config/mcpServer/reload` and validates `mcpServerStatus/list` before accepting turns. Web Search uses one bounded transient retry: the first attempt is capped at 45 seconds, and later attempts use `COMMERCE_WEB_SEARCH_TIMEOUT_MS` (default 90 seconds). Set `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS` from 1 to 3; the default is 2. Generated `tool_timeout_sec` is derived from the total provider attempt budget plus a 15-second protocol margin.
 
 Start a thread with that provider:
 

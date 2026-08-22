@@ -115,12 +115,19 @@ function renderConfig(
     `command = ${tomlString(execPath)}`,
     `args = [${tomlString(commerceWebMcpPath)}]`,
     `cwd = ${tomlString(cwd())}`,
-    'env_vars = ["CODEX_HOME", "NODE_ENV", "COMMERCE_PROVIDER_API_KEY", "COMMERCE_PROVIDER_ID", "COMMERCE_PROVIDER_NAME", "COMMERCE_PROVIDER_BASE_URL", "COMMERCE_IMAGE_MODEL", "COMMERCE_AGENT_MODEL_SELECTORS", "COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS", "CODEX_DEFAULT_MODEL", "CODEX_DEFAULT_MODEL_PROVIDER", "COMMERCE_GATEWAY_INTERNAL_TOKEN"]',
+    'env_vars = ["CODEX_HOME", "NODE_ENV", "COMMERCE_PROVIDER_API_KEY", "COMMERCE_PROVIDER_ID", "COMMERCE_PROVIDER_NAME", "COMMERCE_PROVIDER_BASE_URL", "COMMERCE_IMAGE_MODEL", "COMMERCE_AGENT_MODEL_SELECTORS", "COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS", "COMMERCE_WEB_SEARCH_TIMEOUT_MS", "COMMERCE_WEB_SEARCH_MAX_ATTEMPTS", "CODEX_DEFAULT_MODEL", "CODEX_DEFAULT_MODEL_PROVIDER", "COMMERCE_GATEWAY_INTERNAL_TOKEN"]',
     "required = true",
     'enabled_tools = ["search"]',
     'default_tools_approval_mode = "auto"',
     "startup_timeout_sec = 15",
-    "tool_timeout_sec = 70",
+    `tool_timeout_sec = ${Math.ceil(
+      ((config.provider.webSearchMaxAttempts > 1
+        ? Math.min(config.provider.webSearchTimeoutMs, 45_000)
+        : config.provider.webSearchTimeoutMs) +
+        Math.max(0, config.provider.webSearchMaxAttempts - 1) * config.provider.webSearchTimeoutMs +
+        15_000) /
+        1_000,
+    )}`,
     "",
     "[hooks]",
     `managed_dir = ${tomlString(managedHooksDirectory)}`,

@@ -146,6 +146,26 @@ export class CommerceProviderClient {
 
   async searchWeb(input: WebSearchInput): Promise<WebSearchResult> {
     await this.assertAgentModel(input.model);
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < this.config.webSearchMaxAttempts; attempt += 1) {
+      const timeoutMs =
+        attempt === 0 && this.config.webSearchMaxAttempts > 1
+          ? Math.min(this.config.webSearchTimeoutMs, 45_000)
+          : this.config.webSearchTimeoutMs;
+      try {
+        return await this.searchWebOnce(input, timeoutMs);
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableWebSearchError(error) || attempt === this.config.webSearchMaxAttempts - 1) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+    throw lastError;
+  }
+
+  private async searchWebOnce(input: WebSearchInput, timeoutMs: number): Promise<WebSearchResult> {
     const response = await this.request(
       "responses",
       {
@@ -160,7 +180,7 @@ export class CommerceProviderClient {
           stream: false,
         }),
       },
-      60_000,
+      timeoutMs,
     );
     const payload = (await response.json()) as unknown;
     if (!isRecord(payload) || !Array.isArray(payload.output)) {
@@ -184,6 +204,9 @@ export class CommerceProviderClient {
     const answer = answerParts.join("\n").trim();
     if (!answer) {
       throw new CommerceProviderError("Web search provider returned no answer.");
+    }
+    if (sources.size === 0) {
+      throw new CommerceProviderError("Web search provider returned no source URL.", 502);
     }
     return {
       model: input.model,
@@ -282,6 +305,13 @@ function classifyModel(id: string): ProviderModelKind {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isRetryableWebSearchError(error: unknown): boolean {
+  return (
+    error instanceof CommerceProviderError &&
+    (error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504)
+  );
 }
 
 function inferImageMimeType(outputFormat: unknown): GeneratedImage["mimeType"] {

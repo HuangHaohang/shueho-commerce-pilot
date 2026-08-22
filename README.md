@@ -16,6 +16,7 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Uses the Codex host-tool protocol to expose `gpt-image-2` image generation inside agent turns.
 - Disables shell, unified exec, arbitrary local-path file tools, process network access, connectors, unmanaged MCP, plugins, and unmanaged Hooks.
 - Exposes provider-backed Web Search through the application-owned `commerce_web.search` MCP server, with real Harness `mcpToolCall` lifecycle events and cited source URLs. This remains available when old threads are resumed because it is managed runtime configuration rather than a `thread/start` dynamic-tool snapshot.
+- Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog instead of a configured-only flag, and transient provider timeouts receive one bounded MCP-internal retry.
 - Allows bounded multi-agent collaboration; subagents inherit the same restricted runtime policy.
 - Keeps the built-in local-path `view_image` tool disabled until images are tenant-scoped artifacts or App Server runs with a tenant-only artifact mount.
 - Enables an application-generated managed Hook runner for prompt, tool, compaction, stop, session, and subagent lifecycle policy/audit events; users cannot provide Hook commands.
@@ -175,6 +176,8 @@ The gateway also exposes `gpt-image-2` as the Codex-hosted `commerce_image.gener
 Generated-image artifact metadata is stored separately under `$CODEX_HOME/generated_image_metadata` and binds each immutable filename to its originating thread and turn. For installations that created images before this metadata existed, run `npm run backfill:image-artifacts` once before serving restored history.
 
 Web Search is the application-owned `commerce_web.search` MCP tool. App Server launches the fixed stdio server from app-owned config, exposes only its read-only `search(query)` contract, and receives normal `mcpToolCall` events. The MCP server calls the configured provider's OpenAI-compatible `/v1/responses` Web Search capability and returns cited sources. Because MCP configuration is loaded by the runtime when a thread is resumed, conversations created before Web Search was added receive it without history migration. Native `web_search = "live"` remains enabled when the provider supports it, and the old dynamic-tool handler remains compatibility-only for threads that already persisted that definition.
+
+Gateway calls App Server `config/mcpServer/reload` at startup, then requires `mcpServerStatus/list` to contain `commerce_web.search`; startup and thread operations fail closed otherwise. Configure provider retry bounds with `COMMERCE_WEB_SEARCH_TIMEOUT_MS` and `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS`. `npm run smoke:web-search` verifies the complete Gateway → App Server → model → MCP → provider → cited-answer path.
 
 See [docs/config/custom-model-provider.md](./docs/config/custom-model-provider.md) for details.
 

@@ -13,6 +13,14 @@ type GatewayHealth = {
     initialized?: boolean;
     pendingServerRequests?: number;
   };
+  managedMcp?: {
+    state?: "unknown" | "loading" | "ready" | "failed";
+    available?: boolean;
+    serverName?: string;
+    tools?: string[];
+    checkedAt?: string | null;
+    error?: string | null;
+  };
   runtimePolicy?: {
     maxTurnDurationMs?: number;
   };
@@ -37,6 +45,7 @@ export async function GET() {
       gateway: data?.gateway ?? null,
       instanceId: data?.instanceId ?? null,
       codex: data?.codex ?? null,
+      managedMcp: data?.managedMcp ?? null,
       runtimePolicy: data?.runtimePolicy ?? null,
     });
   } catch (error) {
@@ -47,6 +56,7 @@ export async function GET() {
       gateway: null,
       instanceId: null,
       codex: null,
+      managedMcp: null,
       runtimePolicy: null,
       error: error instanceof Error ? error.message : "Gateway health check failed.",
     });

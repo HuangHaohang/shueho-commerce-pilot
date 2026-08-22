@@ -27,6 +27,8 @@ export type CommerceProviderConfig = {
   imageModel: string;
   agentModelSelectors: string[];
   modelCacheTtlMs: number;
+  webSearchTimeoutMs: number;
+  webSearchMaxAttempts: number;
 };
 
 export function readGatewayConfig(): GatewayConfig {
@@ -80,6 +82,16 @@ function readCommerceProviderConfig(): CommerceProviderConfig {
         "gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-5.6-sol,gemini-3.7-flash*,claude-sonnet-4-6,claude-opus-4-6-thinking",
     ),
     modelCacheTtlMs: parsePositiveInteger(process.env.COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS || "60000", "COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS"),
+    webSearchTimeoutMs: parsePositiveInteger(
+      process.env.COMMERCE_WEB_SEARCH_TIMEOUT_MS || "90000",
+      "COMMERCE_WEB_SEARCH_TIMEOUT_MS",
+    ),
+    webSearchMaxAttempts: parseBoundedInteger(
+      process.env.COMMERCE_WEB_SEARCH_MAX_ATTEMPTS || "2",
+      "COMMERCE_WEB_SEARCH_MAX_ATTEMPTS",
+      1,
+      3,
+    ),
   };
 }
 
@@ -103,6 +115,14 @@ function parsePercentage(value: string, name: string): number {
   const parsed = Number.parseFloat(value);
   if (!Number.isFinite(parsed) || parsed < 1 || parsed > 95) {
     throw new Error(`${name} must be between 1 and 95.`);
+  }
+  return parsed;
+}
+
+function parseBoundedInteger(value: string, name: string, minimum: number, maximum: number): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be between ${minimum} and ${maximum}.`);
   }
   return parsed;
 }

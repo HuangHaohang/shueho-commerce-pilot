@@ -13,7 +13,13 @@ if (!config.defaultModel) {
 }
 
 const provider = new CommerceProviderClient(config.provider);
-const server = new McpServer({ name: "commerce-web", version: "0.1.0" });
+const server = new McpServer(
+  { name: "commerce-web", version: "0.1.0" },
+  {
+    instructions:
+      "Use search for explicit web requests and facts that may have changed. Search is read-only and returns grounded text plus source URLs. The server retries one bounded transient provider failure internally. If a call still fails, retry once with a shorter, more specific query. Never claim Web Search is unavailable while commerce_web.search appears in the tool catalog.",
+  },
+);
 
 server.registerTool(
   "search",

@@ -122,6 +122,14 @@ type GatewayHealthResponse = {
     initialized?: boolean;
     pendingServerRequests?: number;
   } | null;
+  managedMcp: {
+    state?: "unknown" | "loading" | "ready" | "failed";
+    available?: boolean;
+    serverName?: string;
+    tools?: string[];
+    checkedAt?: string | null;
+    error?: string | null;
+  } | null;
   runtimePolicy: {
     maxTurnDurationMs?: number;
   } | null;
@@ -2946,6 +2954,16 @@ function getRuntimeStatus(data: GatewayHealthResponse | undefined, loading: bool
   }
 
   if (!data?.ok) {
+    if (data?.managedMcp?.state === "failed") {
+      return {
+        label: "Web Search 未就绪",
+        shortLabel: "搜索不可用",
+        dotClass: "bg-[var(--cp-danger)]",
+        icon: CircleAlert,
+        iconClass: "text-[var(--cp-danger)]",
+        loading: false,
+      };
+    }
     return {
       label: "Gateway 未连接",
       shortLabel: "Gateway 离线",

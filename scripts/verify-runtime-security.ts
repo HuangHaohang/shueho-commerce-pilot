@@ -32,8 +32,11 @@ const requiredLines = [
   "view_image = false",
   "web_search = true",
   "[mcp_servers.commerce_web]",
+  "required = true",
   'enabled_tools = ["search"]',
   'default_tools_approval_mode = "auto"',
+  '"COMMERCE_WEB_SEARCH_TIMEOUT_MS"',
+  '"COMMERCE_WEB_SEARCH_MAX_ATTEMPTS"',
   'inherit = "none"',
 ];
 

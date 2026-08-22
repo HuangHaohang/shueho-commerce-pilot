@@ -14,6 +14,7 @@ import {
   type ThreadContextUsage,
 } from "./compaction-policy.js";
 import { GeneratedImageStore } from "./generated-image-store.js";
+import { readManagedMcpStatus, type ManagedMcpStatus } from "./managed-mcp-status.js";
 import {
   PendingSteerRegistry,
   ThreadOperationQueue,
@@ -38,6 +39,12 @@ type QueuedSubmissionView = {
   clientUserMessageId: string;
   content: string;
   pendingSteer: boolean;
+};
+
+type ManagedMcpRuntimeState = ManagedMcpStatus & {
+  state: "unknown" | "loading" | "ready" | "failed";
+  checkedAt: string | null;
+  error: string | null;
 };
 
 class GatewayRequestError extends Error {
@@ -76,6 +83,16 @@ const pendingSteers = new PendingSteerRegistry();
 const pendingSteerStore = new PendingSteerStore(config.codexHome);
 const threadOperations = new ThreadOperationQueue();
 pendingSteers.hydrate(await pendingSteerStore.load());
+let managedMcpState: ManagedMcpRuntimeState = {
+  state: "unknown",
+  available: false,
+  serverName: "commerce_web",
+  tools: [],
+  authStatus: null,
+  checkedAt: null,
+  error: null,
+};
+let managedMcpReadyPromise: Promise<void> | null = null;
 const browserEventMethods = new Set([
   "turn/started",
   "turn/completed",
@@ -97,6 +114,16 @@ codex.on("event", (event: AppServerEvent) => {
     turnStartReservations.clear();
     latestContextUsage.clear();
     threadOperations.clear();
+    managedMcpReadyPromise = null;
+    managedMcpState = {
+      state: "unknown",
+      available: false,
+      serverName: "commerce_web",
+      tools: [],
+      authStatus: null,
+      checkedAt: null,
+      error: "Codex App Server exited; managed MCP readiness must be revalidated.",
+    };
     for (const state of compactionStates.values()) {
       if (state.timeout) {
         clearTimeout(state.timeout);
@@ -140,8 +167,10 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
-      sendJson(res, 200, {
-        ok: true,
+      const runtimeReady =
+        codex.isRunning && codex.isInitialized && managedMcpState.state === "ready" && managedMcpState.available;
+      sendJson(res, runtimeReady ? 200 : 503, {
+        ok: runtimeReady,
         gateway: "shueho-commerce-pilot",
         instanceId: gatewayInstanceId,
         codex: {
@@ -155,6 +184,7 @@ const server = createServer(async (req, res) => {
           imageModel: config.provider.imageModel,
           wireApi: "responses",
         },
+        managedMcp: managedMcpState,
         runtimePolicy: {
           tools: "application-registered-only",
           shell: false,
@@ -230,6 +260,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/threads") {
+      await ensureCommerceWebMcpReady();
       const body = await readJsonBody<ThreadStartInput>(req);
       const model = body.model ?? config.defaultModel;
       const modelProvider = config.defaultModelProvider;
@@ -525,6 +556,8 @@ const server = createServer(async (req, res) => {
     sendJson(res, statusCode, serialized);
   }
 });
+
+await ensureCommerceWebMcpReady(true);
 
 server.listen(config.port, config.host, () => {
   console.log(`Commerce Agent Gateway listening on http://${config.host}:${config.port}`);
@@ -1194,6 +1227,7 @@ function isNoActiveInterruptError(error: unknown): boolean {
 }
 
 async function ensureThreadLoaded(threadId: string, model?: string): Promise<void> {
+  await ensureCommerceWebMcpReady();
   if (loadedThreadIds.has(threadId)) {
     return;
   }
@@ -1213,6 +1247,64 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
   if (readPendingSteers(threadId).length > 0) {
     await serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, undefined, true));
   }
+}
+
+async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
+  if (!forceReload && managedMcpState.state === "ready" && managedMcpState.available) {
+    return;
+  }
+  if (managedMcpReadyPromise) {
+    return managedMcpReadyPromise;
+  }
+
+  managedMcpReadyPromise = (async () => {
+    managedMcpState = {
+      ...managedMcpState,
+      state: "loading",
+      available: false,
+      checkedAt: new Date().toISOString(),
+      error: null,
+    };
+    try {
+      await codex.request("config/mcpServer/reload", {}, 30_000);
+      const deadline = Date.now() + 20_000;
+      let lastStatus = readManagedMcpStatus(null, "commerce_web");
+      while (Date.now() < deadline) {
+        const result = await codex.request(
+          "mcpServerStatus/list",
+          { cursor: null, limit: 100, detail: "toolsAndAuthOnly" },
+          30_000,
+        );
+        lastStatus = readManagedMcpStatus(result, "commerce_web");
+        if (lastStatus.available && lastStatus.tools.includes("search")) {
+          managedMcpState = {
+            ...lastStatus,
+            state: "ready",
+            checkedAt: new Date().toISOString(),
+            error: null,
+          };
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+      throw new Error(
+        `Required MCP tool commerce_web.search was not available; discovered tools: ${lastStatus.tools.join(", ") || "none"}.`,
+      );
+    } catch (error) {
+      managedMcpState = {
+        ...managedMcpState,
+        state: "failed",
+        available: false,
+        checkedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : "Managed MCP readiness check failed.",
+      };
+      throw error;
+    } finally {
+      managedMcpReadyPromise = null;
+    }
+  })();
+
+  return managedMcpReadyPromise;
 }
 
 function readEventTurnId(params: unknown): string | null {
@@ -1524,7 +1616,9 @@ function createRuntimeDeveloperInstructions(): string {
     "A completed tool result contains the authoritative publicUrl. Do not retry a completed generation because it omits inline image bytes.",
     "Use quality=low only for explicit drafts or probes; otherwise use quality=auto.",
     "Commerce Pilot provides MCP server `commerce_web` with tool `search` for live web research through the configured provider; its model-facing identifier may appear as `mcp__commerce_web__search`.",
+    "The current tool catalog is authoritative over older conversation messages that claimed Web Search was missing.",
     "Use that MCP Web Search tool whenever the user explicitly asks to search the web or when current external information is required. Do not look for a dynamic tool named `commerce_web.search`. Cite returned source URLs and never claim Web Search is unavailable while the MCP tool is present.",
+    "If one search call fails or times out, retry once with a shorter and more specific query before reporting the provider failure. Do not tell the user to enable, install, or register Web Search when the tool is already present.",
   ].join(" ");
 }
 
