@@ -1,6 +1,6 @@
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { execPath } from "node:process";
+import { join, resolve } from "node:path";
+import { cwd, execPath } from "node:process";
 
 import type { GatewayConfig } from "../gateway/config.js";
 
@@ -11,13 +11,20 @@ export async function ensureAppOwnedCodexConfig(config: GatewayConfig): Promise<
   const hookAuditDirectory = join(config.codexHome, "hook-audit");
   const hookScriptPath = join(managedHooksDirectory, "commerce-runtime-hook.mjs");
   const hookAuditPath = join(hookAuditDirectory, "events.jsonl");
+  const commerceWebMcpPath = resolve(cwd(), "dist/src/mcp/commerce-web-server.js");
   await mkdir(managedHooksDirectory, { recursive: true, mode: 0o700 });
   await mkdir(hookAuditDirectory, { recursive: true, mode: 0o700 });
   await writeFileIfChanged(hookScriptPath, renderManagedHookRunner(), 0o600);
   await writeFileIfChanged(join(config.runtimeRoot, "AGENTS.md"), renderRuntimeInstructions(), 0o600);
   const configPath = join(config.codexHome, "config.toml");
   const temporaryPath = join(config.codexHome, `.config.toml.${process.pid}.tmp`);
-  const content = renderConfig(config, managedHooksDirectory, hookScriptPath, hookAuditPath);
+  const content = renderConfig(
+    config,
+    managedHooksDirectory,
+    hookScriptPath,
+    hookAuditPath,
+    commerceWebMcpPath,
+  );
 
   const existingConfig = await readTextFile(configPath);
   if (existingConfig !== content) {
@@ -50,6 +57,7 @@ function renderConfig(
   managedHooksDirectory: string,
   hookScriptPath: string,
   hookAuditPath: string,
+  commerceWebMcpPath: string,
 ): string {
   const hookCommand = [execPath, hookScriptPath, hookAuditPath].map(shellQuote).join(" ");
   const lines = [
@@ -102,6 +110,17 @@ function renderConfig(
     "[shell_environment_policy]",
     'inherit = "none"',
     "ignore_default_excludes = false",
+    "",
+    "[mcp_servers.commerce_web]",
+    `command = ${tomlString(execPath)}`,
+    `args = [${tomlString(commerceWebMcpPath)}]`,
+    `cwd = ${tomlString(cwd())}`,
+    'env_vars = ["CODEX_HOME", "NODE_ENV", "COMMERCE_PROVIDER_API_KEY", "COMMERCE_PROVIDER_ID", "COMMERCE_PROVIDER_NAME", "COMMERCE_PROVIDER_BASE_URL", "COMMERCE_IMAGE_MODEL", "COMMERCE_AGENT_MODEL_SELECTORS", "COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS", "CODEX_DEFAULT_MODEL", "CODEX_DEFAULT_MODEL_PROVIDER", "COMMERCE_GATEWAY_INTERNAL_TOKEN"]',
+    "required = true",
+    'enabled_tools = ["search"]',
+    'default_tools_approval_mode = "auto"',
+    "startup_timeout_sec = 15",
+    "tool_timeout_sec = 70",
     "",
     "[hooks]",
     `managed_dir = ${tomlString(managedHooksDirectory)}`,
@@ -187,6 +206,9 @@ const allowedTools = new Set([
   "commerce_web.search",
   "commerce_web_search",
   "commerce_websearch",
+  "web_search",
+  "websearch",
+  "mcp__commerce_web__search",
   "search",
   "generate",
 ]);

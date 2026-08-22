@@ -98,23 +98,23 @@ The app-owned Codex runtime synchronizes the built-in `imagegen` system skill an
 commerce_image.generate -> POST /v1/images/generations -> gpt-image-2
 ```
 
-Codex still owns image intent detection, skill instructions, prompt augmentation, tool selection, item lifecycle, and turn continuation. The gateway performs only the provider call and saves the result under `$CODEX_HOME/generated_images`.
+Codex still owns image intent detection, skill instructions, prompt augmentation, tool selection, item lifecycle, and turn continuation. The gateway performs only the provider call, saves the result under `$CODEX_HOME/generated_images`, and stores non-PII artifact metadata under `$CODEX_HOME/generated_image_metadata` so `thread/read` can restore images after restart. BFF image delivery requires ownership of the artifact's thread.
 
 The image model is fixed by `COMMERCE_IMAGE_MODEL=gpt-image-2`. Other image models returned from `/models` are not silently selected.
 
 ## Web Search
 
-Setting `web_search = "live"` and `[tools].web_search = true` keeps Codex's Web Search capability enabled, but a custom provider model is not guaranteed to receive the first-party hosted tool from Codex's built-in model catalog. Commerce Pilot therefore registers an application-owned dynamic tool through the same App Server harness lifecycle used by other host tools:
+Commerce Pilot exposes provider-backed Web Search as the managed `commerce_web.search` MCP tool. The MCP server calls the same configured provider and returns grounded content plus source URLs:
 
 ```text
-commerce_web.search -> POST /v1/responses
-                    -> tools: [{ "type": "web_search" }]
-                    -> web_search_call + cited source URLs
+commerce_web.search MCP -> POST /v1/responses
+                        -> tools: [{ "type": "web_search" }]
+                        -> grounded answer + cited source URLs
 ```
 
 The Gateway does not scrape arbitrary pages with deployment-host shell commands. It asks the configured provider to execute its OpenAI-compatible Web Search tool, returns the grounded answer and sanitized source URLs to Codex, and lets Codex continue the turn. The browser receives the App Server `dynamicToolCall` lifecycle and renders `正在搜索网页` followed by a collapsible completed search activity.
 
-Both `thread/start` and Gateway-managed `thread/resume` receive the Commerce dynamic-tool registry, so saved conversations retain Web Search after a Gateway restart. `PreToolUse` and `PostToolUse` Hooks audit only the tool name and lifecycle metadata; queries and results are not written to the Hook audit log.
+The MCP capability comes from app-owned config rather than `dynamicTools`, because current App Server versions only accept dynamic tools at `thread/start`. Persisted-thread reads execute managed resume before `thread/read`, so the current MCP catalog is loaded for old conversations without rewriting history. `PreToolUse` and `PostToolUse` Hooks allow and audit the MCP tool name while recording only lifecycle metadata; queries and results are not written to the Hook audit log. Native `web_search = "live"` remains enabled as a provider-supported capability, and the old dynamic handler remains only for already-persisted threads that contain it.
 
 Start a thread with that provider:
 
@@ -143,7 +143,7 @@ Use a project-specific provider id such as `commerce_proxy`, `azure_commerce`, o
 - Do not echo tokens in gateway logs or SSE events.
 - Never return provider keys to the browser or write them to `config.toml`.
 - Generated images are exposed to the browser only through an authenticated, filename-constrained BFF route.
-- Web Search runs through the application-owned `commerce_web.search` adapter; provider credentials and raw provider responses remain server-side.
+- Web Search runs through the application-owned `commerce_web.search` MCP server against the configured provider; credentials and raw provider responses remain server-side. Native Responses search remains enabled where available, and the legacy dynamic handler is compatibility-only.
 - Keep write-capable commerce tools behind explicit approval and readback.
 - Provider identity, `cwd`, sandbox, permissions, instructions, raw input items, and tool definitions are server-owned and cannot be overridden by browser requests.
 - The model can call only tools in the Commerce Pilot registry; it cannot use shell or deployment-host files as a fallback.

@@ -11,6 +11,8 @@ export type GatewayConfig = {
   runtimeRoot: string;
   internalToken?: string;
   maxTurnDurationMs: number;
+  autoCompactThresholdPercent: number;
+  compactionTimeoutMs: number;
   provider: CommerceProviderConfig;
   defaultModel?: string;
   defaultModelProvider?: string;
@@ -45,6 +47,14 @@ export function readGatewayConfig(): GatewayConfig {
     maxTurnDurationMs: parsePositiveInteger(
       process.env.COMMERCE_AGENT_MAX_TURN_DURATION_MS || "600000",
       "COMMERCE_AGENT_MAX_TURN_DURATION_MS",
+    ),
+    autoCompactThresholdPercent: parsePercentage(
+      process.env.COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT || "75",
+      "COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT",
+    ),
+    compactionTimeoutMs: parsePositiveInteger(
+      process.env.COMMERCE_AGENT_COMPACTION_TIMEOUT_MS || "180000",
+      "COMMERCE_AGENT_COMPACTION_TIMEOUT_MS",
     ),
     provider,
     defaultModel: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL),
@@ -85,6 +95,14 @@ function parsePositiveInteger(value: string, name: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return parsed;
+}
+
+function parsePercentage(value: string, name: string): number {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 95) {
+    throw new Error(`${name} must be between 1 and 95.`);
   }
   return parsed;
 }

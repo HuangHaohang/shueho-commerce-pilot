@@ -1,21 +1,58 @@
 import "dotenv/config";
 
 import { randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { basename, extname, join } from "node:path";
 
 import { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { AppServerEvent, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
 import { ensureAppOwnedCodexConfig } from "../codex/runtime-config.js";
 import { CommerceProviderClient, CommerceProviderError, type ImageGenerationInput } from "../provider/commerce-provider-client.js";
 import { readGatewayConfig } from "./config.js";
+import {
+  readThreadContextUsage,
+  shouldAutoCompact,
+  type ThreadContextUsage,
+} from "./compaction-policy.js";
+import { GeneratedImageStore } from "./generated-image-store.js";
+import {
+  PendingSteerRegistry,
+  ThreadOperationQueue,
+  type PendingSteerState,
+} from "./pending-steer-state.js";
+import { PendingSteerStore } from "./pending-steer-store.js";
+
+type CompactionTrigger = "automatic" | "manual" | "harness";
+
+type CompactionState = {
+  threadId: string;
+  trigger: CompactionTrigger;
+  requestedAt: number;
+  turnId: string | null;
+  timeout: NodeJS.Timeout | null;
+  inputTokens: number | null;
+  modelContextWindow: number | null;
+};
+
+type QueuedSubmissionView = {
+  id: string;
+  clientUserMessageId: string;
+  content: string;
+  pendingSteer: boolean;
+};
+
+class GatewayRequestError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = "GatewayRequestError";
+  }
+}
 
 const config = readGatewayConfig();
 await ensureAppOwnedCodexConfig(config);
 const gatewayInstanceId = randomUUID();
 
 const provider = new CommerceProviderClient(config.provider);
+const generatedImages = new GeneratedImageStore(config.codexHome);
 const codexEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   CODEX_HOME: config.codexHome,
@@ -31,6 +68,14 @@ const codex = new CodexAppServerClient({
 const sseClients = new Map<ServerResponse, { threadId?: string }>();
 const turnTimeouts = new Map<string, NodeJS.Timeout>();
 const loadedThreadIds = new Set<string>();
+const activeTurnsByThread = new Map<string, string>();
+const turnStartReservations = new Set<string>();
+const latestContextUsage = new Map<string, ThreadContextUsage>();
+const compactionStates = new Map<string, CompactionState>();
+const pendingSteers = new PendingSteerRegistry();
+const pendingSteerStore = new PendingSteerStore(config.codexHome);
+const threadOperations = new ThreadOperationQueue();
+pendingSteers.hydrate(await pendingSteerStore.load());
 const browserEventMethods = new Set([
   "turn/started",
   "turn/completed",
@@ -39,20 +84,30 @@ const browserEventMethods = new Set([
   "item/agentMessage/delta",
   "commerce/imageGeneration/started",
   "commerce/imageGeneration/completed",
+  "commerce/contextCompaction/started",
+  "commerce/contextCompaction/failed",
+  "thread/queue/changed",
   "error",
 ]);
 
 codex.on("event", (event: AppServerEvent) => {
   if (event.type === "process" && event.event === "exit") {
     loadedThreadIds.clear();
+    activeTurnsByThread.clear();
+    turnStartReservations.clear();
+    latestContextUsage.clear();
+    threadOperations.clear();
+    for (const state of compactionStates.values()) {
+      if (state.timeout) {
+        clearTimeout(state.timeout);
+      }
+    }
+    compactionStates.clear();
+  }
+  if (event.type === "notification") {
+    handleRuntimeNotification(event);
   }
   broadcastEvent(event);
-  if (event.type === "notification" && event.method === "turn/completed") {
-    const turnId = readEventTurnId(event.params);
-    if (turnId) {
-      clearTurnTimeout(turnId);
-    }
-  }
   if (event.type !== "server_request") {
     return;
   }
@@ -106,10 +161,16 @@ const server = createServer(async (req, res) => {
           hostFilesystem: false,
           processNetwork: false,
           hostedWebSearch: true,
+          managedMcpWebSearch: true,
+          nativeProviderWebSearch: true,
+          legacyDynamicWebSearchHandler: true,
           multiAgent: true,
           localPathImageReader: false,
           hooks: process.env.NODE_ENV === "production" ? "managed-only" : "app-owned-development",
           maxTurnDurationMs: config.maxTurnDurationMs,
+          autoCompactThresholdPercent: config.autoCompactThresholdPercent,
+          compactionTimeoutMs: config.compactionTimeoutMs,
+          compactingThreads: compactionStates.size,
         },
       });
       return;
@@ -124,18 +185,34 @@ const server = createServer(async (req, res) => {
     const generatedImageMatch = matchPath(url.pathname, /^\/api\/generated-images\/([^/]+)$/);
     if (req.method === "GET" && generatedImageMatch) {
       const filename = decodeURIComponent(generatedImageMatch[1] ?? "");
-      if (!isSafeGeneratedImageFilename(filename)) {
+      if (!generatedImages.isSafeFilename(filename)) {
         sendJson(res, 400, { error: "Invalid generated image filename." });
         return;
       }
-      const image = await readFile(join(config.codexHome, "generated_images", filename));
+      const image = await generatedImages.readImage(filename);
       res.writeHead(200, {
-        "Content-Type": imageContentType(filename),
+        "Content-Type": generatedImages.imageContentType(filename),
         "Content-Length": image.byteLength,
         "Cache-Control": "private, max-age=3600",
         "X-Content-Type-Options": "nosniff",
       });
       res.end(image);
+      return;
+    }
+
+    const generatedImageMetadataMatch = matchPath(url.pathname, /^\/api\/generated-images\/([^/]+)\/metadata$/);
+    if (req.method === "GET" && generatedImageMetadataMatch) {
+      const filename = decodeURIComponent(generatedImageMetadataMatch[1] ?? "");
+      if (!generatedImages.isSafeFilename(filename)) {
+        sendJson(res, 400, { error: "Invalid generated image filename." });
+        return;
+      }
+      const artifact = await generatedImages.get(filename);
+      if (!artifact) {
+        sendJson(res, 404, { error: "Generated image metadata not found." });
+        return;
+      }
+      sendJson(res, 200, { artifact });
       return;
     }
 
@@ -166,7 +243,7 @@ const server = createServer(async (req, res) => {
         cwd: config.runtimeRoot,
         approvalPolicy: "never",
         sandbox: "read-only",
-        config: process.env.NODE_ENV === "production" ? undefined : { bypass_hook_trust: true },
+        config: createRuntimeRequestConfig(),
         developerInstructions: createRuntimeDeveloperInstructions(),
         ephemeral: false,
         dynamicTools: createCommerceDynamicToolSpecs(),
@@ -186,8 +263,36 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
-      const result = await codex.request("thread/read", { threadId, includeTurns: true });
-      sendJson(res, 200, { result });
+      // Resume first so persisted threads receive the current managed MCP catalog
+      // and runtime overrides before any read can load them with stale capabilities.
+      await ensureThreadLoaded(threadId);
+      const result = await readThreadWithStartupRetry(threadId, true);
+      const generatedImageArtifacts = await generatedImages.listForThread(threadId);
+      sendJson(res, 200, { result, generatedImages: generatedImageArtifacts });
+      return;
+    }
+
+    const compactMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/compact$/);
+    if (req.method === "POST" && compactMatch) {
+      const threadId = decodeURIComponent(compactMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      if (activeTurnsByThread.has(threadId)) {
+        sendJson(res, 409, { error: "Thread has an active turn and cannot be compacted." });
+        return;
+      }
+      await ensureThreadLoaded(threadId);
+      const existing = compactionStates.get(threadId);
+      if (existing) {
+        sendJson(res, 202, { accepted: true, alreadyRunning: true, trigger: existing.trigger });
+        return;
+      }
+      const state = reserveCompaction(threadId, "manual");
+      broadcastCompactionStarted(state);
+      await issueCompactionRequest(state);
+      sendJson(res, 202, { accepted: true, alreadyRunning: false, trigger: state.trigger });
       return;
     }
 
@@ -204,22 +309,183 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
-      if (body.model) {
-        await provider.assertAgentModel(body.model);
+      if (compactionStates.has(threadId)) {
+        sendJson(res, 409, { error: "Thread context is being compacted. Retry after compaction completes." });
+        return;
       }
-      await ensureThreadLoaded(threadId, body.model);
+      if (turnStartReservations.has(threadId)) {
+        sendJson(res, 409, { error: "Thread turn startup is already in progress.", code: "THREAD_STARTING" });
+        return;
+      }
+      turnStartReservations.add(threadId);
+      try {
+        if (body.model) {
+          await provider.assertAgentModel(body.model);
+        }
+        await ensureThreadLoaded(threadId, body.model);
+        const activeTurnId = await readHarnessActiveTurnId(threadId);
+        if (activeTurnId) {
+          activeTurnsByThread.set(threadId, activeTurnId);
+          const queuedResult = await serializeSteerTransition(threadId, () =>
+            codex.request("thread/queue/add", {
+              threadId,
+              clientUserMessageId: randomUUID(),
+              input: [{ type: "text", text: message, text_elements: [] }],
+            }),
+          );
+          sendJson(res, 202, {
+            queued: true,
+            activeTurnId,
+            queuedSubmission: readQueuedSubmissionResult(queuedResult),
+          });
+          return;
+        }
+        const staleTurnId = activeTurnsByThread.get(threadId);
+        if (staleTurnId) {
+          activeTurnsByThread.delete(threadId);
+          clearTurnTimeout(staleTurnId);
+        }
+        const result = await codex.request("turn/start", {
+          threadId,
+          input: [{ type: "text", text: message, text_elements: [] }],
+          model: body.model,
+          effort: body.effort,
+        });
+        const startedTurnId = readResultTurnId(result);
+        if (startedTurnId) {
+          activeTurnsByThread.set(threadId, startedTurnId);
+          scheduleTurnTimeout(threadId, startedTurnId);
+        }
+        sendJson(res, 200, { result });
+        return;
+      } finally {
+        turnStartReservations.delete(threadId);
+      }
+    }
 
-      const result = await codex.request("turn/start", {
-        threadId,
-        input: [{ type: "text", text: message, text_elements: [] }],
-        model: body.model,
-        effort: body.effort,
-      });
-      const startedTurnId = readResultTurnId(result);
-      if (startedTurnId) {
-        scheduleTurnTimeout(threadId, startedTurnId);
+    const queueMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/queue$/);
+    if (req.method === "GET" && queueMatch) {
+      const threadId = decodeURIComponent(queueMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
       }
-      sendJson(res, 200, { result });
+      await ensureThreadLoaded(threadId);
+      const result = await codex.request("thread/queue/list", {
+        threadId,
+        cursor: null,
+        limit: 100,
+      });
+      const submissions = readQueuedSubmissions(result);
+      const pendingSteers = readPendingSteers(threadId);
+      sendJson(res, 200, {
+        queue: submissions,
+        pendingSteers: pendingSteers.map((item) => ({
+          id: item.queuedSubmissionId,
+          clientUserMessageId: item.clientUserMessageId,
+          content: item.content,
+          pendingSteer: true,
+        })),
+      });
+      return;
+    }
+    if (req.method === "POST" && queueMatch) {
+      const threadId = decodeURIComponent(queueMatch[1] ?? "");
+      const body = await readJsonBody<{ message?: unknown }>(req);
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      if (!message || message.length > 50_000) {
+        sendJson(res, 400, { error: "Expected a queued message between 1 and 50000 characters." });
+        return;
+      }
+      if (compactionStates.has(threadId)) {
+        sendJson(res, 409, { error: "Thread context is being compacted and cannot accept queued input." });
+        return;
+      }
+      await ensureThreadLoaded(threadId);
+      const result = await serializeSteerTransition(threadId, () =>
+        codex.request("thread/queue/add", {
+          threadId,
+          clientUserMessageId: randomUUID(),
+          input: [{ type: "text", text: message, text_elements: [] }],
+        }),
+      );
+      sendJson(res, 200, { queuedSubmission: readQueuedSubmissionResult(result) });
+      return;
+    }
+
+    const queueItemMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/queue\/([^/]+)$/);
+    if ((req.method === "PATCH" || req.method === "DELETE") && queueItemMatch) {
+      const threadId = decodeURIComponent(queueItemMatch[1] ?? "");
+      const queuedSubmissionId = decodeURIComponent(queueItemMatch[2] ?? "");
+      if (!isSafeAgentId(threadId) || !isSafeAgentId(queuedSubmissionId)) {
+        sendJson(res, 400, { error: "Invalid thread or queued submission id." });
+        return;
+      }
+      if (hasPendingSteer(threadId, queuedSubmissionId)) {
+        sendJson(res, 409, { error: "Queued submission is waiting to be committed to the active turn." });
+        return;
+      }
+      await ensureThreadLoaded(threadId);
+      if (req.method === "DELETE") {
+        const result = await serializeSteerTransition(threadId, () =>
+          codex.request("thread/queue/delete", { threadId, queuedSubmissionId }),
+        );
+        sendJson(res, 200, { result });
+        return;
+      }
+      const body = await readJsonBody<{ message?: unknown }>(req);
+      const message = typeof body.message === "string" ? body.message.trim() : "";
+      if (!message || message.length > 50_000) {
+        sendJson(res, 400, { error: "Expected a queued message between 1 and 50000 characters." });
+        return;
+      }
+      const result = await serializeSteerTransition(threadId, () =>
+        codex.request("thread/queue/update", {
+          threadId,
+          queuedSubmissionId,
+          input: [{ type: "text", text: message, text_elements: [] }],
+        }),
+      );
+      sendJson(res, 200, { queuedSubmission: readQueuedSubmissionResult(result) });
+      return;
+    }
+
+    const queueSteerMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/queue\/([^/]+)\/steer$/);
+    if (req.method === "POST" && queueSteerMatch) {
+      const threadId = decodeURIComponent(queueSteerMatch[1] ?? "");
+      const queuedSubmissionId = decodeURIComponent(queueSteerMatch[2] ?? "");
+      const body = await readJsonBody<{ expectedTurnId?: unknown; clientUserMessageId?: unknown }>(req);
+      const expectedTurnId = typeof body.expectedTurnId === "string" ? body.expectedTurnId : "";
+      const clientUserMessageId =
+        typeof body.clientUserMessageId === "string" ? body.clientUserMessageId : "";
+      if (
+        !isSafeAgentId(threadId) ||
+        !isSafeAgentId(queuedSubmissionId) ||
+        !isSafeAgentId(expectedTurnId) ||
+        !isSafeAgentId(clientUserMessageId)
+      ) {
+        sendJson(res, 400, { error: "Invalid thread, turn, queued submission, or client message id." });
+        return;
+      }
+      try {
+        await ensureThreadLoaded(threadId);
+        const result = await serializeSteerTransition(threadId, () =>
+          promoteQueuedSubmissionToSteer(
+            threadId,
+            queuedSubmissionId,
+            expectedTurnId,
+            clientUserMessageId,
+          ),
+        );
+        sendJson(res, 200, { result, pendingSubmissionId: queuedSubmissionId });
+      } catch (error) {
+        const serialized = serializeError(error);
+        sendJson(res, error instanceof GatewayRequestError ? error.statusCode : 500, serialized);
+      }
       return;
     }
 
@@ -243,7 +509,13 @@ const server = createServer(async (req, res) => {
         "GET /api/codex/events",
         "POST /api/threads",
         "GET /api/threads/:threadId",
+        "POST /api/threads/:threadId/compact",
         "POST /api/threads/:threadId/turns",
+        "GET /api/threads/:threadId/queue",
+        "POST /api/threads/:threadId/queue",
+        "PATCH /api/threads/:threadId/queue/:queuedSubmissionId",
+        "DELETE /api/threads/:threadId/queue/:queuedSubmissionId",
+        "POST /api/threads/:threadId/queue/:queuedSubmissionId/steer",
         "POST /api/threads/:threadId/turns/:turnId/interrupt",
       ],
     });
@@ -266,6 +538,12 @@ async function shutdown(): Promise<void> {
     clearTimeout(timeout);
   }
   turnTimeouts.clear();
+  for (const state of compactionStates.values()) {
+    if (state.timeout) {
+      clearTimeout(state.timeout);
+    }
+  }
+  compactionStates.clear();
   for (const client of sseClients.keys()) {
     client.end();
   }
@@ -273,6 +551,187 @@ async function shutdown(): Promise<void> {
   await codex.stop();
   server.close(() => {
     process.exit(0);
+  });
+}
+
+function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notification" }>): void {
+  if (event.method === "thread/tokenUsage/updated") {
+    const usage = readThreadContextUsage(event.params);
+    if (usage && isSafeAgentId(usage.threadId) && isSafeAgentId(usage.turnId)) {
+      latestContextUsage.set(usage.threadId, usage);
+    }
+    return;
+  }
+
+  const threadId = getEventThreadId(event);
+  if (!threadId) {
+    return;
+  }
+
+  if (event.method === "item/started" || event.method === "item/completed") {
+    const clientId = readUserMessageClientId(event.params);
+    const pendingSteer = readPendingSteers(threadId)[0] ?? null;
+    if (clientId && pendingSteer?.clientUserMessageId === clientId) {
+      pendingSteers.acknowledgeFront(threadId, clientId);
+      void persistPendingSteers().catch(() => undefined);
+    }
+  }
+
+  if (event.method === "turn/started") {
+    const turnId = readEventTurnId(event.params);
+    if (turnId) {
+      activeTurnsByThread.set(threadId, turnId);
+      const state = compactionStates.get(threadId);
+      if (state && !state.turnId) {
+        state.turnId = turnId;
+      }
+    }
+    return;
+  }
+
+  if (event.method === "item/started" && isContextCompactionItem(event.params)) {
+    const turnId = readEventTurnIdFromItemParams(event.params);
+    let state = compactionStates.get(threadId);
+    if (!state) {
+      state = reserveCompaction(threadId, "harness");
+      broadcastCompactionStarted(state);
+    }
+    if (turnId) {
+      state.turnId = turnId;
+    }
+    return;
+  }
+
+  if (event.method === "error") {
+    const state = compactionStates.get(threadId);
+    if (state) {
+      failCompaction(state, "Codex context compaction failed.");
+    }
+    return;
+  }
+
+  if (event.method !== "turn/completed") {
+    return;
+  }
+
+  const turnId = readEventTurnId(event.params);
+  if (!turnId) {
+    return;
+  }
+  clearTurnTimeout(turnId);
+  if (activeTurnsByThread.get(threadId) === turnId) {
+    activeTurnsByThread.delete(threadId);
+  }
+
+  if (readPendingSteers(threadId).some((pending) => pending.turnId === turnId)) {
+    queueMicrotask(() => {
+      void serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, turnId, true));
+    });
+  }
+
+  const state = compactionStates.get(threadId);
+  if (state && state.turnId === turnId) {
+    finishCompaction(state);
+    return;
+  }
+
+  const usage = latestContextUsage.get(threadId);
+  if (
+    readTurnCompletionStatus(event.params) === "completed" &&
+    usage?.turnId === turnId &&
+    !state &&
+    shouldAutoCompact(usage, config.autoCompactThresholdPercent)
+  ) {
+    const automaticState = reserveCompaction(threadId, "automatic", usage);
+    queueMicrotask(() => {
+      broadcastCompactionStarted(automaticState);
+      void issueCompactionRequest(automaticState).catch(() => undefined);
+    });
+  }
+}
+
+function reserveCompaction(
+  threadId: string,
+  trigger: CompactionTrigger,
+  usage?: ThreadContextUsage,
+): CompactionState {
+  const existing = compactionStates.get(threadId);
+  if (existing) {
+    return existing;
+  }
+  const state: CompactionState = {
+    threadId,
+    trigger,
+    requestedAt: Date.now(),
+    turnId: null,
+    timeout: null,
+    inputTokens: usage?.inputTokens ?? null,
+    modelContextWindow: usage?.modelContextWindow ?? null,
+  };
+  compactionStates.set(threadId, state);
+  return state;
+}
+
+async function issueCompactionRequest(state: CompactionState): Promise<void> {
+  try {
+    await codex.request("thread/compact/start", { threadId: state.threadId }, 30_000);
+    state.timeout = setTimeout(() => {
+      if (state.turnId) {
+        void codex
+          .request("turn/interrupt", { threadId: state.threadId, turnId: state.turnId }, 10_000)
+          .catch(() => undefined);
+      }
+      failCompaction(state, "Codex context compaction timed out.");
+    }, config.compactionTimeoutMs);
+    state.timeout.unref();
+  } catch (error) {
+    failCompaction(state, "Codex context compaction could not start.");
+    throw error;
+  }
+}
+
+function finishCompaction(state: CompactionState): void {
+  if (state.timeout) {
+    clearTimeout(state.timeout);
+  }
+  if (compactionStates.get(state.threadId) === state) {
+    compactionStates.delete(state.threadId);
+  }
+  latestContextUsage.delete(state.threadId);
+}
+
+function failCompaction(state: CompactionState, message: string): void {
+  if (state.timeout) {
+    clearTimeout(state.timeout);
+  }
+  if (compactionStates.get(state.threadId) === state) {
+    compactionStates.delete(state.threadId);
+  }
+  broadcastEvent({
+    type: "notification",
+    method: "commerce/contextCompaction/failed",
+    params: {
+      threadId: state.threadId,
+      turnId: state.turnId,
+      trigger: state.trigger,
+      message,
+    },
+    at: new Date().toISOString(),
+  });
+}
+
+function broadcastCompactionStarted(state: CompactionState): void {
+  broadcastEvent({
+    type: "notification",
+    method: "commerce/contextCompaction/started",
+    params: {
+      threadId: state.threadId,
+      trigger: state.trigger,
+      inputTokens: state.inputTokens,
+      modelContextWindow: state.modelContextWindow,
+      thresholdPercent: config.autoCompactThresholdPercent,
+    },
+    at: new Date().toISOString(),
   });
 }
 
@@ -308,6 +767,432 @@ function readResultThreadId(result: unknown): string | null {
   return typeof result.thread.id === "string" ? result.thread.id : null;
 }
 
+async function readHarnessActiveTurnId(threadId: string): Promise<string | null> {
+  const statusResult = await readThreadWithStartupRetry(threadId, false);
+  if (!isRecord(statusResult) || !isRecord(statusResult.thread) || !isRecord(statusResult.thread.status)) {
+    throw new Error("Codex App Server returned an invalid thread while reconciling active turn state.");
+  }
+  if (statusResult.thread.status.type !== "active") {
+    return null;
+  }
+  const result = await readThreadWithStartupRetry(threadId, true);
+  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
+    throw new Error("Codex App Server returned no turns for an active thread.");
+  }
+  const turns = result.thread.turns.filter(isRecord);
+  const activeTurn = [...turns].reverse().find(
+    (turn) =>
+      typeof turn.id === "string" &&
+      (turn.status === "inProgress" || turn.status === "running"),
+  );
+  return activeTurn && typeof activeTurn.id === "string" ? activeTurn.id : null;
+}
+
+function readQueuedSubmissionResult(result: unknown): QueuedSubmissionView {
+  if (!isRecord(result) || !isRecord(result.queuedSubmission)) {
+    throw new Error("Codex App Server returned an invalid queued submission.");
+  }
+  const queued = normalizeQueuedSubmission(result.queuedSubmission);
+  if (!queued) {
+    throw new Error("Codex App Server returned an invalid queued submission.");
+  }
+  return queued;
+}
+
+function readQueuedSubmissions(result: unknown): QueuedSubmissionView[] {
+  if (!isRecord(result) || !Array.isArray(result.data)) {
+    throw new Error("Codex App Server returned an invalid thread queue.");
+  }
+  return result.data.map(normalizeQueuedSubmission).filter((item): item is QueuedSubmissionView => Boolean(item));
+}
+
+function normalizeQueuedSubmission(value: unknown): QueuedSubmissionView | null {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.clientUserMessageId !== "string") {
+    return null;
+  }
+  const input = Array.isArray(value.input) ? value.input.filter(isRecord) : [];
+  const content = input
+    .filter((item) => item.type === "text" && typeof item.text === "string")
+    .map((item) => item.text as string)
+    .join("\n")
+    .trim();
+  return content
+    ? { id: value.id, clientUserMessageId: value.clientUserMessageId, content, pendingSteer: false }
+    : null;
+}
+
+function readPendingSteers(threadId: string): PendingSteerState[] {
+  return pendingSteers.list(threadId);
+}
+
+function hasPendingSteer(threadId: string, queuedSubmissionId: string): boolean {
+  return pendingSteers.hasQueuedSubmission(threadId, queuedSubmissionId);
+}
+
+function readUserMessageClientId(params: unknown): string | null {
+  if (!isRecord(params) || !isRecord(params.item) || params.item.type !== "userMessage") {
+    return null;
+  }
+  return typeof params.item.clientId === "string" ? params.item.clientId : null;
+}
+
+async function serializeSteerTransition<T>(threadId: string, task: () => Promise<T>): Promise<T> {
+  return threadOperations.run(threadId, task);
+}
+
+async function promoteQueuedSubmissionToSteer(
+  threadId: string,
+  queuedSubmissionId: string,
+  expectedTurnId: string,
+  clientUserMessageId: string,
+): Promise<unknown> {
+  const cachedTurnId = activeTurnsByThread.get(threadId) ?? null;
+  const actualTurnId =
+    cachedTurnId === expectedTurnId
+      ? cachedTurnId
+      : await readHarnessActiveTurnId(threadId);
+  if (!actualTurnId) {
+    const committedTurnId = await findCommittedUserMessageTurnIdWithRetry(threadId, clientUserMessageId);
+    if (committedTurnId) {
+      return { mode: "alreadyStarted", turnId: committedTurnId, result: null };
+    }
+    return startQueuedSubmission(threadId, queuedSubmissionId, "startedAfterTurnEnded");
+  }
+  let steerTurnId = actualTurnId;
+  if (actualTurnId !== expectedTurnId) {
+    const committedTurnId = await findCommittedUserMessageTurnIdWithRetry(threadId, clientUserMessageId);
+    if (committedTurnId) {
+      return { mode: "alreadyStarted", turnId: committedTurnId, result: null };
+    }
+    activeTurnsByThread.set(threadId, actualTurnId);
+    steerTurnId = actualTurnId;
+  }
+  activeTurnsByThread.set(threadId, steerTurnId);
+
+  const listResult = await codex.request("thread/queue/list", { threadId, cursor: null, limit: 100 });
+  const queuedSubmission = readQueuedSubmissions(listResult).find((item) => item.id === queuedSubmissionId);
+  if (!queuedSubmission) {
+    const committedTurnId = await findCommittedUserMessageTurnIdWithRetry(threadId, clientUserMessageId);
+    if (committedTurnId) {
+      return { mode: "alreadyStarted", turnId: committedTurnId, result: null };
+    }
+    throw new GatewayRequestError("Queued submission not found.", 404);
+  }
+  if (queuedSubmission.clientUserMessageId !== clientUserMessageId) {
+    throw new GatewayRequestError("Queued submission client id mismatch.", 409);
+  }
+  if (pendingSteers.hasClientId(queuedSubmission.clientUserMessageId)) {
+    throw new GatewayRequestError("Queued submission is already pending as a steer.", 409);
+  }
+
+  const pendingSteer = pendingSteers.add({
+    threadId,
+    turnId: steerTurnId,
+    queuedSubmissionId,
+    clientUserMessageId: queuedSubmission.clientUserMessageId,
+    content: queuedSubmission.content,
+  });
+
+  try {
+    await persistPendingSteers();
+    await codex.request("thread/queue/delete", { threadId, queuedSubmissionId });
+  } catch (error) {
+    pendingSteers.delete(pendingSteer.clientUserMessageId);
+    await persistPendingSteers().catch(() => undefined);
+    throw error;
+  }
+
+  try {
+    const result = await codex.request("turn/steer", {
+      threadId,
+      expectedTurnId: steerTurnId,
+      clientUserMessageId: pendingSteer.clientUserMessageId,
+      input: [{ type: "text", text: pendingSteer.content, text_elements: [] }],
+    });
+    const completion = waitForTurnCompletion(threadId, steerTurnId, 15_000);
+    void completion.catch(() => undefined);
+    await interruptTurnWithRaceRetry(threadId, steerTurnId);
+    await completion;
+    const restored = await restorePendingSteersToQueue(
+      threadId,
+      steerTurnId,
+      true,
+      new Set([pendingSteer.clientUserMessageId]),
+    );
+    return {
+      mode: "interruptedAndResubmitted",
+      turnId: restored.startedTurnId,
+      interruptedTurnId: steerTurnId,
+      result,
+    };
+  } catch (error) {
+    if (isNoLongerActiveTurnError(error)) {
+      const restored = await restorePendingSteersToQueue(
+        threadId,
+        steerTurnId,
+        true,
+        new Set([pendingSteer.clientUserMessageId]),
+      );
+      return {
+        mode: "startedAfterTurnEnded",
+        turnId: restored.startedTurnId,
+        result: null,
+      };
+    }
+    await restorePendingSteersToQueue(
+      threadId,
+      steerTurnId,
+      true,
+      new Set([pendingSteer.clientUserMessageId]),
+    ).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function interruptTurnWithRaceRetry(threadId: string, turnId: string): Promise<void> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    try {
+      await codex.request("turn/interrupt", { threadId, turnId }, 10_000);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isNoActiveInterruptError(error)) {
+        throw error;
+      }
+      if (attempt === 7) {
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function waitForTurnCompletion(
+  threadId: string,
+  turnId: string,
+  timeoutMs: number,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      codex.off("event", handleEvent);
+      reject(new Error(`Timed out waiting for interrupted turn ${turnId} to complete.`));
+    }, timeoutMs);
+    const handleEvent = (event: AppServerEvent) => {
+      if (
+        event.type !== "notification" ||
+        event.method !== "turn/completed" ||
+        getEventThreadId(event) !== threadId ||
+        readEventTurnId(event.params) !== turnId
+      ) {
+        return;
+      }
+      clearTimeout(timeout);
+      codex.off("event", handleEvent);
+      resolve();
+    };
+    codex.on("event", handleEvent);
+  });
+}
+
+async function startQueuedSubmission(
+  threadId: string,
+  queuedSubmissionId: string,
+  mode: "startedAfterTurnEnded",
+): Promise<Record<string, unknown>> {
+  const result = await codex.request("thread/queue/start", { threadId, queuedSubmissionId });
+  const startedTurnId = readResultTurnId(result);
+  if (startedTurnId) {
+    activeTurnsByThread.set(threadId, startedTurnId);
+    scheduleTurnTimeout(threadId, startedTurnId);
+  }
+  return { mode, turnId: startedTurnId, result };
+}
+
+async function restorePendingSteersToQueue(
+  threadId: string,
+  turnId?: string,
+  startWhenIdle = false,
+  clientUserMessageIds?: ReadonlySet<string>,
+): Promise<{ restoredSubmissionIds: string[]; startedTurnId: string | null }> {
+  const committedClientIds = await readCommittedUserMessageClientIds(threadId);
+  let pendingStateChanged = false;
+  for (const state of readPendingSteers(threadId)) {
+    if (committedClientIds.has(state.clientUserMessageId)) {
+      pendingSteers.delete(state.clientUserMessageId);
+      pendingStateChanged = true;
+    }
+  }
+  if (pendingStateChanged) {
+    await persistPendingSteers();
+  }
+
+  const pending = readPendingSteers(threadId).filter(
+    (state) =>
+      (!turnId || state.turnId === turnId) &&
+      (!clientUserMessageIds || clientUserMessageIds.has(state.clientUserMessageId)),
+  );
+  if (pending.length === 0) {
+    return { restoredSubmissionIds: [], startedTurnId: null };
+  }
+
+  const existingResult = await codex.request("thread/queue/list", { threadId, cursor: null, limit: 100 });
+  const existing = readQueuedSubmissions(existingResult);
+  const existingByClientId = new Map(existing.map((item) => [item.clientUserMessageId, item]));
+  const restoredIds: string[] = [];
+  let restoreError: unknown = null;
+  for (const state of pending) {
+    const alreadyQueued = existingByClientId.get(state.clientUserMessageId);
+    if (alreadyQueued) {
+      restoredIds.push(alreadyQueued.id);
+      pendingSteers.delete(state.clientUserMessageId);
+      pendingStateChanged = true;
+      continue;
+    }
+    try {
+      const restored = readQueuedSubmissionResult(
+        await codex.request("thread/queue/add", {
+          threadId,
+          clientUserMessageId: state.clientUserMessageId,
+          input: [{ type: "text", text: state.content, text_elements: [] }],
+        }),
+      );
+      restoredIds.push(restored.id);
+      pendingSteers.delete(state.clientUserMessageId);
+      pendingStateChanged = true;
+    } catch (error) {
+      restoreError = error;
+      break;
+    }
+  }
+
+  if (pendingStateChanged) {
+    await persistPendingSteers();
+  }
+
+  if (restoredIds.length > 0) {
+    const currentResult = await codex.request("thread/queue/list", { threadId, cursor: null, limit: 100 });
+    const current = readQueuedSubmissions(currentResult);
+    const restoredIdSet = new Set(restoredIds);
+    await codex.request("thread/queue/reorder", {
+      threadId,
+      queuedSubmissionIds: [
+        ...restoredIds,
+        ...current.filter((item) => !restoredIdSet.has(item.id)).map((item) => item.id),
+      ],
+    });
+    if (startWhenIdle && !(await readHarnessActiveTurnId(threadId))) {
+      const startResult = await codex
+        .request("thread/queue/start", { threadId, queuedSubmissionId: restoredIds[0] ?? null })
+        .catch(() => null);
+      const startedTurnId = readResultTurnId(startResult);
+      if (startedTurnId) {
+        activeTurnsByThread.set(threadId, startedTurnId);
+        scheduleTurnTimeout(threadId, startedTurnId);
+      }
+      if (restoreError) {
+        throw restoreError;
+      }
+      return { restoredSubmissionIds: restoredIds, startedTurnId };
+    }
+  }
+
+  if (restoreError) {
+    throw restoreError;
+  }
+  return { restoredSubmissionIds: restoredIds, startedTurnId: null };
+}
+
+async function persistPendingSteers(): Promise<void> {
+  await pendingSteerStore.save(pendingSteers.snapshot());
+}
+
+async function readCommittedUserMessageClientIds(threadId: string): Promise<Set<string>> {
+  const result = await readThreadWithStartupRetry(threadId, true);
+  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
+    throw new Error("Codex App Server returned invalid thread history while reconciling pending steers.");
+  }
+  const clientIds = new Set<string>();
+  for (const turn of result.thread.turns.filter(isRecord)) {
+    const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+    for (const item of items) {
+      if (item.type === "userMessage" && typeof item.clientId === "string") {
+        clientIds.add(item.clientId);
+      }
+    }
+  }
+  return clientIds;
+}
+
+async function findCommittedUserMessageTurnId(
+  threadId: string,
+  clientUserMessageId: string,
+): Promise<string | null> {
+  const result = await readThreadWithStartupRetry(threadId, true);
+  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
+    throw new Error("Codex App Server returned invalid thread history while locating a queued message.");
+  }
+  for (const turn of result.thread.turns.filter(isRecord)) {
+    const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+    if (
+      items.some(
+        (item) => item.type === "userMessage" && item.clientId === clientUserMessageId,
+      )
+    ) {
+      return typeof turn.id === "string" ? turn.id : null;
+    }
+  }
+  return null;
+}
+
+async function findCommittedUserMessageTurnIdWithRetry(
+  threadId: string,
+  clientUserMessageId: string,
+): Promise<string | null> {
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const turnId = await findCommittedUserMessageTurnId(threadId, clientUserMessageId);
+    if (turnId) {
+      return turnId;
+    }
+    if (attempt < 7) {
+      await new Promise((resolve) => setTimeout(resolve, 40 * (attempt + 1)));
+    }
+  }
+  return null;
+}
+
+async function readThreadWithStartupRetry(threadId: string, includeTurns: boolean): Promise<unknown> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      return await codex.request("thread/read", { threadId, includeTurns });
+    } catch (error) {
+      lastError = error;
+      if (!isEmptyRolloutError(error) || attempt === 5) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+function isEmptyRolloutError(error: unknown): boolean {
+  return error instanceof Error && /rollout .* is empty/i.test(error.message);
+}
+
+function isNoLongerActiveTurnError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /(expected turn is no longer active|no active turn|thread .* active turn|turn .* not active)/i.test(error.message)
+  );
+}
+
+function isNoActiveInterruptError(error: unknown): boolean {
+  return error instanceof Error && /no active turn to interrupt/i.test(error.message);
+}
+
 async function ensureThreadLoaded(threadId: string, model?: string): Promise<void> {
   if (loadedThreadIds.has(threadId)) {
     return;
@@ -319,12 +1204,15 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
     cwd: config.runtimeRoot,
     approvalPolicy: "never",
     sandbox: "read-only",
-    config: process.env.NODE_ENV === "production" ? undefined : { bypass_hook_trust: true },
+    config: createRuntimeRequestConfig(),
     developerInstructions: createRuntimeDeveloperInstructions(),
     dynamicTools: createCommerceDynamicToolSpecs(),
     excludeTurns: true,
   });
   loadedThreadIds.add(threadId);
+  if (readPendingSteers(threadId).length > 0) {
+    await serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, undefined, true));
+  }
 }
 
 function readEventTurnId(params: unknown): string | null {
@@ -332,6 +1220,21 @@ function readEventTurnId(params: unknown): string | null {
     return null;
   }
   return typeof params.turn.id === "string" ? params.turn.id : null;
+}
+
+function readEventTurnIdFromItemParams(params: unknown): string | null {
+  return isRecord(params) && typeof params.turnId === "string" ? params.turnId : null;
+}
+
+function readTurnCompletionStatus(params: unknown): string | null {
+  if (!isRecord(params) || !isRecord(params.turn)) {
+    return null;
+  }
+  return typeof params.turn.status === "string" ? params.turn.status : null;
+}
+
+function isContextCompactionItem(params: unknown): boolean {
+  return isRecord(params) && isRecord(params.item) && params.item.type === "contextCompaction";
 }
 
 function openSse(res: ServerResponse, threadId?: string): void {
@@ -509,8 +1412,22 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
     at: new Date().toISOString(),
   });
 
+  const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
+  const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
+  if (!isSafeAgentId(threadId) || !isSafeAgentId(turnId)) {
+    throw new Error("Image generation requires valid thread and turn ids.");
+  }
   const generated = await provider.generateImage(input);
-  const saved = await saveGeneratedImage(generated.base64, generated.mimeType);
+  const saved = await generatedImages.save({
+    base64: generated.base64,
+    threadId,
+    turnId,
+    callId: typeof event.params.callId === "string" ? event.params.callId : null,
+    model: generated.model,
+    mimeType: generated.mimeType,
+    quality: generated.quality,
+    size: generated.size,
+  });
   const publicUrl = `/api/provider/generated-images/${encodeURIComponent(saved.filename)}`;
   codex.respondToServerRequest(event.id, {
     success: true,
@@ -585,60 +1502,30 @@ function createCommerceImageToolSpec(): Record<string, unknown> {
   };
 }
 
-function createCommerceWebToolSpec(): Record<string, unknown> {
-  return {
-    type: "namespace",
-    name: "commerce_web",
-    description: "Commerce Pilot hosted web research through the configured application provider.",
-    tools: [
-      {
-        type: "function",
-        name: "search",
-        description: "Search the live web and return a grounded answer with source URLs. Use for current facts, websites, news, prices, schedules, and explicit web-search requests.",
-        deferLoading: false,
-        inputSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            query: {
-              type: "string",
-              description: "A complete search question including the facts and source scope needed.",
-            },
-          },
-          required: ["query"],
-        },
-      },
-    ],
-  };
+function createCommerceDynamicToolSpecs(): Record<string, unknown>[] {
+  return [createCommerceImageToolSpec()];
 }
 
-function createCommerceDynamicToolSpecs(): Record<string, unknown>[] {
-  return [createCommerceImageToolSpec(), createCommerceWebToolSpec()];
+function createRuntimeRequestConfig(): Record<string, unknown> {
+  return {
+    web_search: "live",
+    ...(process.env.NODE_ENV === "production" ? {} : { bypass_hook_trust: true }),
+  };
 }
 
 function createRuntimeDeveloperInstructions(): string {
   return [
     "Commerce Pilot is a hosted e-commerce agent, not a local coding agent.",
-    "Use only application-registered dynamic tools. Never run shell commands, inspect or modify host files, spawn processes, use local developer tools, or request additional filesystem or network permissions.",
+    "Use only application-registered dynamic tools and application-managed MCP tools. Never run shell commands, inspect or modify host files, spawn processes, use local developer tools, or request additional filesystem or network permissions.",
     "If a requested capability has no registered tool, explain that it is unavailable instead of attempting a local workaround.",
     "Commerce Pilot provides the host tool `commerce_image.generate` for bitmap image generation.",
     `It is backed by ${config.provider.imageModel} through the configured application provider.`,
     "Use it when the user asks to generate an image. Do not claim image generation is unavailable while this tool is present.",
     "A completed tool result contains the authoritative publicUrl. Do not retry a completed generation because it omits inline image bytes.",
     "Use quality=low only for explicit drafts or probes; otherwise use quality=auto.",
-    "Commerce Pilot provides `commerce_web.search` for live web research through the configured provider.",
-    "Use it whenever the user explicitly asks to search the web or when current external information is required. Cite its returned source URLs and never claim Web Search is unavailable while this tool is present.",
+    "Commerce Pilot provides MCP server `commerce_web` with tool `search` for live web research through the configured provider; its model-facing identifier may appear as `mcp__commerce_web__search`.",
+    "Use that MCP Web Search tool whenever the user explicitly asks to search the web or when current external information is required. Do not look for a dynamic tool named `commerce_web.search`. Cite returned source URLs and never claim Web Search is unavailable while the MCP tool is present.",
   ].join(" ");
-}
-
-async function saveGeneratedImage(base64: string, mimeType: string): Promise<{ path: string; filename: string }> {
-  const directory = join(config.codexHome, "generated_images");
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const extension = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
-  const filename = `${Date.now()}-${randomUUID()}.${extension}`;
-  const path = join(directory, filename);
-  await writeFile(path, Buffer.from(base64, "base64"), { mode: 0o600 });
-  return { path, filename };
 }
 
 function readImageQuality(value: unknown): ImageGenerationInput["quality"] {
@@ -647,13 +1534,6 @@ function readImageQuality(value: unknown): ImageGenerationInput["quality"] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function isSafeGeneratedImageFilename(filename: string): boolean {
-  return (
-    filename === basename(filename) &&
-    /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i.test(filename)
-  );
 }
 
 function isSafeAgentId(value: string): boolean {
@@ -671,9 +1551,4 @@ function isAuthorizedGatewayRequest(req: IncomingMessage): boolean {
   const expectedBuffer = Buffer.from(config.internalToken);
   const providedBuffer = Buffer.from(provided);
   return expectedBuffer.length === providedBuffer.length && timingSafeEqual(expectedBuffer, providedBuffer);
-}
-
-function imageContentType(filename: string): string {
-  const extension = extname(filename).toLowerCase();
-  return extension === ".jpg" ? "image/jpeg" : extension === ".webp" ? "image/webp" : "image/png";
 }

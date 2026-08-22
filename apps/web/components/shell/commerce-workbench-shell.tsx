@@ -15,14 +15,18 @@ import {
   ChevronRight,
   CircleAlert,
   Clock3,
+  CornerDownRight,
   Ellipsis,
   Eye,
   EyeOff,
   ExternalLink,
+  FileText,
   FilePlus2,
   HelpCircle,
   ImageIcon,
   Library,
+  ListRestart,
+  ListX,
   Loader2,
   LockKeyhole,
   LogOut,
@@ -32,10 +36,12 @@ import {
   Palette,
   PanelLeft,
   Paperclip,
+  Pencil,
   Phone,
   Plug,
   Plus,
   Search,
+  ScrollText,
   SendHorizontal,
   Share2,
   Settings,
@@ -45,9 +51,11 @@ import {
   Store,
   Square,
   Telescope,
+  Trash2,
+  Video,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
@@ -58,7 +66,14 @@ import {
   type AgentThreadSummary,
   type ConversationMessage,
   type GeneratedImageItem,
+  type QueuedMessage,
 } from "@/lib/agent/use-agent-thread";
+import {
+  calculateConversationMinimap,
+  type ConversationMinimapMarker,
+  type ConversationMinimapMarkerInput,
+  type ConversationMinimapState,
+} from "@/lib/agent/conversation-minimap";
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
@@ -124,6 +139,15 @@ const moreNavItems = [
   { label: "已安排", icon: Clock3, active: false },
   { label: "插件", icon: Plug, active: false },
 ];
+
+const creativeNavItems = [
+  { label: "文案生成", icon: FileText },
+  { label: "脚本生成", icon: ScrollText },
+  { label: "图片生成", icon: ImageIcon },
+  { label: "视频生成", icon: Video },
+];
+
+type SidebarFlyoutId = "creative" | "more";
 
 const reasoningEffortOptions: Array<{
   value: ReasoningEffort;
@@ -238,10 +262,25 @@ export function CommerceWorkbenchShell() {
     if (!value) {
       return;
     }
-    setDraft("");
+    if (agentThread.status === "connecting" || agentThread.compacting) {
+      return;
+    }
+    const steering = agentThread.status === "running" && Boolean(agentThread.activeTurnId);
+    if (agentThread.status === "running" && !steering) {
+      return;
+    }
     if (isAuthenticated) {
-      await agentThread.submit(value);
+      if (steering) {
+        const queued = await agentThread.enqueueMessage(value);
+        if (queued) {
+          setDraft("");
+        }
+      } else {
+        setDraft("");
+        await agentThread.submit(value);
+      }
     } else {
+      setDraft("");
       setSubmittedDraft(value);
     }
   }
@@ -309,7 +348,12 @@ export function CommerceWorkbenchShell() {
             images={agentThread.images}
             status={agentThread.status}
             currentTurnId={agentThread.currentTurnId}
-            canInterrupt={Boolean(agentThread.activeTurnId)}
+            compacting={agentThread.compacting}
+            queuedMessages={agentThread.queuedMessages}
+            pendingSteers={agentThread.pendingSteers}
+            queueSubmitting={agentThread.queueSubmitting}
+            queueOperationId={agentThread.queueOperationId}
+            canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
             interrupting={agentThread.interrupting}
             durationMs={agentThread.durationMs}
             startedAt={agentThread.startedAt}
@@ -322,6 +366,9 @@ export function CommerceWorkbenchShell() {
             onChange={setDraft}
             onSubmit={submitDraft}
             onInterrupt={agentThread.interrupt}
+            onQueueDelete={agentThread.deleteQueuedMessage}
+            onQueueSteer={agentThread.steerQueuedMessage}
+            onQueueClear={agentThread.clearQueuedMessages}
             onModelChange={setSelectedModel}
             onReasoningEffortChange={setReasoningEffort}
           />
@@ -438,6 +485,11 @@ function ConversationWorkspace({
   images,
   status,
   currentTurnId,
+  compacting,
+  queuedMessages,
+  pendingSteers,
+  queueSubmitting,
+  queueOperationId,
   canInterrupt,
   interrupting,
   durationMs,
@@ -451,6 +503,9 @@ function ConversationWorkspace({
   onChange,
   onSubmit,
   onInterrupt,
+  onQueueDelete,
+  onQueueSteer,
+  onQueueClear,
   onModelChange,
   onReasoningEffortChange,
 }: {
@@ -460,6 +515,11 @@ function ConversationWorkspace({
   images: GeneratedImageItem[];
   status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
   currentTurnId: string | null;
+  compacting: boolean;
+  queuedMessages: QueuedMessage[];
+  pendingSteers: QueuedMessage[];
+  queueSubmitting: boolean;
+  queueOperationId: string | null;
   canInterrupt: boolean;
   interrupting: boolean;
   durationMs: number | null;
@@ -473,15 +533,26 @@ function ConversationWorkspace({
   onChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onInterrupt: () => void | Promise<void>;
+  onQueueDelete: (queuedSubmissionId: string) => Promise<boolean>;
+  onQueueSteer: (queuedSubmissionId: string) => Promise<boolean>;
+  onQueueClear: () => Promise<void>;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const timelineContentRef = useRef<HTMLDivElement>(null);
   const conversationInputRef = useRef<HTMLTextAreaElement>(null);
   const shouldFollowBottomRef = useRef(true);
   const scrollingToBottomRef = useRef(false);
+  const minimapFrameRef = useRef<number | null>(null);
+  const minimapMarkersRef = useRef<ConversationMinimapMarkerInput[]>([]);
+  const minimapNeedsMeasurementRef = useRef(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [conversationInputExpanded, setConversationInputExpanded] = useState(false);
+  const [minimapState, setMinimapState] = useState<ConversationMinimapState>(() =>
+    calculateConversationMinimap(0, 1, 1, []),
+  );
+  const [hoveredMinimapMarkerId, setHoveredMinimapMarkerId] = useState<string | null>(null);
   const running = status === "connecting" || status === "running";
   const latestUserSequence = messages.reduce(
     (latestSequence, message) => (message.role === "user" ? Math.max(latestSequence, message.sequence) : latestSequence),
@@ -500,6 +571,12 @@ function ConversationWorkspace({
     .sort((left, right) => left.sequence - right.sequence);
   const messagesBeforeStatus = visibleMessages.filter((message) => message.sequence <= latestUserSequence);
   const messagesAfterStatus = visibleMessages.filter((message) => message.sequence > latestUserSequence);
+  const imagesBeforeStatus = images.filter((image) => image.sequence <= latestUserSequence);
+  const imagesAfterStatus = images.filter((image) => image.sequence > latestUserSequence);
+  const timelineBeforeStatus = [
+    ...messagesBeforeStatus.map((message) => ({ type: "message" as const, sequence: message.sequence, message })),
+    ...imagesBeforeStatus.map((image) => ({ type: "image" as const, sequence: image.sequence, image })),
+  ].sort((left, right) => left.sequence - right.sequence);
   const currentActivities = currentTurnId
     ? activities.filter((activity) => activity.turnId === currentTurnId)
     : [];
@@ -509,10 +586,64 @@ function ConversationWorkspace({
   );
   const activeTimeline = [
     ...messagesAfterStatus.map((message) => ({ type: "message" as const, sequence: message.sequence, message })),
+    ...imagesAfterStatus.map((image) => ({ type: "image" as const, sequence: image.sequence, image })),
     ...(running && latestCurrentActivity
       ? [{ type: "activity" as const, sequence: latestCurrentActivity.sequence, activity: latestCurrentActivity }]
       : []),
   ].sort((left, right) => left.sequence - right.sequence);
+
+  const updateMinimap = useCallback(() => {
+    const node = scrollRef.current;
+    if (!node) {
+      return;
+    }
+    if (minimapNeedsMeasurementRef.current || minimapMarkersRef.current.length === 0) {
+      const containerRect = node.getBoundingClientRect();
+      minimapMarkersRef.current = [
+        ...node.querySelectorAll<HTMLElement>("[data-conversation-minimap-anchor]"),
+      ]
+        .map<ConversationMinimapMarkerInput | null>((element, index) => {
+          const preview = normalizeMinimapPreview(
+            element.dataset.minimapPreview || element.innerText,
+          );
+          const kind = readMinimapMarkerKind(element.dataset.minimapKind);
+          if (!preview || !kind) {
+            return null;
+          }
+          const elementRect = element.getBoundingClientRect();
+          return {
+            id: element.dataset.minimapId || `timeline-${index}`,
+            offsetTop: node.scrollTop + elementRect.top - containerRect.top,
+            preview,
+            kind,
+          };
+        })
+        .filter((marker): marker is ConversationMinimapMarkerInput => Boolean(marker));
+      minimapNeedsMeasurementRef.current = false;
+    }
+    setMinimapState(
+      calculateConversationMinimap(
+        node.scrollTop,
+        node.scrollHeight,
+        node.clientHeight,
+        minimapMarkersRef.current,
+      ),
+    );
+  }, []);
+
+  const scheduleMinimapUpdate = useCallback((measureMarkers = false) => {
+    if (measureMarkers) {
+      minimapNeedsMeasurementRef.current = true;
+    }
+    if (minimapFrameRef.current !== null) {
+      return;
+    }
+    minimapFrameRef.current = window.requestAnimationFrame(() => {
+      minimapFrameRef.current = null;
+      updateMinimap();
+    });
+  }, [updateMinimap]);
+
   useEffect(() => {
     const node = scrollRef.current;
     if (!node) {
@@ -521,10 +652,31 @@ function ConversationWorkspace({
     if (shouldFollowBottomRef.current) {
       node.scrollTop = node.scrollHeight;
       setShowScrollToBottom(false);
+      scheduleMinimapUpdate(true);
       return;
     }
     setShowScrollToBottom(getDistanceFromBottom(node) > 80);
-  }, [activities, images, messages, status]);
+    scheduleMinimapUpdate(true);
+  }, [activities, images, messages, scheduleMinimapUpdate, status]);
+
+  useEffect(() => {
+    const scrollNode = scrollRef.current;
+    const contentNode = timelineContentRef.current;
+    if (!scrollNode || !contentNode) {
+      return;
+    }
+    const resizeObserver = new ResizeObserver(() => scheduleMinimapUpdate(true));
+    resizeObserver.observe(scrollNode);
+    resizeObserver.observe(contentNode);
+    scheduleMinimapUpdate(true);
+    return () => {
+      resizeObserver.disconnect();
+      if (minimapFrameRef.current !== null) {
+        window.cancelAnimationFrame(minimapFrameRef.current);
+        minimapFrameRef.current = null;
+      }
+    };
+  }, [scheduleMinimapUpdate]);
 
   useEffect(() => {
     if (conversationInputRef.current) {
@@ -538,6 +690,7 @@ function ConversationWorkspace({
     if (!node) {
       return;
     }
+    scheduleMinimapUpdate();
     const isNearBottom = getDistanceFromBottom(node) <= 80;
     if (scrollingToBottomRef.current) {
       if (isNearBottom) {
@@ -562,23 +715,54 @@ function ConversationWorkspace({
     node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
   }
 
+  function returnQueuedMessageToComposer(message: QueuedMessage): void {
+    const previousValue = value;
+    onChange(message.content);
+    requestAnimationFrame(() => {
+      const input = conversationInputRef.current;
+      if (!input) {
+        return;
+      }
+      input.focus();
+      input.setSelectionRange(message.content.length, message.content.length);
+    });
+    void onQueueDelete(message.id).then((deleted) => {
+      if (!deleted) {
+        onChange(previousValue);
+      }
+    });
+  }
+
   return (
     <section data-agent-status={status} className="relative flex min-h-0 flex-1 flex-col">
+      <ConversationMinimap
+        state={minimapState}
+        scrollContainerRef={scrollRef}
+        hoveredMarkerId={hoveredMinimapMarkerId}
+        onHoveredMarkerChange={setHoveredMinimapMarkerId}
+      />
       <div
+        id="commerce-conversation-scroll"
         ref={scrollRef}
         data-conversation-scroll
         className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-4 pb-8 md:px-8"
         onScroll={handleConversationScroll}
       >
-        <div className="mx-auto w-full max-w-[820px] pb-12 pt-2 xl:pr-[72px]">
+        <div ref={timelineContentRef} className="mx-auto w-full max-w-[820px] pb-12 pt-2 xl:pr-[72px]">
           <h1 className="sr-only">{title}</h1>
 
           <div className="space-y-6">
-            {messagesBeforeStatus.map((message) => (
-              <ConversationMessageView key={message.id} message={message} />
-            ))}
+            {timelineBeforeStatus.map((entry) =>
+              entry.type === "message" ? (
+                <ConversationTimelineMessage key={entry.message.id} message={entry.message} />
+              ) : (
+                <GeneratedImageCard key={entry.image.id} image={entry.image} />
+              ),
+            )}
             <ProcessingStatus
+              key={startedAt ?? "no-active-turn"}
               running={running}
+              compacting={compacting}
               durationMs={durationMs}
               startedAt={startedAt}
             />
@@ -586,33 +770,20 @@ function ConversationWorkspace({
               <div className="space-y-4">
                 {activeTimeline.map((entry) =>
                   entry.type === "message" ? (
-                    <ConversationMessageView key={entry.message.id} message={entry.message} />
+                    <ConversationTimelineMessage key={entry.message.id} message={entry.message} />
+                  ) : entry.type === "image" ? (
+                    <GeneratedImageCard key={entry.image.id} image={entry.image} />
                   ) : (
                     <ActivityRow key="current-turn-activity" activity={entry.activity} />
                   ),
                 )}
               </div>
             ) : null}
+            {pendingSteers.length > 0 ? <PendingSteerPreview messages={pendingSteers} /> : null}
           </div>
 
           {!running && currentActivities.length > 0 ? (
             <ActivityDisclosure key={currentTurnId} activities={currentActivities} />
-          ) : null}
-
-          {images.length > 0 ? (
-            <div className="mt-6 grid gap-3 sm:grid-cols-2">
-              {images.map((image) => (
-                <figure key={image.id} className="m-0 overflow-hidden rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)]">
-                  {/* Generated provider images have dynamic dimensions and are served by an authenticated route. */}
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={image.url} alt="AI 生成内容" className="block aspect-square w-full object-cover" />
-                  <figcaption className="flex items-center gap-2 px-3 py-2 text-xs text-[var(--cp-text-muted)]">
-                    <ImageIcon className="size-3.5" />
-                    <span className="truncate">{image.model}</span>
-                  </figcaption>
-                </figure>
-              ))}
-            </div>
           ) : null}
 
           {error ? (
@@ -650,9 +821,19 @@ function ConversationWorkspace({
             </IconTooltip>
           </div>
         ) : null}
-        <p className="mx-auto mb-3 max-w-[768px] text-center text-[11px] text-[var(--cp-text-faint)]">
+        <p className="mx-auto mb-2 max-w-[768px] text-center text-[11px] text-[var(--cp-text-faint)]">
           Commerce Pilot 也可能会犯错。请核查重要信息。
         </p>
+        {running && queuedMessages.length > 0 ? (
+          <QueuedSubmissionList
+            messages={queuedMessages}
+            operationId={queueOperationId}
+            onReturnToComposer={returnQueuedMessageToComposer}
+            onDelete={onQueueDelete}
+            onSteer={onQueueSteer}
+            onClear={onQueueClear}
+          />
+        ) : null}
         <form
           className={cn(
             "mx-auto grid w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] gap-x-1 rounded-[28px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)] transition-[height,border-radius] duration-[var(--cp-duration-base)]",
@@ -662,7 +843,7 @@ function ConversationWorkspace({
           )}
           onSubmit={(event) => {
             event.preventDefault();
-            if (!running) {
+            if (!running || canInterrupt) {
               void onSubmit();
             }
           }}
@@ -690,7 +871,7 @@ function ConversationWorkspace({
                 !event.shiftKey &&
                 !event.nativeEvent.isComposing &&
                 event.keyCode !== 229 &&
-                !running
+                (!running || canInterrupt)
               ) {
                 event.preventDefault();
                 if (value.trim()) {
@@ -698,7 +879,7 @@ function ConversationWorkspace({
                 }
               }
             }}
-            placeholder="继续追问"
+            placeholder={running && canInterrupt ? "输入调整方向" : "继续追问"}
             className={cn(
               "cp-composer-textarea min-h-8 max-h-[120px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]",
               conversationInputExpanded
@@ -729,21 +910,42 @@ function ConversationWorkspace({
               </Button>
             </IconTooltip>
             {running && canInterrupt ? (
-              <IconTooltip label="停止">
+              <>
+                {value.trim() ? (
+                  <IconTooltip label="加入任务队列">
+                    <Button
+                      type="submit"
+                      size="icon"
+                      className="rounded-full"
+                      aria-label="加入任务队列"
+                      disabled={queueSubmitting}
+                    >
+                      {queueSubmitting ? <Loader2 className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
+                    </Button>
+                  </IconTooltip>
+                ) : null}
+                <IconTooltip label="停止">
+                  <Button
+                    type="button"
+                    size="icon"
+                    className="rounded-full"
+                    aria-label="停止"
+                    disabled={interrupting}
+                    onClick={onInterrupt}
+                  >
+                    {interrupting ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
+                  </Button>
+                </IconTooltip>
+              </>
+            ) : running ? (
+              <IconTooltip label={compacting ? "正在整理上下文" : "正在启动任务"}>
                 <Button
                   type="button"
                   size="icon"
                   className="rounded-full"
-                  aria-label="停止"
-                  disabled={interrupting}
-                  onClick={onInterrupt}
+                  aria-label={compacting ? "正在整理上下文" : "正在启动任务"}
+                  disabled
                 >
-                  {interrupting ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
-                </Button>
-              </IconTooltip>
-            ) : running ? (
-              <IconTooltip label="正在启动任务">
-                <Button type="button" size="icon" className="rounded-full" aria-label="正在启动任务" disabled>
                   <Loader2 className="size-4 animate-spin" />
                 </Button>
               </IconTooltip>
@@ -765,6 +967,229 @@ function getDistanceFromBottom(node: HTMLDivElement): number {
   return Math.max(0, node.scrollHeight - node.scrollTop - node.clientHeight);
 }
 
+function ConversationMinimap({
+  state,
+  scrollContainerRef,
+  hoveredMarkerId,
+  onHoveredMarkerChange,
+}: {
+  state: ConversationMinimapState;
+  scrollContainerRef: RefObject<HTMLDivElement | null>;
+  hoveredMarkerId: string | null;
+  onHoveredMarkerChange: (markerId: string | null) => void;
+}) {
+  if (!state.visible) {
+    return null;
+  }
+  const hoveredMarker = state.markers.find((marker) => marker.id === hoveredMarkerId) ?? null;
+
+  function scrollToPosition(scrollPercent: number, behavior: ScrollBehavior = "auto") {
+    const node = scrollContainerRef.current;
+    if (!node) {
+      return;
+    }
+    const maximum = Math.max(0, node.scrollHeight - node.clientHeight);
+    node.scrollTo({ top: maximum * clampPercent(scrollPercent) / 100, behavior });
+  }
+
+  function handleTrackPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (target.closest("[data-minimap-marker], [data-minimap-thumb]")) {
+      return;
+    }
+    const rect = event.currentTarget.getBoundingClientRect();
+    scrollToPosition(((event.clientY - rect.top) / Math.max(1, rect.height)) * 100);
+  }
+
+  function handleThumbPointerDown(event: React.PointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const node = scrollContainerRef.current;
+    const rail = event.currentTarget.parentElement;
+    if (!node || !rail) {
+      return;
+    }
+    const railHeight = Math.max(1, rail.getBoundingClientRect().height);
+    const startY = event.clientY;
+    const startScrollTop = node.scrollTop;
+    const maximum = Math.max(0, node.scrollHeight - node.clientHeight);
+    const handlePointerMove = (pointerEvent: PointerEvent) => {
+      const scrollDelta = ((pointerEvent.clientY - startY) / railHeight) * maximum;
+      node.scrollTop = Math.min(Math.max(startScrollTop + scrollDelta, 0), maximum);
+    };
+    const stopDragging = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
+  }
+
+  function handleScrollbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const node = scrollContainerRef.current;
+    if (!node) {
+      return;
+    }
+    const deltaByKey: Partial<Record<string, number>> = {
+      ArrowUp: -80,
+      ArrowDown: 80,
+      PageUp: -node.clientHeight * 0.8,
+      PageDown: node.clientHeight * 0.8,
+    };
+    if (event.key === "Home") {
+      event.preventDefault();
+      node.scrollTo({ top: 0, behavior: "smooth" });
+      return;
+    }
+    if (event.key === "End") {
+      event.preventDefault();
+      node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
+      return;
+    }
+    const delta = deltaByKey[event.key];
+    if (typeof delta === "number") {
+      event.preventDefault();
+      node.scrollBy({ top: delta, behavior: "smooth" });
+    }
+  }
+
+  return (
+    <aside
+      className="pointer-events-none absolute bottom-4 left-3 top-4 z-30 hidden w-9 lg:block"
+      aria-label="对话时间线导航"
+    >
+      <div
+        role="scrollbar"
+        tabIndex={0}
+        aria-controls="commerce-conversation-scroll"
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(state.scrollPercent)}
+        className="pointer-events-auto relative h-full w-8 cursor-pointer rounded-[var(--cp-radius-xs)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)]"
+        onPointerDown={handleTrackPointerDown}
+        onKeyDown={handleScrollbarKeyDown}
+      >
+        <span
+          className="pointer-events-none absolute left-[2px] w-px rounded-full bg-[var(--cp-border-subtle)]"
+          style={{
+            top: `${state.viewportStartPercent}%`,
+            height: `${Math.max(1, state.viewportSizePercent)}%`,
+          }}
+          aria-hidden="true"
+        />
+        {state.markers.map((marker) => (
+          <button
+            key={marker.id}
+            type="button"
+            tabIndex={-1}
+            data-minimap-marker
+            className={cn(
+              "absolute left-0 h-px -translate-y-1/2 bg-[var(--cp-border-strong)] p-0 transition-[width,background-color] duration-[var(--cp-duration-fast)]",
+              minimapMarkerWidth(marker),
+              hoveredMarkerId === marker.id && "w-6 bg-[var(--cp-text)]",
+            )}
+            style={{ top: `${marker.positionPercent}%` }}
+            aria-label={`跳转到${minimapKindLabel(marker.kind)}：${marker.preview}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onMouseEnter={() => onHoveredMarkerChange(marker.id)}
+            onMouseLeave={() => onHoveredMarkerChange(null)}
+            onFocus={() => onHoveredMarkerChange(marker.id)}
+            onBlur={() => onHoveredMarkerChange(null)}
+            onClick={() => {
+              const node = scrollContainerRef.current;
+              if (!node) {
+                return;
+              }
+              node.scrollTo({
+                top: Math.max(0, marker.offsetTop - node.clientHeight * 0.12),
+                behavior: "smooth",
+              });
+            }}
+          />
+        ))}
+        <button
+          type="button"
+          tabIndex={-1}
+          data-minimap-thumb
+          className="absolute left-0 h-[3px] w-6 -translate-y-1/2 cursor-grab rounded-full bg-[var(--cp-text)] p-0 active:cursor-grabbing"
+          style={{ top: `${state.scrollPercent}%` }}
+          aria-label="拖动对话位置"
+          onPointerDown={handleThumbPointerDown}
+        />
+      </div>
+
+      {hoveredMarker ? (
+        <div
+          className="pointer-events-none absolute left-9 w-[320px] rounded-[8px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-3 py-2.5 shadow-[var(--cp-shadow-popover)]"
+          style={{
+            top: `${Math.min(Math.max(hoveredMarker.positionPercent, 8), 92)}%`,
+            transform: "translateY(-50%)",
+          }}
+          role="status"
+        >
+          <div className="mb-1 text-[11px] text-[var(--cp-text-faint)]">
+            {minimapKindLabel(hoveredMarker.kind)}
+          </div>
+          <div className="max-h-[92px] overflow-hidden whitespace-pre-wrap text-[13px] leading-5 text-[var(--cp-text-soft)]">
+            {hoveredMarker.preview}
+          </div>
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
+function minimapMarkerWidth(marker: ConversationMinimapMarker): string {
+  if (marker.kind === "user") {
+    return "w-4";
+  }
+  if (marker.kind === "image") {
+    return "w-3";
+  }
+  if (marker.kind === "status") {
+    return "w-2.5";
+  }
+  return marker.kind === "assistant" ? "w-2" : "w-1.5";
+}
+
+function minimapKindLabel(kind: ConversationMinimapMarker["kind"]): string {
+  if (kind === "user") {
+    return "用户消息";
+  }
+  if (kind === "assistant") {
+    return "回复";
+  }
+  if (kind === "image") {
+    return "生成图片";
+  }
+  if (kind === "status") {
+    return "处理状态";
+  }
+  return "运行活动";
+}
+
+function readMinimapMarkerKind(value: string | undefined): ConversationMinimapMarker["kind"] | null {
+  return value === "user" ||
+    value === "assistant" ||
+    value === "activity" ||
+    value === "image" ||
+    value === "status"
+    ? value
+    : null;
+}
+
+function normalizeMinimapPreview(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 220 ? `${normalized.slice(0, 220)}…` : normalized;
+}
+
+function clampPercent(value: number): number {
+  return Math.min(Math.max(value, 0), 100);
+}
+
 function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight: number): number {
   node.style.height = "0px";
   const nextHeight = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight);
@@ -773,11 +1198,55 @@ function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight:
   return nextHeight;
 }
 
+function ConversationTimelineMessage({ message }: { message: ConversationMessage }) {
+  return (
+    <div
+      data-conversation-minimap-anchor
+      data-minimap-id={`message-${message.id}`}
+      data-minimap-kind={message.role}
+      data-minimap-preview={message.content}
+    >
+      <ConversationMessageView message={message} />
+    </div>
+  );
+}
+
+function PendingSteerPreview({ messages }: { messages: QueuedMessage[] }) {
+  return (
+    <div className="space-y-3" aria-live="polite" aria-label="正在提交的调整方向">
+      {messages.map((message) => (
+        <div
+          key={message.clientUserMessageId}
+          data-conversation-minimap-anchor
+          data-minimap-id={`pending-${message.clientUserMessageId}`}
+          data-minimap-kind="user"
+          data-minimap-preview={message.content}
+          className="flex justify-end"
+        >
+          <div className="max-w-[75%] rounded-[18px] bg-[var(--cp-bg-muted)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-text)]">
+            {message.content}
+          </div>
+        </div>
+      ))}
+      <div className="flex min-h-7 items-center py-1 text-[13px] text-[var(--cp-text-faint)]">
+        <span className="cp-running-shimmer">正在调整</span>
+      </div>
+    </div>
+  );
+}
+
 function ConversationMessageView({ message }: { message: ConversationMessage }) {
   if (message.role === "user") {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[75%] rounded-[18px] bg-[var(--cp-text)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-text-inverse)]">
+        <div
+          className={cn(
+            "max-w-[75%] rounded-[18px] px-4 py-2.5 text-sm leading-6",
+            message.variant === "steer"
+              ? "bg-[var(--cp-bg-muted)] text-[var(--cp-text)]"
+              : "bg-[var(--cp-text)] text-[var(--cp-text-inverse)]",
+          )}
+        >
           {message.content}
         </div>
       </div>
@@ -824,13 +1293,17 @@ function ActivityRow({ activity }: { activity: AgentActivity }) {
   return (
     <div
       data-agent-activity
+      data-conversation-minimap-anchor
+      data-minimap-id={`activity-${activity.id}`}
+      data-minimap-kind="activity"
+      data-minimap-preview={`${activity.label}${activity.detail ? ` ${activity.detail}` : ""}`}
       data-activity-status={activity.status}
       className="flex min-h-8 items-center gap-2 py-1 text-[13px] text-[var(--cp-text-faint)]"
     >
       {activity.status === "failed" ? (
         <CircleAlert className="size-4 shrink-0 text-[var(--cp-danger)]" />
       ) : null}
-      <span className={cn("flex min-w-0 items-center gap-2 overflow-hidden", running && "cp-activity-shimmer")}>
+      <span className={cn("flex min-w-0 items-center gap-2 overflow-hidden", running && "cp-running-shimmer")}>
         <span className="shrink-0">{activity.label}</span>
         {activity.detail ? <code className="min-w-0 truncate font-mono text-[11px]">{activity.detail}</code> : null}
       </span>
@@ -850,11 +1323,15 @@ function ActivityDisclosure({ activities }: { activities: AgentActivity[] }) {
     <div className="mt-4">
       <button
         type="button"
+        data-conversation-minimap-anchor
+        data-minimap-id={`activity-disclosure-${activities[0]?.id ?? "empty"}-${activities.at(-1)?.id ?? "empty"}`}
+        data-minimap-kind="activity"
+        data-minimap-preview={summary}
         className="flex min-h-9 w-full items-center gap-2 py-1.5 text-left text-[13px] text-[var(--cp-text-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
         aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}
       >
-        <span className={running ? "cp-thinking-shimmer" : undefined}>{summary}</span>
+        <span className={running ? "cp-running-shimmer" : undefined}>{summary}</span>
         <ChevronDown
           className={cn(
             "size-4 shrink-0 text-[var(--cp-text-faint)] transition-transform duration-[var(--cp-duration-fast)]",
@@ -887,6 +1364,9 @@ function summarizeActivities(activities: AgentActivity[], running: boolean): str
     if (activities.some((activity) => activity.kind === "command" && activity.status === "running")) {
       return "正在运行命令";
     }
+    if (activities.some((activity) => activity.kind === "compact" && activity.status === "running")) {
+      return "正在整理上下文";
+    }
     return "正在调用工具";
   }
   if (kinds.has("file") && kinds.has("command")) {
@@ -904,38 +1384,312 @@ function summarizeActivities(activities: AgentActivity[], running: boolean): str
   if (kinds.has("search")) {
     return "完成了搜索";
   }
+  if (kinds.has("compact")) {
+    return "已整理上下文";
+  }
   return "调用了工具";
+}
+
+function QueuedSubmissionList({
+  messages,
+  operationId,
+  onReturnToComposer,
+  onDelete,
+  onSteer,
+  onClear,
+}: {
+  messages: QueuedMessage[];
+  operationId: string | null;
+  onReturnToComposer: (message: QueuedMessage) => void;
+  onDelete: (queuedSubmissionId: string) => Promise<boolean>;
+  onSteer: (queuedSubmissionId: string) => Promise<boolean>;
+  onClear: () => Promise<void>;
+}) {
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuButtonRefs = useRef(new Map<string, HTMLButtonElement>());
+
+  useEffect(() => {
+    if (!openMenuId) {
+      return;
+    }
+    function closeOnOutsideClick(event: PointerEvent) {
+      const target = event.target as Node;
+      if (
+        !menuButtonRefs.current.get(openMenuId as string)?.contains(target) &&
+        !menuRef.current?.contains(target)
+      ) {
+        setOpenMenuId(null);
+      }
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpenMenuId(null);
+      }
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [openMenuId]);
+
+  function toggleMenu(messageId: string) {
+    if (openMenuId === messageId) {
+      setOpenMenuId(null);
+      return;
+    }
+    const rect = menuButtonRefs.current.get(messageId)?.getBoundingClientRect();
+    if (rect) {
+      const width = 156;
+      const height = 76;
+      const belowTop = rect.bottom + 6;
+      const top = belowTop + height <= window.innerHeight - 8 ? belowTop : rect.top - height - 6;
+      setMenuPosition({
+        left: Math.min(rect.right - width, window.innerWidth - width - 8),
+        top: Math.max(8, top),
+      });
+    }
+    setOpenMenuId(messageId);
+  }
+
+  return (
+    <div className="relative z-10 mx-auto -mb-px max-h-[148px] w-[calc(100%-32px)] max-w-[736px] overflow-y-auto rounded-[18px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-2 py-1">
+      {messages.filter((message) => !message.pendingSteer).map((message) => {
+        const busy = operationId === message.id;
+        return (
+          <div
+            key={message.id}
+            data-queued-submission-id={message.id}
+            className="flex h-7 items-center gap-2 px-1.5 text-[13px] text-[var(--cp-text-soft)]"
+          >
+            <ListRestart className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.6} />
+            <span className="min-w-0 flex-1 truncate">{message.content}</span>
+            <button
+              type="button"
+              className="flex h-7 shrink-0 items-center gap-1 rounded-[var(--cp-radius-xs)] px-1.5 text-[12px] text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)]"
+              disabled={busy}
+              onClick={() => void onSteer(message.id)}
+            >
+              <CornerDownRight className="size-3" strokeWidth={1.6} />
+              <span>调整方向</span>
+            </button>
+            <IconTooltip label="删除排队消息">
+              <Button type="button" variant="ghost" size="icon" className="size-6 rounded-[var(--cp-radius-xs)] text-[var(--cp-text-faint)]" aria-label="删除排队消息" disabled={busy} onClick={() => void onDelete(message.id)}>
+                <Trash2 className="size-3.5" strokeWidth={1.6} />
+              </Button>
+            </IconTooltip>
+            <IconTooltip label="更多排队操作">
+              <Button
+                ref={(node) => {
+                  if (node) {
+                    menuButtonRefs.current.set(message.id, node);
+                  } else {
+                    menuButtonRefs.current.delete(message.id);
+                  }
+                }}
+                type="button"
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "size-6 rounded-[var(--cp-radius-xs)] text-[var(--cp-text-faint)] focus-visible:ring-1 focus-visible:ring-offset-0",
+                  openMenuId === message.id && "bg-[var(--cp-bg-muted)]",
+                )}
+                aria-label="更多排队操作"
+                aria-expanded={openMenuId === message.id}
+                aria-haspopup="menu"
+                disabled={busy}
+                onClick={() => toggleMenu(message.id)}
+              >
+                <Ellipsis className="size-3.5" />
+              </Button>
+            </IconTooltip>
+          </div>
+        );
+      })}
+      {openMenuId
+        ? createPortal(
+            <div
+              ref={menuRef}
+              role="menu"
+              aria-label="排队消息操作"
+              className="fixed z-[70] w-[156px] rounded-[10px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-1 shadow-[var(--cp-shadow-soft)]"
+              style={{ left: menuPosition.left, top: menuPosition.top }}
+            >
+              <button
+                type="button"
+                role="menuitem"
+                className="flex h-8 w-full items-center gap-2 rounded-[var(--cp-radius-xs)] px-2.5 text-left text-[13px] hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)]"
+                onClick={() => {
+                  const message = messages.find((item) => item.id === openMenuId);
+                  if (message) {
+                    setOpenMenuId(null);
+                    void onReturnToComposer(message);
+                  }
+                }}
+              >
+                <Pencil className="size-4" strokeWidth={1.8} />
+                编辑消息
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                className="flex h-8 w-full items-center gap-2 rounded-[var(--cp-radius-xs)] px-2.5 text-left text-[13px] hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)]"
+                onClick={() => {
+                  setOpenMenuId(null);
+                  void onClear();
+                }}
+              >
+                <ListX className="size-4" strokeWidth={1.8} />
+                关闭排队
+              </button>
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
 }
 
 function ProcessingStatus({
   running,
+  compacting,
   durationMs,
   startedAt,
 }: {
   running: boolean;
+  compacting: boolean;
   durationMs: number | null;
   startedAt: number | null;
 }) {
-  const [now, setNow] = useState(Date.now());
+  const [elapsedMs, setElapsedMs] = useState(() =>
+    startedAt ? Math.max(0, Date.now() - startedAt) : 0,
+  );
   useEffect(() => {
     if (!running) {
       return;
     }
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    const updateElapsed = () => {
+      const nextElapsed = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
+      setElapsedMs((currentElapsed) => Math.max(currentElapsed, nextElapsed));
+    };
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1_000);
     return () => window.clearInterval(timer);
-  }, [running]);
+  }, [running, startedAt]);
 
   if (!running && durationMs === null) {
     return null;
   }
-  const elapsed = durationMs ?? (startedAt ? now - startedAt : 0);
+  const elapsed = durationMs ?? elapsedMs;
   return (
-    <div className="min-h-5 text-sm text-[var(--cp-text-muted)]" aria-live="polite">
+    <div
+      data-conversation-minimap-anchor
+      data-minimap-id={`processing-${startedAt ?? "completed"}`}
+      data-minimap-kind="status"
+      data-minimap-preview={
+        running
+          ? `${compacting ? "正在整理上下文" : "正在处理"} ${formatDuration(elapsed)}`
+          : `已处理 ${formatDuration(elapsed)}`
+      }
+      className="min-h-5 text-sm text-[var(--cp-text-muted)]"
+      aria-live="polite"
+    >
       {running ? (
-        <span className="cp-thinking-shimmer">正在处理 {formatDuration(elapsed)}</span>
+        <span className="cp-running-shimmer">
+          {compacting ? "正在整理上下文" : "正在处理"} {formatDuration(elapsed)}
+        </span>
       ) : (
         `已处理 ${formatDuration(elapsed)}`
       )}
+    </div>
+  );
+}
+
+function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const previewTriggerRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!previewOpen) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closePreview();
+      }
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [previewOpen]);
+
+  function closePreview() {
+    setPreviewOpen(false);
+    window.requestAnimationFrame(() => previewTriggerRef.current?.focus());
+  }
+
+  return (
+    <div
+      data-conversation-minimap-anchor
+      data-minimap-id={`image-${image.id}`}
+      data-minimap-kind="image"
+      data-minimap-preview="AI 生成图片"
+      className="grid gap-3 sm:grid-cols-2"
+    >
+      <button
+        ref={previewTriggerRef}
+        type="button"
+        className="group block aspect-square w-full overflow-hidden rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] focus-visible:ring-offset-2"
+        aria-label="预览生成图片"
+        onClick={() => setPreviewOpen(true)}
+      >
+        {/* Generated provider images have dynamic dimensions and are served by an authenticated route. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={image.url}
+          alt="AI 生成内容"
+          className="block size-full object-cover transition-opacity duration-[var(--cp-duration-fast)] group-hover:opacity-95"
+        />
+      </button>
+      {previewOpen
+        ? createPortal(
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="图片预览"
+              className="fixed inset-0 z-[80] flex items-center justify-center bg-[rgba(0,0,0,0.82)] p-4 md:p-8"
+              onPointerDown={(event) => {
+                if (event.target === event.currentTarget) {
+                  closePreview();
+                }
+              }}
+            >
+              <button
+                type="button"
+                className="absolute right-4 top-4 flex size-10 items-center justify-center rounded-full bg-[rgba(24,24,24,0.82)] text-white transition-colors hover:bg-[rgba(40,40,40,0.92)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white md:right-6 md:top-6"
+                aria-label="关闭图片预览"
+                onClick={closePreview}
+                autoFocus
+              >
+                <X className="size-5" strokeWidth={1.8} />
+              </button>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={image.url}
+                alt="生成图片预览"
+                className="max-h-[calc(100dvh-64px)] max-w-[calc(100vw-32px)] object-contain md:max-h-[calc(100dvh-96px)] md:max-w-[calc(100vw-96px)]"
+              />
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }
@@ -1002,73 +1756,79 @@ function Sidebar({
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
 }) {
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [moreMenuPosition, setMoreMenuPosition] = useState({ left: 0, top: 0 });
+  const [openSidebarFlyout, setOpenSidebarFlyout] = useState<SidebarFlyoutId | null>(null);
+  const [sidebarFlyoutPosition, setSidebarFlyoutPosition] = useState({ left: 0, top: 0 });
+  const creativeButtonRef = useRef<HTMLButtonElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const sidebarFlyoutRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!moreOpen) {
+    if (!openSidebarFlyout) {
       return;
     }
 
-    function closeMoreMenu(event: PointerEvent) {
+    function activeButton() {
+      return openSidebarFlyout === "creative" ? creativeButtonRef.current : moreButtonRef.current;
+    }
+
+    function closeSidebarFlyout(event: PointerEvent) {
       const target = event.target as Node;
       if (
-        !moreButtonRef.current?.contains(target) &&
-        !moreMenuRef.current?.contains(target)
+        !activeButton()?.contains(target) &&
+        !sidebarFlyoutRef.current?.contains(target)
       ) {
-        setMoreOpen(false);
+        setOpenSidebarFlyout(null);
       }
     }
 
-    function closeMoreMenuOnEscape(event: KeyboardEvent) {
+    function closeSidebarFlyoutOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setMoreOpen(false);
+        setOpenSidebarFlyout(null);
       }
     }
 
-    function positionMoreMenu() {
-      const button = moreButtonRef.current;
+    function positionSidebarFlyout() {
+      const button = activeButton();
       if (!button) {
         return;
       }
       const rect = button.getBoundingClientRect();
       const menuWidth = 252;
-      const menuHeight = 104;
-      setMoreMenuPosition({
+      const menuHeight = (openSidebarFlyout === "creative" ? creativeNavItems.length : moreNavItems.length) * 40 + 16;
+      setSidebarFlyoutPosition({
         left: Math.min(rect.right + 10, window.innerWidth - menuWidth - 8),
         top: Math.min(rect.top, window.innerHeight - menuHeight - 8),
       });
     }
 
-    document.addEventListener("pointerdown", closeMoreMenu);
-    window.addEventListener("keydown", closeMoreMenuOnEscape);
-    window.addEventListener("resize", positionMoreMenu);
-    window.addEventListener("scroll", positionMoreMenu, true);
+    document.addEventListener("pointerdown", closeSidebarFlyout);
+    window.addEventListener("keydown", closeSidebarFlyoutOnEscape);
+    window.addEventListener("resize", positionSidebarFlyout);
+    window.addEventListener("scroll", positionSidebarFlyout, true);
     return () => {
-      document.removeEventListener("pointerdown", closeMoreMenu);
-      window.removeEventListener("keydown", closeMoreMenuOnEscape);
-      window.removeEventListener("resize", positionMoreMenu);
-      window.removeEventListener("scroll", positionMoreMenu, true);
+      document.removeEventListener("pointerdown", closeSidebarFlyout);
+      window.removeEventListener("keydown", closeSidebarFlyoutOnEscape);
+      window.removeEventListener("resize", positionSidebarFlyout);
+      window.removeEventListener("scroll", positionSidebarFlyout, true);
     };
-  }, [moreOpen]);
+  }, [openSidebarFlyout]);
 
-  function toggleMoreMenu() {
-    if (moreOpen) {
-      setMoreOpen(false);
+  function toggleSidebarFlyout(flyout: SidebarFlyoutId) {
+    if (openSidebarFlyout === flyout) {
+      setOpenSidebarFlyout(null);
       return;
     }
-    const rect = moreButtonRef.current?.getBoundingClientRect();
+    const button = flyout === "creative" ? creativeButtonRef.current : moreButtonRef.current;
+    const rect = button?.getBoundingClientRect();
     if (rect) {
       const menuWidth = 252;
-      const menuHeight = 104;
-      setMoreMenuPosition({
+      const menuHeight = (flyout === "creative" ? creativeNavItems.length : moreNavItems.length) * 40 + 16;
+      setSidebarFlyoutPosition({
         left: Math.min(rect.right + 10, window.innerWidth - menuWidth - 8),
         top: Math.min(rect.top, window.innerHeight - menuHeight - 8),
       });
     }
-    setMoreOpen(true);
+    setOpenSidebarFlyout(flyout);
   }
 
   return (
@@ -1090,22 +1850,32 @@ function Sidebar({
       </div>
 
       <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2">
-        {primaryNavItems.map((item) => (
-          <button
-            key={item.label}
-            type="button"
-            className={cn(
-              "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-              item.label === "新任务" && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-              navigationLocked && item.label === "新任务" && "cursor-not-allowed opacity-50",
-            )}
-            disabled={navigationLocked && item.label === "新任务"}
-            onClick={item.label === "新任务" ? onNewTask : undefined}
-          >
-            <item.icon className="size-[var(--cp-sidebar-icon-size)] shrink-0" strokeWidth={1.8} />
-            <span className="truncate">{item.label}</span>
-          </button>
-        ))}
+        {primaryNavItems.map((item) => {
+          const isNewTask = item.label === "新任务";
+          const isCreativeSpace = item.label === "创作空间";
+          const creativeOpen = isCreativeSpace && openSidebarFlyout === "creative";
+          return (
+            <button
+              key={item.label}
+              ref={isCreativeSpace ? creativeButtonRef : undefined}
+              type="button"
+              className={cn(
+                "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                isNewTask && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                creativeOpen && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                navigationLocked && isNewTask && "cursor-not-allowed opacity-50",
+              )}
+              disabled={navigationLocked && isNewTask}
+              aria-expanded={isCreativeSpace ? creativeOpen : undefined}
+              aria-haspopup={isCreativeSpace ? "menu" : undefined}
+              aria-controls={isCreativeSpace ? "sidebar-creative-navigation" : undefined}
+              onClick={isNewTask ? onNewTask : isCreativeSpace ? () => toggleSidebarFlyout("creative") : undefined}
+            >
+              <item.icon className="size-[var(--cp-sidebar-icon-size)] shrink-0" strokeWidth={1.8} />
+              <span className="truncate">{item.label}</span>
+            </button>
+          );
+        })}
 
         <div>
           <button
@@ -1113,44 +1883,45 @@ function Sidebar({
             type="button"
             className={cn(
               "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-              moreOpen && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+              openSidebarFlyout === "more" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
             )}
-            aria-expanded={moreOpen}
+            aria-expanded={openSidebarFlyout === "more"}
             aria-haspopup="menu"
             aria-controls="sidebar-more-navigation"
-            onClick={toggleMoreMenu}
+            onClick={() => toggleSidebarFlyout("more")}
           >
             <Ellipsis className="size-[var(--cp-sidebar-icon-size)] shrink-0" strokeWidth={1.8} />
             <span className="truncate">更多</span>
           </button>
 
-          {moreOpen
-            ? createPortal(
-                <div
-                  ref={moreMenuRef}
-                  id="sidebar-more-navigation"
-                  role="menu"
-                  aria-label="更多功能"
-                  className="fixed z-50 w-[252px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)]"
-                  style={{ left: moreMenuPosition.left, top: moreMenuPosition.top }}
-                >
-                  {moreNavItems.map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      role="menuitem"
-                      className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                      onClick={() => setMoreOpen(false)}
-                    >
-                      <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
-                      <span className="truncate">{item.label}</span>
-                    </button>
-                  ))}
-                </div>,
-                document.body,
-              )
-            : null}
         </div>
+
+        {openSidebarFlyout
+          ? createPortal(
+              <div
+                ref={sidebarFlyoutRef}
+                id={openSidebarFlyout === "creative" ? "sidebar-creative-navigation" : "sidebar-more-navigation"}
+                role="menu"
+                aria-label={openSidebarFlyout === "creative" ? "创作空间功能" : "更多功能"}
+                className="fixed z-50 w-[252px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)]"
+                style={{ left: sidebarFlyoutPosition.left, top: sidebarFlyoutPosition.top }}
+              >
+                {(openSidebarFlyout === "creative" ? creativeNavItems : moreNavItems).map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    role="menuitem"
+                    className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+                    onClick={() => setOpenSidebarFlyout(null)}
+                  >
+                    <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
+                    <span className="truncate">{item.label}</span>
+                  </button>
+                ))}
+              </div>,
+              document.body,
+            )
+          : null}
 
         {threads.length ? (
           <div className="mt-5 px-1">

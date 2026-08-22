@@ -60,13 +60,21 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
   const result = isRecord(payload.result) ? payload.result : null;
   const thread = result && isRecord(result.thread) ? result.thread : null;
   const turns = thread && Array.isArray(thread.turns) ? thread.turns.filter(isRecord) : [];
+  const generatedImages = Array.isArray(payload.generatedImages)
+    ? payload.generatedImages
+        .filter(isRecord)
+        .sort((left, right) => String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? "")))
+    : [];
   const messages: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
+  const images: Array<Record<string, unknown>> = [];
   let sequence = 0;
 
   for (const turn of turns) {
     const turnId = typeof turn.id === "string" ? turn.id : null;
+    const turnRunning = turn.status === "inProgress" || turn.status === "running";
     const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+    let userMessageIndex = 0;
     for (const item of items) {
       const id = typeof item.id === "string" ? item.id : `history-${++sequence}`;
       if (item.type === "userMessage") {
@@ -77,7 +85,18 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
           .join("\n")
           .trim();
         if (text) {
-          messages.push({ id, sequence: ++sequence, turnId, role: "user", content: text, status: "completed" });
+          const clientId = typeof item.clientId === "string" ? item.clientId : null;
+          messages.push({
+            id,
+            sequence: ++sequence,
+            turnId,
+            role: "user",
+            content: text,
+            clientId,
+            delivery: "committed",
+            variant: userMessageIndex++ === 0 ? "default" : "steer",
+            status: "completed",
+          });
         }
       } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
         messages.push({
@@ -90,11 +109,29 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
           status: "completed",
         });
       } else {
-        const activity = normalizeActivity(item, id, turnId, ++sequence);
+        const activity = normalizeActivity(item, id, turnId, ++sequence, turnRunning);
         if (activity) {
           activities.push(activity);
         }
       }
+    }
+    for (const artifact of generatedImages) {
+      const filename = typeof artifact.filename === "string" ? artifact.filename : "";
+      if (
+        artifact.threadId !== record?.threadId ||
+        artifact.turnId !== turnId ||
+        !/^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i.test(filename)
+      ) {
+        continue;
+      }
+      images.push({
+        id: filename,
+        sequence: ++sequence,
+        turnId,
+        url: `/api/provider/generated-images/${encodeURIComponent(filename)}`,
+        model: typeof artifact.model === "string" ? artifact.model : "gpt-image-2",
+        filename,
+      });
     }
   }
 
@@ -115,12 +152,23 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
     },
     messages,
     activities,
-    images: [],
+    images,
   };
 }
 
-function normalizeActivity(item: Record<string, unknown>, id: string, turnId: string | null, sequence: number) {
-  const status = item.status === "failed" ? "failed" : "completed";
+function normalizeActivity(
+  item: Record<string, unknown>,
+  id: string,
+  turnId: string | null,
+  sequence: number,
+  turnRunning: boolean,
+) {
+  const status =
+    item.status === "failed"
+      ? "failed"
+      : item.status === "inProgress" || (item.type === "contextCompaction" && turnRunning)
+        ? "running"
+        : "completed";
   const durationMs = typeof item.durationMs === "number" ? item.durationMs : null;
   if (item.type === "commandExecution") {
     return { id, sequence, turnId, kind: "command", label: status === "failed" ? "命令未完成" : "运行了命令", durationMs, status };
@@ -134,10 +182,25 @@ function normalizeActivity(item: Record<string, unknown>, id: string, turnId: st
     return { id, sequence, turnId, kind: namespace === "commerce_image" ? "image" : namespace === "commerce_web" ? "search" : "tool", label: namespace === "commerce_web" ? "完成了搜索" : "调用了工具", detail: namespace ? `${namespace}.${tool}` : tool, durationMs, status };
   }
   if (item.type === "mcpToolCall") {
-    return { id, sequence, turnId, kind: "tool", label: "调用了连接器", durationMs, status };
+    const server = typeof item.server === "string" ? item.server : "";
+    const tool = typeof item.tool === "string" ? item.tool : "";
+    const isWebSearch = server === "commerce_web" && tool === "search";
+    return {
+      id,
+      sequence,
+      turnId,
+      kind: isWebSearch ? "search" : "tool",
+      label: isWebSearch ? "完成了搜索" : "调用了连接器",
+      detail: isWebSearch ? "commerce_web.search" : tool,
+      durationMs,
+      status,
+    };
   }
   if (item.type === "webSearch") {
     return { id, sequence, turnId, kind: "search", label: "完成了搜索", durationMs, status };
+  }
+  if (item.type === "contextCompaction") {
+    return { id, sequence, turnId, kind: "compact", label: "已整理上下文", durationMs, status };
   }
   return null;
 }

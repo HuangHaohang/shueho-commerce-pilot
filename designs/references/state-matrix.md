@@ -40,7 +40,10 @@
 | `creating` | 正在创建 thread | composer loading，禁重复提交 |
 | `active` | thread 已创建 | 输出区显示消息和事件 |
 | `streaming` | Codex 正在执行 | 显示实时递增的“正在处理 X 秒”；当前 turn 正文按 sequence 更新，命令/文件/工具共用单一扫光活动槽并原位替换，submit 变 stop，模型与推理强度控件 disabled |
+| `queued_input` | 用户在 active turn 中提交后续消息 | 使用 Harness `thread/queue/add`，并由 `thread/queue/list` 驱动 composer 上方队列；支持真实 update/delete，禁止用本地“已插入”状态冒充 Harness 接受结果 |
+| `steering` | 用户对某条排队消息点击“调整方向” | 原子地把该 queue submission 移入独立 FIFO pending-steer 状态，以原输入、`clientUserMessageId` 和精确 `expectedTurnId` 调用 `turn/steer`，随后立即 `turn/interrupt` 旧方向；old turn 必须进入 interrupted，未确认 steer 作为下一 Harness turn 提交，不能继续完成旧答案 |
 | `background_streaming` | 用户切换到另一 thread，但原 thread 仍有 active turn | 后台 turn 继续执行，侧栏显示旋转图标；不再把事件渲染到当前正文，切回后恢复并订阅 |
+| `compacting` | Gateway 自动策略或受控接口调用 App Server `thread/compact/start` | 显示“正在整理上下文 X 秒”和原生 `contextCompaction` activity；禁用提交、模型切换和停止按钮；不得生成前端摘要或把 compact 伪装成普通回复 |
 | `waiting_approval` | 需要人工批准 | 展开 ApprovalPanel |
 | `waiting_input` | 需要用户补充信息 | composer 聚焦并显示请求来源 |
 | `interrupted` | 用户停止或系统中断 | 显示继续/重新运行 |
@@ -86,6 +89,7 @@
 | `disconnected` | retry exhausted | 提供手动重连 |
 | `event_gap` | cursor mismatch | 提示刷新 thread，不自动重复写操作 |
 | `runtime_restarted` | 活动 turn 之后的新健康采样显示 App Server 未运行/未初始化 | 立即冻结耗时、清除停止态、把活动 item 标为未完成，并提示重新发送；不得继续客户端计时 |
+| `compaction_failed` | `contextCompaction` turn 失败或超时 | 退出互斥状态，显示可重试错误；保留原 thread 与完整历史，不静默删除旧消息 |
 
 ## Approval Risk Levels
 

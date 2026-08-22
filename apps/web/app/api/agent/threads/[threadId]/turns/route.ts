@@ -43,7 +43,21 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     });
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok || !payload) {
+      if (response.status === 409 && payload?.code === "THREAD_STARTING") {
+        return NextResponse.json({ error: "当前任务正在启动，请稍后重试。" }, { status: 409 });
+      }
       return NextResponse.json(payload ?? { error: "Agent Gateway 返回了无效响应。" }, { status: response.status });
+    }
+    if (response.status === 202 && payload.queued === true) {
+      const activeTurnId = typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
+      const userId = await getAuthenticatedUserId(request);
+      if (userId && activeTurnId) {
+        await markAgentThreadRunning(threadId, userId, activeTurnId);
+      }
+      return NextResponse.json(payload, {
+        status: 202,
+        headers: { "Cache-Control": "no-store" },
+      });
     }
     const result = isRecord(payload.result) ? payload.result : null;
     const turn = result && isRecord(result.turn) ? result.turn : null;

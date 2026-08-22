@@ -33,6 +33,8 @@ docker run --rm \
   -e COMMERCE_PROVIDER_BASE_URL="https://cpa.luusmosh.com/v1" \
   -e COMMERCE_IMAGE_MODEL="gpt-image-2" \
   -e COMMERCE_GATEWAY_INTERNAL_TOKEN="a-random-secret-of-at-least-32-characters" \
+  -e COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT="75" \
+  -e COMMERCE_AGENT_COMPACTION_TIMEOUT_MS="180000" \
   -v commerce-pilot-codex:/var/lib/shueho-commerce-pilot/codex \
   shueho-commerce-pilot
 ```
@@ -67,7 +69,9 @@ Provider API keys should be injected as environment variables or secret manager 
 
 The generated Codex config disables shell, unified exec, raw local-path view-image, apps/connectors, unmanaged Hooks, plugins, automatic dependency installation, and inherited shell environment. Threads are fixed to read-only sandbox mode and cannot override `cwd` or permissions through HTTP.
 
-Provider-backed Web Search is exposed as the application-owned `commerce_web.search` App Server dynamic tool, and multi-agent collaboration is enabled. The search adapter calls the configured provider's `/v1/responses` Web Search capability; it does not grant process-level network access to the deployment host. Subagents inherit the same restricted runtime. Raw local-path image reading remains disabled until App Server is isolated with a tenant-only artifact mount; use an application-owned artifact id boundary instead.
+Provider-backed Web Search uses the application-owned `commerce_web.search` stdio MCP tool, and multi-agent collaboration is enabled. The generated MCP config exposes only that read-only tool, forwards provider configuration by environment-variable name, and runs the bundled MCP server artifact from the application image. The MCP process executes `/v1/responses` Web Search calls; it does not expose generic process or host-network tools to users. Gateway also keeps native `web_search = "live"` enabled, and the managed Hook allowlist includes both MCP and native search names. Subagents inherit the same restricted runtime. Raw local-path image reading remains disabled until App Server is isolated with a tenant-only artifact mount; use an application-owned artifact id boundary instead.
+
+Gateway monitors App Server `thread/tokenUsage/updated` events and invokes native `thread/compact/start` after completed turns cross the configured context threshold. Keep the percentage below the model's hard context limit and the timeout below infrastructure request limits. Compaction uses App Server's own `contextCompaction` item and managed `PreCompact`/`PostCompact` Hooks; deployment code must not replace it with an application-authored summary.
 
 Hooks run in managed-only mode from `$CODEX_HOME/managed-hooks/commerce-runtime-hook.mjs`. Mount the managed Hook directory read-only in hardened production deployments. Hook audit output belongs in the dedicated `$CODEX_HOME/hook-audit` volume and must not contain prompt bodies, tool inputs/results, provider secrets, or commerce PII.
 

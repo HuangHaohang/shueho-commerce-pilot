@@ -15,10 +15,12 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Discovers text and image models from the application-owned CPA provider.
 - Uses the Codex host-tool protocol to expose `gpt-image-2` image generation inside agent turns.
 - Disables shell, unified exec, arbitrary local-path file tools, process network access, connectors, unmanaged MCP, plugins, and unmanaged Hooks.
-- Exposes provider-backed Web Search as the App Server dynamic tool `commerce_web.search`, with real search lifecycle events and cited source URLs.
+- Exposes provider-backed Web Search through the application-owned `commerce_web.search` MCP server, with real Harness `mcpToolCall` lifecycle events and cited source URLs. This remains available when old threads are resumed because it is managed runtime configuration rather than a `thread/start` dynamic-tool snapshot.
 - Allows bounded multi-agent collaboration; subagents inherit the same restricted runtime policy.
 - Keeps the built-in local-path `view_image` tool disabled until images are tenant-scoped artifacts or App Server runs with a tenant-only artifact mount.
 - Enables an application-generated managed Hook runner for prompt, tool, compaction, stop, session, and subagent lifecycle policy/audit events; users cannot provide Hook commands.
+- Monitors App Server token-usage events and invokes native `thread/compact/start` at a configurable context threshold; no application-authored conversation summary loop is used.
+- Uses the App Server thread queue for running-turn submissions, including native add/list/update/delete operations. “调整方向” atomically moves one queue item into an application-owned durable FIFO pending-steer state, submits it through `turn/steer`, immediately interrupts the superseded turn, and resubmits the uncommitted steer as the next Harness turn.
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
 
@@ -104,6 +106,8 @@ Authenticated conversations are indexed by user in PostgreSQL while Codex App Se
 
 Users may run independent threads concurrently. Running history items show a spinner in the sidebar; switching conversations or starting a new task leaves background turns running, while each individual thread still permits only one active turn at a time.
 
+Long conversations use Codex-native context compaction. The Gateway defaults to calling `thread/compact/start` after a completed turn reaches 75% of the model-reported context window. Compact progress is streamed as a `contextCompaction` item, and the same thread cannot accept another turn until the compact turn completes. Configure the percentage and timeout with `COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT` and `COMMERCE_AGENT_COMPACTION_TIMEOUT_MS`.
+
 Health check:
 
 ```bash
@@ -168,7 +172,9 @@ The browser selects only the model. Provider identity and runtime policy remain 
 
 The gateway also exposes `gpt-image-2` as the Codex-hosted `commerce_image.generate` tool. Generated files are stored under the application-owned `$CODEX_HOME/generated_images`; provider keys remain server-side.
 
-Web Search is exposed as `commerce_web.search`. The Gateway calls the configured provider's OpenAI-compatible `/v1/responses` Web Search tool and returns its cited sources to the Codex turn. The dynamic-tool registry is applied to new and resumed threads, so a Gateway restart does not remove search from a saved conversation.
+Generated-image artifact metadata is stored separately under `$CODEX_HOME/generated_image_metadata` and binds each immutable filename to its originating thread and turn. For installations that created images before this metadata existed, run `npm run backfill:image-artifacts` once before serving restored history.
+
+Web Search is the application-owned `commerce_web.search` MCP tool. App Server launches the fixed stdio server from app-owned config, exposes only its read-only `search(query)` contract, and receives normal `mcpToolCall` events. The MCP server calls the configured provider's OpenAI-compatible `/v1/responses` Web Search capability and returns cited sources. Because MCP configuration is loaded by the runtime when a thread is resumed, conversations created before Web Search was added receive it without history migration. Native `web_search = "live"` remains enabled when the provider supports it, and the old dynamic-tool handler remains compatibility-only for threads that already persisted that definition.
 
 See [docs/config/custom-model-provider.md](./docs/config/custom-model-provider.md) for details.
 

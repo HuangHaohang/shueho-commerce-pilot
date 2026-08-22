@@ -149,33 +149,7 @@ button {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
 }
 
-.cp-thinking-shimmer {
-  display: inline-block;
-  color: transparent;
-  background: linear-gradient(
-    100deg,
-    var(--cp-text-faint) 20%,
-    var(--cp-text-soft) 42%,
-    #ffffff 50%,
-    var(--cp-text-soft) 58%,
-    var(--cp-text-faint) 80%
-  );
-  background-size: 260% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  animation: cp-thinking-sweep 1.65s ease-in-out infinite;
-}
-
-@keyframes cp-thinking-sweep {
-  0% {
-    background-position: 120% 0;
-  }
-  100% {
-    background-position: -120% 0;
-  }
-}
-
-.cp-activity-shimmer {
+.cp-running-shimmer {
   color: transparent;
   background: linear-gradient(
     105deg,
@@ -190,10 +164,10 @@ button {
   background-size: 220% 100%;
   background-clip: text;
   -webkit-background-clip: text;
-  animation: cp-activity-sweep 2.8s ease-in-out infinite;
+  animation: cp-running-sweep 2.8s ease-in-out infinite;
 }
 
-@keyframes cp-activity-sweep {
+@keyframes cp-running-sweep {
   0% {
     background-position: 140% 0;
   }
@@ -253,12 +227,7 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cp-thinking-shimmer {
-    color: var(--cp-text-faint);
-    background: none;
-  }
-
-  .cp-activity-shimmer {
+  .cp-running-shimmer {
     color: var(--cp-text-faint);
     background: none;
   }

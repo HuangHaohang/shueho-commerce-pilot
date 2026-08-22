@@ -14,10 +14,15 @@
   "scripts": {
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "check": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+    "test:gateway": "npm run build && node --test dist/src/gateway/*.test.js",
     "dev": "npm run build && node dist/src/gateway/server.js",
     "smoke:codex": "npm run build && node dist/scripts/smoke-codex-app-server.js",
     "smoke:provider": "npm run build && node dist/scripts/smoke-commerce-provider.js",
+    "smoke:web-search": "npm run build && node dist/scripts/smoke-commerce-web-mcp.js",
+    "smoke:steer": "npm run build && node dist/scripts/smoke-steer-fifo.js",
+    "smoke:steer-pivot": "npm run build && node dist/scripts/smoke-steer-pivot.js",
     "security:runtime": "npm run build && node dist/scripts/verify-runtime-security.js",
+    "backfill:image-artifacts": "npm run build && node dist/scripts/backfill-generated-image-metadata.js",
     "start": "node dist/src/gateway/server.js",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
@@ -28,8 +33,10 @@
     "web:test": "npm --workspace @shueho-commerce-pilot/web run test"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@openai/codex": "0.149.0",
-    "dotenv": "^17.2.2"
+    "dotenv": "^17.2.2",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

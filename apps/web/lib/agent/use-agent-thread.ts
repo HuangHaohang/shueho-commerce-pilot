@@ -2,12 +2,22 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  reconcilePendingInputState,
+  type QueuedMessage,
+} from "./pending-input-state";
+
+export type { QueuedMessage } from "./pending-input-state";
+
 export type ConversationMessage = {
   id: string;
   sequence: number;
   turnId?: string | null;
   role: "user" | "assistant";
   content: string;
+  variant?: "default" | "steer";
+  clientId?: string | null;
+  delivery?: "pending" | "committed";
   phase?: "commentary" | "final_answer" | null;
   status: "streaming" | "completed";
 };
@@ -16,7 +26,7 @@ export type AgentActivity = {
   id: string;
   sequence: number;
   turnId?: string | null;
-  kind: "command" | "file" | "tool" | "search" | "image";
+  kind: "command" | "file" | "tool" | "search" | "image" | "compact";
   label: string;
   detail?: string;
   durationMs?: number | null;
@@ -84,17 +94,73 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const [error, setError] = useState<string | null>(null);
   const [interrupting, setInterrupting] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [compacting, setCompacting] = useState(false);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [pendingSteers, setPendingSteers] = useState<QueuedMessage[]>([]);
+  const [queueSubmitting, setQueueSubmitting] = useState(false);
+  const [queueOperationId, setQueueOperationId] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const sequenceRef = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
   const startedAtRef = useRef<number | null>(null);
   const runtimeInstanceIdRef = useRef<string | null>(null);
+  const compactingRef = useRef(false);
+  const queueRefreshSuppressionRef = useRef(0);
+  const pendingSteerRequestsRef = useRef(new Map<string, QueuedMessage>());
+  const committedUserMessageClientIdsRef = useRef(new Set<string>());
+  const threadReconcileInFlightRef = useRef(false);
+
+  const refreshQueue = useCallback(async (id: string): Promise<void> => {
+    try {
+      const response = await fetch(`/api/agent/threads/${encodeURIComponent(id)}/queue`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        queue?: unknown;
+        pendingSteers?: unknown;
+      } | null;
+      if (!response.ok || !payload || !Array.isArray(payload.queue)) {
+        return;
+      }
+      const normalizeQueue = (items: unknown[]) =>
+        items
+          .filter(isRecord)
+          .map((item) => ({
+            id: typeof item.id === "string" ? item.id : "",
+            clientUserMessageId:
+              typeof item.clientUserMessageId === "string" ? item.clientUserMessageId : "",
+            content: typeof item.content === "string" ? item.content : "",
+            pendingSteer: item.pendingSteer === true,
+          }))
+          .filter((item) => item.id && item.clientUserMessageId && item.content);
+
+      const serverPendingSteers = normalizeQueue(
+        Array.isArray(payload.pendingSteers) ? payload.pendingSteers : [],
+      ).map((item) => ({ ...item, pendingSteer: true }));
+      const nextState = reconcilePendingInputState(
+        normalizeQueue(payload.queue),
+        serverPendingSteers,
+        pendingSteerRequestsRef.current.values(),
+        committedUserMessageClientIdsRef.current,
+      );
+      setPendingSteers(nextState.pendingSteers);
+      setQueuedMessages(nextState.queue);
+    } catch {
+      // Queue notifications are advisory; the active turn remains usable if a refresh fails.
+    }
+  }, []);
 
   const failActiveTurn = useCallback((message: string) => {
     const failedTurnId = activeTurnIdRef.current;
     activeTurnIdRef.current = null;
     runtimeInstanceIdRef.current = null;
+    compactingRef.current = false;
+    pendingSteerRequestsRef.current.clear();
+    queueRefreshSuppressionRef.current = 0;
+    threadReconcileInFlightRef.current = false;
+    setPendingSteers([]);
     setActiveTurnId(null);
+    setCompacting(false);
     setInterrupting(false);
     setDurationMs(startedAtRef.current ? Date.now() - startedAtRef.current : null);
     setStatus("failed");
@@ -118,17 +184,57 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     const method = typeof gatewayEvent.method === "string" ? gatewayEvent.method : "";
     const params = isRecord(gatewayEvent.params) ? gatewayEvent.params : {};
 
+    if (method === "thread/queue/changed") {
+      if (queueRefreshSuppressionRef.current > 0) {
+        return;
+      }
+      const changedThreadId = typeof params.threadId === "string" ? params.threadId : threadId;
+      if (changedThreadId) {
+        void refreshQueue(changedThreadId);
+      }
+      return;
+    }
+
+    if (method === "commerce/contextCompaction/started") {
+      const compactionStartedAt = Date.now();
+      compactingRef.current = true;
+      setCompacting(true);
+      startedAtRef.current = compactionStartedAt;
+      setStartedAt(compactionStartedAt);
+      setDurationMs(null);
+      setError(null);
+      setStatus("running");
+      return;
+    }
+
+    if (method === "commerce/contextCompaction/failed") {
+      compactingRef.current = false;
+      setCompacting(false);
+      activeTurnIdRef.current = null;
+      setActiveTurnId(null);
+      setDurationMs(startedAtRef.current ? Date.now() - startedAtRef.current : null);
+      setError(typeof params.message === "string" ? params.message : "上下文整理失败，请继续对话或稍后重试。");
+      setStatus("failed");
+      return;
+    }
+
     if (method === "turn/started") {
       const turn = isRecord(params.turn) ? params.turn : {};
       if (typeof turn.id === "string") {
         activeTurnIdRef.current = turn.id;
         setActiveTurnId(turn.id);
         setLastTurnId(turn.id);
-        setMessages((current) => bindLatestUserMessageToTurn(current, turn.id as string));
+        if (!compactingRef.current) {
+          setMessages((current) => bindLatestUserMessageToTurn(current, turn.id as string));
+        }
       }
-      startedAtRef.current = Date.now();
-      setStartedAt(startedAtRef.current);
+      if (startedAtRef.current === null) {
+        const eventStartedAt = Date.now();
+        startedAtRef.current = eventStartedAt;
+        setStartedAt(eventStartedAt);
+      }
       setDurationMs(null);
+      setError(null);
       setStatus("running");
       return;
     }
@@ -140,7 +246,31 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       }
       const completed = method === "item/completed";
       const turnId = typeof params.turnId === "string" ? params.turnId : activeTurnIdRef.current;
-      if (item.type === "agentMessage") {
+      if (item.type === "contextCompaction" && !completed) {
+        compactingRef.current = true;
+        setCompacting(true);
+      }
+      if (item.type === "userMessage") {
+        const content = readUserMessageText(item);
+        const clientId = typeof item.clientId === "string" ? item.clientId : null;
+        if (clientId) {
+          pendingSteerRequestsRef.current.delete(clientId);
+          committedUserMessageClientIdsRef.current.add(clientId);
+          setPendingSteers((current) =>
+            current.filter((pending) => pending.clientUserMessageId !== clientId),
+          );
+        }
+        if (content) {
+          upsertUserMessage(
+            setMessages,
+            item.id,
+            content,
+            turnId,
+            nextSequence(sequenceRef),
+            clientId,
+          );
+        }
+      } else if (item.type === "agentMessage") {
         upsertAssistantMessage(
           setMessages,
           item.id,
@@ -214,12 +344,24 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     if (method === "turn/completed") {
       const turn = isRecord(params.turn) ? params.turn : {};
       const turnStatus = typeof turn.status === "string" ? turn.status : "completed";
+      const completedTurnId = typeof turn.id === "string" ? turn.id : null;
+      if (
+        completedTurnId &&
+        activeTurnIdRef.current &&
+        activeTurnIdRef.current !== completedTurnId
+      ) {
+        return;
+      }
       if (typeof turn.id === "string") {
         setLastTurnId(turn.id);
       }
+      pendingSteerRequestsRef.current.clear();
       activeTurnIdRef.current = null;
       runtimeInstanceIdRef.current = null;
+      compactingRef.current = false;
       setActiveTurnId(null);
+      setCompacting(false);
+      setPendingSteers([]);
       setInterrupting(false);
       setDurationMs(
         typeof turn.durationMs === "number"
@@ -231,6 +373,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setStatus(turnStatus === "interrupted" ? "interrupted" : turnStatus === "failed" ? "failed" : "completed");
       if (turnStatus === "failed" && isRecord(turn.error) && typeof turn.error.message === "string") {
         setError(turn.error.message);
+      } else {
+        setError(null);
+      }
+      if (threadId) {
+        void refreshQueue(threadId);
       }
       return;
     }
@@ -241,7 +388,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setError(typeof itemError.message === "string" ? itemError.message : "Agent 执行失败。");
       setStatus("failed");
     }
-  }, []);
+  }, [refreshQueue, threadId]);
 
   const connectEventStream = useCallback(
     async (id: string) => {
@@ -269,6 +416,92 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     [handleGatewayEvent],
   );
 
+  useEffect(() => {
+    if (!threadId || (status !== "connecting" && status !== "running")) {
+      return;
+    }
+    let cancelled = false;
+
+    const reconcile = async () => {
+      if (threadReconcileInFlightRef.current) {
+        return;
+      }
+      threadReconcileInFlightRef.current = true;
+      try {
+        const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}`, {
+          cache: "no-store",
+        });
+        const payload = (await response.json().catch(() => null)) as StoredThreadResponse | null;
+        if (!response.ok || !payload || cancelled) {
+          return;
+        }
+
+        const authoritativeByClientId = new Map(
+          payload.messages
+            .filter((message) => message.role === "user" && typeof message.clientId === "string")
+            .map((message) => [message.clientId as string, message]),
+        );
+        if (authoritativeByClientId.size > 0) {
+          for (const clientId of authoritativeByClientId.keys()) {
+            pendingSteerRequestsRef.current.delete(clientId);
+            committedUserMessageClientIdsRef.current.add(clientId);
+          }
+          setPendingSteers((current) =>
+            current.filter((pending) => !authoritativeByClientId.has(pending.clientUserMessageId)),
+          );
+        }
+        sequenceRef.current = Math.max(
+          sequenceRef.current,
+          ...payload.messages.map((message) => message.sequence),
+        );
+        setMessages((current) => mergeAuthoritativeMessages(current, payload.messages));
+
+        if (payload.thread.status === "running") {
+          return;
+        }
+
+        eventSourceRef.current?.close();
+        eventSourceRef.current = null;
+        pendingSteerRequestsRef.current.clear();
+        activeTurnIdRef.current = null;
+        runtimeInstanceIdRef.current = null;
+        compactingRef.current = false;
+        sequenceRef.current = Math.max(
+          0,
+          ...payload.messages.map((message) => message.sequence),
+          ...payload.activities.map((activity) => activity.sequence),
+          ...payload.images.map((image) => image.sequence),
+        );
+        setMessages(payload.messages);
+        setActivities(payload.activities);
+        setImages(payload.images);
+        setActiveTurnId(null);
+        setLastTurnId(payload.thread.lastTurnId);
+        setDurationMs(payload.thread.durationMs);
+        setStartedAt(
+          payload.thread.startedAt ? new Date(payload.thread.startedAt).getTime() : startedAtRef.current,
+        );
+        setInterrupting(false);
+        setCompacting(false);
+        setPendingSteers([]);
+        setError(null);
+        setStatus(payload.thread.status);
+        void refreshQueue(threadId);
+      } catch {
+        // SSE remains the primary stream; the next watchdog tick retries reconciliation.
+      } finally {
+        threadReconcileInFlightRef.current = false;
+      }
+    };
+
+    void reconcile();
+    const interval = window.setInterval(() => void reconcile(), 3_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [refreshQueue, status, threadId]);
+
   const resetThread = useCallback(() => {
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
@@ -276,6 +509,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     activeTurnIdRef.current = null;
     startedAtRef.current = null;
     runtimeInstanceIdRef.current = null;
+    compactingRef.current = false;
+    pendingSteerRequestsRef.current.clear();
+    committedUserMessageClientIdsRef.current.clear();
     setThreadId(null);
     setThreadTitle(null);
     setMessages([]);
@@ -289,12 +525,21 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setError(null);
     setInterrupting(false);
     setLoadingHistory(false);
+    setCompacting(false);
+    setQueuedMessages([]);
+    setPendingSteers([]);
+    setQueueSubmitting(false);
+    setQueueOperationId(null);
   }, []);
 
   const loadThread = useCallback(
     async (summary: AgentThreadSummary): Promise<boolean> => {
       setLoadingHistory(true);
       setError(null);
+      pendingSteerRequestsRef.current.clear();
+      committedUserMessageClientIdsRef.current.clear();
+      queueRefreshSuppressionRef.current = 0;
+      threadReconcileInFlightRef.current = false;
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       try {
@@ -316,12 +561,23 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         sequenceRef.current = maxSequence;
         const restoredStartedAt = payload.thread.startedAt ? new Date(payload.thread.startedAt).getTime() : null;
         const restoredActiveTurnId = payload.thread.status === "running" ? payload.thread.lastTurnId : null;
+        const restoredCompacting =
+          payload.thread.status === "running" &&
+          payload.activities.some(
+            (activity) => activity.turnId === restoredActiveTurnId && activity.kind === "compact" && activity.status === "running",
+          );
         activeTurnIdRef.current = restoredActiveTurnId;
         startedAtRef.current = restoredStartedAt;
         runtimeInstanceIdRef.current = payload.thread.status === "running" ? runtimeHealth?.instanceId ?? null : null;
+        compactingRef.current = restoredCompacting;
         setThreadId(payload.thread.id);
         setThreadTitle(payload.thread.title || summary.title);
         setMessages(payload.messages);
+        for (const message of payload.messages) {
+          if (message.role === "user" && message.clientId) {
+            committedUserMessageClientIdsRef.current.add(message.clientId);
+          }
+        }
         setActivities(payload.activities);
         setImages(payload.images);
         setStatus(payload.thread.status);
@@ -330,6 +586,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setDurationMs(payload.thread.durationMs);
         setStartedAt(restoredStartedAt);
         setInterrupting(false);
+        setCompacting(restoredCompacting);
+        setQueuedMessages([]);
+        setPendingSteers([]);
+        await refreshQueue(payload.thread.id);
         if (payload.thread.status === "running") {
           await connectEventStream(payload.thread.id);
         }
@@ -341,7 +601,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setLoadingHistory(false);
       }
     },
-    [connectEventStream, resetThread, runtimeHealth?.instanceId],
+    [connectEventStream, refreshQueue, resetThread, runtimeHealth?.instanceId],
   );
 
   const submit = useCallback(
@@ -354,16 +614,18 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setError(null);
       setInterrupting(false);
       setDurationMs(null);
+      setQueuedMessages([]);
       startedAtRef.current = Date.now();
       setStartedAt(startedAtRef.current);
       activeTurnIdRef.current = null;
       runtimeInstanceIdRef.current = runtimeHealth?.instanceId ?? null;
       setActiveTurnId(null);
       setLastTurnId(null);
+      const optimisticMessageId = `user-${crypto.randomUUID()}`;
       setMessages((current) => [
         ...current,
         {
-          id: `user-${crypto.randomUUID()}`,
+          id: optimisticMessageId,
           sequence: nextSequence(sequenceRef),
           turnId: null,
           role: "user",
@@ -434,12 +696,23 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
               setLastTurnId(retryTurnId);
               setMessages((current) => bindLatestUserMessageToTurn(current, retryTurnId));
             }
-            startedAtRef.current = Date.now();
-            setStartedAt(startedAtRef.current);
             setStatus("running");
             return;
           }
           throw new Error(responseError);
+        }
+        if (response.status === 202 && payload?.queued === true) {
+          setMessages((current) => current.filter((item) => item.id !== optimisticMessageId));
+          const queuedActiveTurnId =
+            typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
+          if (!activeTurnIdRef.current && queuedActiveTurnId) {
+            activeTurnIdRef.current = queuedActiveTurnId;
+            setActiveTurnId(queuedActiveTurnId);
+            setLastTurnId(queuedActiveTurnId);
+          }
+          await refreshQueue(currentThreadId);
+          setStatus("running");
+          return;
         }
         const turnId = readTurnId(payload);
         if (turnId) {
@@ -448,16 +721,220 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setLastTurnId(turnId);
           setMessages((current) => bindLatestUserMessageToTurn(current, turnId));
         }
-        startedAtRef.current = Date.now();
-        setStartedAt(startedAtRef.current);
         setStatus("running");
       } catch (submitError) {
         setError(submitError instanceof Error ? submitError.message : "Agent 请求失败。");
         setStatus("failed");
       }
     },
-    [connectEventStream, effort, model, runtimeHealth?.instanceId, status, threadId],
+    [connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
   );
+
+  const enqueueMessage = useCallback(
+    async (text: string): Promise<boolean> => {
+      const message = text.trim();
+      const currentThreadId = threadId;
+      if (
+        !message ||
+        !currentThreadId ||
+        status !== "running" ||
+        compactingRef.current ||
+        interrupting ||
+        queueSubmitting
+      ) {
+        return false;
+      }
+      setError(null);
+      setQueueSubmitting(true);
+      try {
+        const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/queue`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok) {
+          throw new Error(readError(payload) || "无法将消息加入任务队列。");
+        }
+        await refreshQueue(currentThreadId);
+        return true;
+      } catch (queueError) {
+        setError(queueError instanceof Error ? queueError.message : "无法将消息加入任务队列。");
+        return false;
+      } finally {
+        setQueueSubmitting(false);
+      }
+    },
+    [interrupting, queueSubmitting, refreshQueue, status, threadId],
+  );
+
+  const updateQueuedMessage = useCallback(
+    async (queuedSubmissionId: string, text: string): Promise<boolean> => {
+      const message = text.trim();
+      if (!threadId || !queuedSubmissionId || !message || queueOperationId) {
+        return false;
+      }
+      setQueueOperationId(queuedSubmissionId);
+      setError(null);
+      try {
+        const response = await fetch(
+          `/api/agent/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(queuedSubmissionId)}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message }),
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok) {
+          throw new Error(readError(payload) || "无法编辑排队消息。");
+        }
+        await refreshQueue(threadId);
+        return true;
+      } catch (queueError) {
+        setError(queueError instanceof Error ? queueError.message : "无法编辑排队消息。");
+        return false;
+      } finally {
+        setQueueOperationId(null);
+      }
+    },
+    [queueOperationId, refreshQueue, threadId],
+  );
+
+  const deleteQueuedMessage = useCallback(
+    async (queuedSubmissionId: string): Promise<boolean> => {
+      if (!threadId || !queuedSubmissionId || queueOperationId) {
+        return false;
+      }
+      const queuedMessage = queuedMessages.find((item) => item.id === queuedSubmissionId);
+      if (!queuedMessage || queuedMessage.pendingSteer) {
+        return false;
+      }
+      setError(null);
+      setQueuedMessages((current) => current.filter((item) => item.id !== queuedSubmissionId));
+      queueRefreshSuppressionRef.current += 1;
+      try {
+        const response = await fetch(
+          `/api/agent/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(queuedSubmissionId)}`,
+          { method: "DELETE" },
+        );
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok) {
+          throw new Error(readError(payload) || "无法删除排队消息。");
+        }
+        return true;
+      } catch (queueError) {
+        await refreshQueue(threadId);
+        setError(queueError instanceof Error ? queueError.message : "无法删除排队消息。");
+        return false;
+      } finally {
+        queueRefreshSuppressionRef.current = Math.max(0, queueRefreshSuppressionRef.current - 1);
+      }
+    },
+    [queueOperationId, queuedMessages, refreshQueue, threadId],
+  );
+
+  const steerQueuedMessage = useCallback(
+    async (queuedSubmissionId: string): Promise<boolean> => {
+      if (!threadId || !activeTurnIdRef.current || !queuedSubmissionId || queueOperationId) {
+        return false;
+      }
+      const queuedMessage = queuedMessages.find((item) => item.id === queuedSubmissionId);
+      if (!queuedMessage) {
+        return false;
+      }
+      if (pendingSteerRequestsRef.current.has(queuedMessage.clientUserMessageId)) {
+        return false;
+      }
+      const expectedTurnId = activeTurnIdRef.current;
+      const pendingSteer = { ...queuedMessage, pendingSteer: true };
+      pendingSteerRequestsRef.current.set(queuedMessage.clientUserMessageId, pendingSteer);
+      setError(null);
+      setQueuedMessages((current) => current.filter((item) => item.id !== queuedSubmissionId));
+      setPendingSteers((current) =>
+        current.some((item) => item.clientUserMessageId === pendingSteer.clientUserMessageId)
+          ? current
+          : [...current, pendingSteer],
+      );
+      try {
+        const response = await fetch(
+          `/api/agent/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(queuedSubmissionId)}/steer`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              expectedTurnId,
+              clientUserMessageId: queuedMessage.clientUserMessageId,
+            }),
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok) {
+          throw new Error(readError(payload) || "无法调整当前任务方向。");
+        }
+        const transition = payload && isRecord(payload.result) ? payload.result : null;
+        const startedTurnId = transition && typeof transition.turnId === "string" ? transition.turnId : null;
+        if (
+          (transition?.mode === "startedAfterTurnEnded" ||
+            transition?.mode === "interruptedAndResubmitted") &&
+          startedTurnId
+        ) {
+          activeTurnIdRef.current = startedTurnId;
+          setActiveTurnId(startedTurnId);
+          setLastTurnId(startedTurnId);
+          if (startedAtRef.current === null) {
+            startedAtRef.current = Date.now();
+            setStartedAt(startedAtRef.current);
+          }
+          setStatus("running");
+        }
+        await refreshQueue(threadId);
+        return true;
+      } catch (queueError) {
+        pendingSteerRequestsRef.current.delete(queuedMessage.clientUserMessageId);
+        setPendingSteers((current) =>
+          current.filter((item) => item.clientUserMessageId !== queuedMessage.clientUserMessageId),
+        );
+        await refreshQueue(threadId);
+        setError(queueError instanceof Error ? queueError.message : "无法调整当前任务方向。");
+        return false;
+      }
+    },
+    [queueOperationId, queuedMessages, refreshQueue, threadId],
+  );
+
+  const clearQueuedMessages = useCallback(async (): Promise<void> => {
+    if (!threadId || queueOperationId || queuedMessages.length === 0) {
+      return;
+    }
+    const deletableMessages = queuedMessages.filter((item) => !item.pendingSteer);
+    if (deletableMessages.length === 0) {
+      return;
+    }
+    const deletableIds = new Set(deletableMessages.map((item) => item.id));
+    setError(null);
+    setQueuedMessages((current) => current.filter((item) => !deletableIds.has(item.id)));
+    queueRefreshSuppressionRef.current += 1;
+    try {
+      const responses = await Promise.all(
+        deletableMessages.map((item) =>
+          fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/queue/${encodeURIComponent(item.id)}`, {
+            method: "DELETE",
+          }),
+        ),
+      );
+      const failedResponse = responses.find((response) => !response.ok);
+      if (failedResponse) {
+        const payload = (await failedResponse.json().catch(() => null)) as Record<string, unknown> | null;
+        throw new Error(readError(payload) || "无法关闭任务队列。");
+      }
+    } catch (queueError) {
+      await refreshQueue(threadId);
+      setError(queueError instanceof Error ? queueError.message : "无法关闭任务队列。");
+    } finally {
+      queueRefreshSuppressionRef.current = Math.max(0, queueRefreshSuppressionRef.current - 1);
+    }
+  }, [queueOperationId, queuedMessages, refreshQueue, threadId]);
 
   const interrupt = useCallback(async () => {
     if (!threadId || !activeTurnId || interrupting) {
@@ -533,11 +1010,21 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     activeTurnId,
     interrupting,
     loadingHistory,
+    compacting,
+    queuedMessages,
+    pendingSteers,
+    queueSubmitting,
+    queueOperationId,
     currentTurnId: activeTurnId ?? lastTurnId,
     durationMs,
     startedAt,
     error,
     submit,
+    enqueueMessage,
+    updateQueuedMessage,
+    deleteQueuedMessage,
+    steerQueuedMessage,
+    clearQueuedMessages,
     interrupt,
     resetThread,
     loadThread,
@@ -560,6 +1047,114 @@ function upsertAssistantMessage(
     }
     return current.map((message) => (message.id === id ? { ...message, content, phase, status } : message));
   });
+}
+
+function upsertUserMessage(
+  setter: React.Dispatch<React.SetStateAction<ConversationMessage[]>>,
+  id: string,
+  content: string,
+  turnId: string | null,
+  sequence: number,
+  clientId: string | null = null,
+) {
+  setter((current) => {
+    const existing = current.find(
+      (message) => message.id === id || Boolean(clientId && message.clientId === clientId),
+    );
+    if (existing) {
+      return current.map((message) =>
+        message.id === existing.id
+          ? {
+              ...message,
+              id,
+              content,
+              turnId,
+              clientId: clientId ?? message.clientId,
+              delivery: "committed",
+              status: "completed",
+            }
+          : message,
+      );
+    }
+    const optimistic = clientId
+      ? undefined
+      : current.find(
+          (message) =>
+            message.role === "user" &&
+            !message.clientId &&
+            message.turnId === turnId &&
+            message.content === content,
+        );
+    if (optimistic) {
+      return current.map((message) =>
+        message.id === optimistic.id
+          ? {
+              ...message,
+              id,
+              clientId: clientId ?? message.clientId,
+              variant: message.variant ?? "default",
+              delivery: "committed",
+              status: "completed",
+            }
+          : message,
+      );
+    }
+    const variant = current.some(
+      (message) => message.role === "user" && Boolean(turnId) && message.turnId === turnId,
+    )
+      ? "steer"
+      : "default";
+    return [
+      ...current,
+      {
+        id,
+        sequence,
+        turnId,
+        role: "user",
+        content,
+        variant,
+        clientId,
+        delivery: "committed",
+        status: "completed",
+      },
+    ];
+  });
+}
+
+function mergeAuthoritativeMessages(
+  current: ConversationMessage[],
+  authoritative: ConversationMessage[],
+): ConversationMessage[] {
+  let next = current;
+  for (const message of authoritative) {
+    const existing = next.find(
+      (candidate) =>
+        candidate.id === message.id ||
+        Boolean(message.clientId && candidate.clientId === message.clientId),
+    );
+    if (!existing) {
+      next = [...next, message];
+      continue;
+    }
+    next = next.map((candidate) =>
+      candidate.id === existing.id
+        ? candidate.role === "assistant" &&
+          message.role === "assistant" &&
+          candidate.status === "streaming"
+          ? {
+              ...candidate,
+              ...message,
+              content:
+                candidate.content.length > message.content.length
+                  ? candidate.content
+                  : message.content,
+              status: "streaming",
+            }
+          : { ...candidate, ...message }
+        : candidate,
+    );
+  }
+  return next;
 }
 
 function upsertActivity(
@@ -632,7 +1227,25 @@ function activityFromItem(
     };
   }
   if (item.type === "mcpToolCall") {
-    return { id: item.id as string, sequence, turnId, kind: "tool", label: completed ? "连接器调用完成" : "正在调用连接器", detail: String(item.tool ?? ""), durationMs: typeof item.durationMs === "number" ? item.durationMs : null, status };
+    const server = typeof item.server === "string" ? item.server : "";
+    const tool = typeof item.tool === "string" ? item.tool : "";
+    const isWebSearch = server === "commerce_web" && tool === "search";
+    return {
+      id: item.id as string,
+      sequence,
+      turnId,
+      kind: isWebSearch ? "search" : "tool",
+      label: isWebSearch
+        ? completed
+          ? "搜索完成"
+          : "正在搜索网页"
+        : completed
+          ? "连接器调用完成"
+          : "正在调用连接器",
+      detail: isWebSearch ? "commerce_web.search" : tool,
+      durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+      status,
+    };
   }
   if (item.type === "fileChange") {
     const changes = Array.isArray(item.changes) ? item.changes.filter(isRecord) : [];
@@ -650,6 +1263,17 @@ function activityFromItem(
   }
   if (item.type === "reasoning") {
     return null;
+  }
+  if (item.type === "contextCompaction") {
+    return {
+      id: item.id as string,
+      sequence,
+      turnId,
+      kind: "compact",
+      label: completed ? "上下文整理完成" : "正在整理上下文",
+      durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+      status,
+    };
   }
   if (item.type === "webSearch") {
     return { id: item.id as string, sequence, turnId, kind: "search", label: completed ? "搜索完成" : "正在搜索", detail: String(item.query ?? ""), durationMs: typeof item.durationMs === "number" ? item.durationMs : null, status };
@@ -708,6 +1332,9 @@ function failedActivityLabel(kind: AgentActivity["kind"]): string {
   if (kind === "search") {
     return "搜索未完成";
   }
+  if (kind === "compact") {
+    return "上下文整理未完成";
+  }
   return "工具调用未完成";
 }
 
@@ -724,4 +1351,13 @@ function bindLatestUserMessageToTurn(messages: ConversationMessage[], turnId: st
   return messages.map((message, messageIndex) =>
     messageIndex === index ? { ...message, turnId } : message,
   );
+}
+
+function readUserMessageText(item: Record<string, unknown>): string {
+  const content = Array.isArray(item.content) ? item.content.filter(isRecord) : [];
+  return content
+    .filter((entry) => entry.type === "text" && typeof entry.text === "string")
+    .map((entry) => entry.text as string)
+    .join("\n")
+    .trim();
 }

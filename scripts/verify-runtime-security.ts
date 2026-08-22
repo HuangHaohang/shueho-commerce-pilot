@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { ensureAppOwnedCodexConfig } from "../src/codex/runtime-config.js";
+import { readThreadContextUsage, shouldAutoCompact } from "../src/gateway/compaction-policy.js";
 import { readGatewayConfig } from "../src/gateway/config.js";
 
 const config = readGatewayConfig();
@@ -30,6 +31,9 @@ const requiredLines = [
   "skill_mcp_dependency_install = false",
   "view_image = false",
   "web_search = true",
+  "[mcp_servers.commerce_web]",
+  'enabled_tools = ["search"]',
+  'default_tools_approval_mode = "auto"',
   'inherit = "none"',
 ];
 
@@ -67,9 +71,26 @@ for (const eventName of [
 if (!managedHookSource.includes("Commerce Pilot runtime allowlist")) {
   throw new Error("Managed Hook runner does not contain the Commerce Pilot allowlist policy.");
 }
+if (!managedHookSource.includes('"web_search"')) {
+  throw new Error("Managed Hook runner does not allow the native Codex Web Search tool.");
+}
 
 if (generatedConfig.includes('sandbox_mode = "workspace-write"') || generatedConfig.includes('sandbox_mode = "danger-full-access"')) {
   throw new Error("Generated Codex config enables a write-capable sandbox.");
+}
+if (config.autoCompactThresholdPercent < 1 || config.autoCompactThresholdPercent > 95) {
+  throw new Error("Automatic compaction threshold is outside the supported range.");
+}
+const thresholdUsage = readThreadContextUsage({
+  threadId: "thread_12345",
+  turnId: "turn_12345",
+  tokenUsage: {
+    last: { inputTokens: 75_000 },
+    modelContextWindow: 100_000,
+  },
+});
+if (!thresholdUsage || !shouldAutoCompact(thresholdUsage, 75) || shouldAutoCompact({ ...thresholdUsage, utilization: 0.749 }, 75)) {
+  throw new Error("Automatic compaction threshold policy failed its boundary check.");
 }
 
 console.log(
@@ -82,10 +103,15 @@ console.log(
       hostFilesystem: false,
       arbitraryProcessNetwork: false,
       hostedWebSearch: true,
+      managedMcpWebSearch: true,
+      nativeProviderWebSearch: true,
       multiAgent: true,
       localPathImageReader: false,
       managedHooks: true,
       managedHookEvents: 11,
+      nativeContextCompaction: true,
+      autoCompactThresholdPercent: config.autoCompactThresholdPercent,
+      compactionTimeoutMs: config.compactionTimeoutMs,
       developmentHookTrust: "app-owned-bypass",
       productionHookTrust: "requirements-managed-only",
       checkedControls: requiredLines.length,
