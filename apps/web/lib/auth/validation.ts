@@ -18,6 +18,7 @@ export const loginBodySchema = z.object({
 
 export const registerBodySchema = loginBodySchema.extend({
   name: z.string().trim().min(1, "请输入名称。").max(50, "名称不能超过 50 个字符。"),
+  invitationToken: z.string().min(32).max(512).optional(),
 });
 
 export function firstValidationError(error: z.ZodError): string {

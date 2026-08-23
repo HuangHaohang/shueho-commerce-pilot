@@ -22,8 +22,15 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Enables an application-generated managed Hook runner for prompt, tool, compaction, stop, session, and subagent lifecycle policy/audit events; users cannot provide Hook commands.
 - Monitors App Server token-usage events and invokes native `thread/compact/start` at a configurable context threshold; no application-authored conversation summary loop is used.
 - Uses the App Server thread queue for running-turn submissions, including native add/list/update/delete operations. “调整方向” atomically moves one queue item into an application-owned durable FIFO pending-steer state, submits it through `turn/steer`, immediately interrupts the superseded turn, and resubmits the uncommitted steer as the next Harness turn.
+- Implements an Enterprise-only organization, one-to-one isolation tenant, and workspace foundation with invitation-only registration, members, workspace lifecycle, invitation revocation, tenant audit reads, direct/group roles, explicit-deny precedence, contracts, seats, quotas, and tenant-scoped thread ownership.
+- Pins each production Gateway/App Server/`CODEX_HOME` to one Enterprise tenant; tenant, workspace, and user scope are resolved by the authenticated BFF and cannot be selected by the browser.
+- Records exact Codex 0.149 Harness usage plus source-attributed MCP/Web Search/image usage, including explicit missing-usage status, through a durable outbox/dead-letter pipeline and idempotent PostgreSQL ledger.
+- Reserves direct, queue-steer, and context-compaction root-job leases under tenant-wide concurrency and projected token/request budgets; Codex multi-agent fan-out is separately capped at four threads per session by default.
+- Actively polls Enterprise authorization for running roots, reauthorizes host-tool calls, and interrupts active work plus clears queued input when access is revoked or the authorizer fails.
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
+
+Commerce Pilot is currently an Enterprise-only B2B product. One customer company is represented by a commercial organization record and a one-to-one security/runtime tenant; workspaces below the tenant separate teams, brands, stores, or business units. The public Enterprise page routes prospects to Sales rather than offering Free, Plus, or Pro self-service plans. See [docs/architecture/enterprise-tenancy.md](./docs/architecture/enterprise-tenancy.md) for the implemented boundaries and production-readiness limitations.
 
 ## Requirements
 
@@ -68,14 +75,30 @@ http://127.0.0.1:8787
 
 The browser frontend lives in `apps/web` and follows the design system in [designs/DESIGN.md](./designs/DESIGN.md). Authentication uses PostgreSQL-backed Better Auth sessions.
 
-Start the local authentication database and apply the idempotent schema migration:
+Configure the runtime credential from `apps/web/.env.example` and the job-only owner credential from `apps/web/.env.migration.example`, start PostgreSQL, apply migrations `001-011`, and verify forced RLS:
 
 ```bash
 npm run db:up
 npm run auth:migrate
+npm run enterprise:verify-isolation
 ```
 
-Copy the authentication values from `apps/web/.env.example` into an ignored `apps/web/.env` for local development. Production must provide its own `DATABASE_URL`, `BETTER_AUTH_URL`, a random `BETTER_AUTH_SECRET` of at least 32 characters, and trusted browser origins.
+`DATABASE_URL` is the non-superuser, non-`BYPASSRLS` web role. `MIGRATION_DATABASE_URL` lives only in `.env.migration` or a migration/provisioning job secret; it must not exist in the long-running Web environment. Production fails closed when these boundaries are not satisfied.
+
+An authenticated account does not automatically receive Enterprise access. After creating the intended local owner account, provision its organization, one-to-one tenant, and default workspace:
+
+```bash
+npm run enterprise:bootstrap -- \
+  --owner-email=owner@example.com \
+  --tenant-name="Example Company" \
+  --tenant-slug=example-company
+```
+
+The command also creates the Enterprise contract, seeded roles, owner assignments, and a tenant-dedicated runtime record. It is an operator command and mutates existing records when re-run for the same slug.
+
+For local first-owner setup only, set `COMMERCE_ALLOW_PUBLIC_REGISTRATION=true`, create the account, then return it to `false`. Production ignores this override and the initial owner must come from a controlled operator/identity provisioning flow.
+
+Copy `apps/web/.env.example` to an ignored `apps/web/.env` and `apps/web/.env.migration.example` to an ignored `apps/web/.env.migration` for local development. Production must provide a least-privilege `DATABASE_URL`, keep the migration credential exclusively in one-shot jobs, and configure `BETTER_AUTH_URL`, a random `BETTER_AUTH_SECRET` of at least 32 characters, exact trusted browser origins, and invitation-only registration.
 
 ```bash
 npm run web:dev
@@ -101,13 +124,13 @@ npm run web:test
 npm run web:build
 ```
 
-Current authentication supports email or phone number plus password. Email and SMS verification delivery interfaces exist but resolve to disabled providers until real delivery services are configured; the application does not log or return verification codes as a fallback. See [docs/architecture/authentication.md](./docs/architecture/authentication.md).
+Production registration is Enterprise invitation-only and requires the exact invited work email. Invite bearer tokens use `/invite#token=...`; the browser moves the fragment into memory and immediately removes it from the address bar. `COMMERCE_ALLOW_PUBLIC_REGISTRATION=true` works only outside production for bootstrap/E2E. Email/SMS delivery interfaces remain disabled until explicitly configured, and the application never logs verification codes. See [docs/architecture/authentication.md](./docs/architecture/authentication.md).
 
-Authenticated conversations are indexed by user in PostgreSQL while Codex App Server remains the source of truth for turns and messages. Refresh restores the most recent thread, the sidebar opens older owned threads, and Gateway resumes persisted threads before a post-restart follow-up.
+Authenticated conversations are indexed by tenant, workspace, and creator in PostgreSQL while Codex App Server remains the source of truth for turns and messages. Refresh restores the most recent owned thread, the sidebar opens older owned threads, and Gateway resumes persisted threads before a post-restart follow-up.
 
 Users may run independent threads concurrently. Running history items show a spinner in the sidebar; switching conversations or starting a new task leaves background turns running, while each individual thread still permits only one active turn at a time.
 
-Long conversations use Codex-native context compaction. The Gateway defaults to calling `thread/compact/start` after a completed turn reaches 75% of the model-reported context window. Compact progress is streamed as a `contextCompaction` item, and the same thread cannot accept another turn until the compact turn completes. Configure the percentage and timeout with `COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT` and `COMMERCE_AGENT_COMPACTION_TIMEOUT_MS`.
+Long conversations use Codex-native context compaction. Manual, automatic-threshold, and Harness-initiated compaction all pass Enterprise authorization/quota admission; denial fails or interrupts the compact turn. Compact progress is streamed as a `contextCompaction` item, and the same thread cannot accept another turn until it completes. Configure the threshold/timeout with `COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT` and `COMMERCE_AGENT_COMPACTION_TIMEOUT_MS`; configure Gateway callbacks with `COMMERCE_AGENT_ADMISSION_URL` and `COMMERCE_AGENT_AUTHORIZATION_URL`.
 
 Health check:
 
@@ -115,10 +138,15 @@ Health check:
 curl http://127.0.0.1:8787/health
 ```
 
-Open the event stream:
+Production readiness must also inspect `managedMcp`, `runtimePolicy.enterpriseRuntime.authorizationError`, pending events, dead letters, and event-sink timestamps/errors; HTTP `200` alone does not prove the Enterprise control paths are healthy.
+
+Open a scoped event stream in loopback-only development:
 
 ```bash
-curl -N http://127.0.0.1:8787/api/codex/events
+curl -N 'http://127.0.0.1:8787/api/codex/events?threadId=THREAD_ID' \
+  -H 'X-Commerce-Tenant-Id: TENANT_UUID' \
+  -H 'X-Commerce-Workspace-Id: WORKSPACE_UUID' \
+  -H 'X-Commerce-User-Id: USER_ID'
 ```
 
 Start a thread:
@@ -126,6 +154,9 @@ Start a thread:
 ```bash
 curl -X POST http://127.0.0.1:8787/api/threads \
   -H 'Content-Type: application/json' \
+  -H 'X-Commerce-Tenant-Id: TENANT_UUID' \
+  -H 'X-Commerce-Workspace-Id: WORKSPACE_UUID' \
+  -H 'X-Commerce-User-Id: USER_ID' \
   -d '{"model": "MODEL_ID"}'
 ```
 
@@ -134,10 +165,13 @@ Start a turn:
 ```bash
 curl -X POST http://127.0.0.1:8787/api/threads/THREAD_ID/turns \
   -H 'Content-Type: application/json' \
+  -H 'X-Commerce-Tenant-Id: TENANT_UUID' \
+  -H 'X-Commerce-Workspace-Id: WORKSPACE_UUID' \
+  -H 'X-Commerce-User-Id: USER_ID' \
   -d '{"message": "分析这个店铺的库存预警策略"}'
 ```
 
-These direct Gateway examples are for loopback-only local development. Production callers must use the Next.js BFF with `COMMERCE_GATEWAY_INTERNAL_TOKEN`; do not expose port `8787` to browsers or the public internet.
+These direct Gateway examples are for loopback-only local development when the internal token is deliberately unset. They demonstrate protocol shape, not an authorization path. Production callers must use the Next.js BFF, which derives scope from session/membership and adds `COMMERCE_GATEWAY_INTERNAL_TOKEN`; do not expose port `8787` or accept browser-supplied scope headers.
 
 ## Custom Model Providers
 
@@ -171,7 +205,7 @@ The browser selects only the model. Provider identity and runtime policy remain 
 }
 ```
 
-The gateway also exposes `gpt-image-2` as the Codex-hosted `commerce_image.generate` tool. Generated files are stored under the application-owned `$CODEX_HOME/generated_images`; provider keys remain server-side.
+The gateway exposes `gpt-image-2` only as the Codex-hosted `commerce_image.generate` tool; no direct image-generation HTTP route exists. Authenticated artifact reads still verify thread ownership. Generated files are stored under the tenant-owned `$CODEX_HOME/generated_images`, provider keys remain server-side, and image-provider usage is recorded separately.
 
 Generated-image artifact metadata is stored separately under `$CODEX_HOME/generated_image_metadata` and binds each immutable filename to its originating thread and turn. For installations that created images before this metadata existed, run `npm run backfill:image-artifacts` once before serving restored history.
 
@@ -183,4 +217,4 @@ See [docs/config/custom-model-provider.md](./docs/config/custom-model-provider.m
 
 ## Deployment Runtime
 
-Deployment machines do not need to preinstall Codex. The app declares `@openai/codex` as a production dependency and resolves Codex App Server from the application dependency tree. See [docs/deployment/runtime.md](./docs/deployment/runtime.md).
+Deployment machines do not need to preinstall Codex. The app declares `@openai/codex` as a production dependency and resolves Codex App Server from the application dependency tree. Production requires `COMMERCE_RUNTIME_TENANT_ID`, tenant-dedicated `CODEX_HOME`, private event/authorization/admission callbacks, a least-privilege runtime database role, and a non-root container or equivalent isolation boundary. See [docs/deployment/runtime.md](./docs/deployment/runtime.md).

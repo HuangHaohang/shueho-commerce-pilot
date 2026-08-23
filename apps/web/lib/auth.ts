@@ -1,7 +1,7 @@
 import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { phoneNumber } from "better-auth/plugins";
 
-import { getAuthDatabase } from "@/lib/auth/database";
+import { assertApplicationDatabaseRoleSecurity, getAuthDatabase } from "@/lib/auth/database";
 import { isValidPhoneNumber } from "@/lib/auth/identity";
 import { smsVerificationSender } from "@/lib/auth/delivery";
 
@@ -9,6 +9,8 @@ const secret = process.env.BETTER_AUTH_SECRET;
 if (!secret || secret.length < 32) {
   throw new Error("BETTER_AUTH_SECRET must contain at least 32 characters.");
 }
+
+await assertApplicationDatabaseRoleSecurity();
 
 export const authOptions = {
   appName: "Commerce Pilot",

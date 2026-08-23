@@ -10,13 +10,13 @@ For local development, provider definitions can live in:
 - `$CODEX_HOME/config.toml`
 - `~/.codex/<profile-name>.config.toml`
 
-For deployment, do not rely on a human developer's `~/.codex` directory. Set `CODEX_HOME` to an app-owned directory and provide:
+For deployment, do not rely on a human developer's `~/.codex` directory. Set `CODEX_HOME` to an app-owned, tenant-dedicated directory and provide:
 
 ```text
 $CODEX_HOME/config.toml
 ```
 
-from a mounted config file, secret, init step, or container image layer.
+from a mounted config file, secret, init step, or container image layer. A production Gateway is pinned by `COMMERCE_RUNTIME_TENANT_ID`; never reuse its `CODEX_HOME`, provider secret, generated artifacts, or event outbox for another customer tenant.
 
 Do not put provider secrets in project `.codex/config.toml`. Treat provider definitions, keys, and routing as deployment configuration owned by the web service.
 
@@ -50,7 +50,7 @@ stream_max_retries = 5
 stream_idle_timeout_ms = 300000
 ```
 
-Then provide the secret to the service process:
+Then provide the secret to that tenant's service process:
 
 ```bash
 export COMMERCE_PROVIDER_API_KEY="..."
@@ -59,6 +59,8 @@ npm run dev
 ```
 
 The gateway renders this definition into the application-owned `$CODEX_HOME/config.toml` at startup. The rendered TOML contains only the environment variable name, never the secret value.
+
+Where supported, provision and rotate a separate provider credential per Enterprise tenant so upstream revocation, spend controls, and incident containment follow the Commerce Pilot tenant boundary. If the upstream account must be shared, it remains an infrastructure credential and does not weaken the requirement for a tenant-dedicated App Server, `CODEX_HOME`, artifacts, outbox, BFF authorization, or usage ledger.
 
 ## Wire Protocol
 
@@ -102,6 +104,8 @@ Codex still owns image intent detection, skill instructions, prompt augmentation
 
 The image model is fixed by `COMMERCE_IMAGE_MODEL=gpt-image-2`. Other image models returned from `/models` are not silently selected.
 
+The browser cannot bypass the Agent boundary because no direct BFF or Gateway image-generation route is exposed. Only `commerce_image.generate` inside an admitted Agent turn can call the provider, after Gateway reauthorizes the root scope. The provider response creates a `commerce_image_tool` usage row; absent usage is recorded as `missing`, not treated as free. Authenticated artifact reads remain available through the filename-constrained BFF route after thread ownership verification.
+
 ## Web Search
 
 Commerce Pilot exposes provider-backed Web Search as the managed `commerce_web.search` MCP tool. The MCP server calls the same configured provider and returns grounded content plus source URLs:
@@ -118,15 +122,20 @@ The MCP capability comes from app-owned config rather than `dynamicTools`, becau
 
 Gateway calls `config/mcpServer/reload` and validates `mcpServerStatus/list` before accepting turns. Web Search uses one bounded transient retry: the first attempt is capped at 45 seconds, and later attempts use `COMMERCE_WEB_SEARCH_TIMEOUT_MS` (default 90 seconds). Set `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS` from 1 to 3; the default is 2. Generated `tool_timeout_sec` is derived from the total provider attempt budget plus a 15-second protocol margin.
 
+The managed MCP returns provider response id, model, and usage in application-owned `_meta.commercePilotUsage`; Gateway records it as `commerce_web_mcp`. The legacy host compatibility path records `commerce_web_tool`. If the provider omits usage, the immutable request row is retained with `usage_status=missing` and zero placeholder counts so operations can alert and reconcile it later.
+
 Start a thread with that provider:
 
 ```bash
 curl -X POST http://127.0.0.1:8787/api/threads \
   -H 'Content-Type: application/json' \
+  -H 'X-Commerce-Tenant-Id: TENANT_UUID' \
+  -H 'X-Commerce-Workspace-Id: WORKSPACE_UUID' \
+  -H 'X-Commerce-User-Id: USER_ID' \
   -d '{"model": "gpt-5.6-sol"}'
 ```
 
-The gateway passes `modelProvider` to `thread/start`; the Codex App Server process resolves the provider definition from its effective Codex config.
+This is loopback-only protocol diagnostics with the internal token deliberately unset. Production uses the authenticated BFF and never trusts browser-supplied scope headers. The gateway passes `modelProvider` to `thread/start`; the Codex App Server process resolves the provider definition from its effective Codex config.
 
 ## Built-In Provider IDs
 
@@ -149,3 +158,6 @@ Use a project-specific provider id such as `commerce_proxy`, `azure_commerce`, o
 - Keep write-capable commerce tools behind explicit approval and readback.
 - Provider identity, `cwd`, sandbox, permissions, instructions, raw input items, and tool definitions are server-owned and cannot be overridden by browser requests.
 - The model can call only tools in the Commerce Pilot registry; it cannot use shell or deployment-host files as a fallback.
+- Harness usage is recorded from Codex 0.149 `rawResponse/completed`; managed MCP, legacy host Web Search, and host image calls have separate source-attributed rows. Cached input and cache-write input remain subsets of input, and reasoning output remains a subset of output; do not add those classifications twice or infer currency cost without an effective provider/contract rate card and provider reconciliation.
+
+See [Enterprise Tenancy Foundation](../architecture/enterprise-tenancy.md) for the exact usage fields, idempotency rule, contract quotas, and tenant-dedicated runtime boundary.

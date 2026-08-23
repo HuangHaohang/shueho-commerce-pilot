@@ -4,7 +4,7 @@ import {
   AGENT_ID_PATTERN,
   gatewayHeaders,
   gatewayUrl,
-  requireAgentThreadOwner,
+  requireAgentThreadContext,
 } from "@/lib/agent/http";
 
 export async function PATCH(
@@ -30,10 +30,8 @@ async function proxyQueueItemRequest(
   if (!AGENT_ID_PATTERN.test(threadId) || !AGENT_ID_PATTERN.test(queuedSubmissionId)) {
     return NextResponse.json({ error: "会话或排队消息标识无效。" }, { status: 400 });
   }
-  const unauthorized = await requireAgentThreadOwner(request, threadId);
-  if (unauthorized) {
-    return unauthorized;
-  }
+  const access = await requireAgentThreadContext(request, threadId, "queue.manage");
+  if (!access.ok) return access.response;
   let body: string | undefined;
   if (method === "PATCH") {
     const payload = (await request.json().catch(() => null)) as { message?: unknown } | null;
@@ -50,7 +48,7 @@ async function proxyQueueItemRequest(
       ),
       {
         method,
-        headers: gatewayHeaders(body ? { "Content-Type": "application/json" } : undefined),
+        headers: gatewayHeaders(body ? { "Content-Type": "application/json" } : undefined, access.context),
         body,
         cache: "no-store",
         signal: AbortSignal.timeout(30_000),

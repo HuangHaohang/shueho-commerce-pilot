@@ -195,6 +195,13 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       return;
     }
 
+    if (method === "commerce/authorization/revoked") {
+      eventSourceRef.current?.close();
+      eventSourceRef.current = null;
+      failActiveTurn("企业成员资格、角色、合同或用量门禁已变更，当前任务已被安全终止。");
+      return;
+    }
+
     if (method === "commerce/contextCompaction/started") {
       const compactionStartedAt = Date.now();
       compactingRef.current = true;
@@ -388,7 +395,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setError(typeof itemError.message === "string" ? itemError.message : "Agent 执行失败。");
       setStatus("failed");
     }
-  }, [refreshQueue, threadId]);
+  }, [failActiveTurn, refreshQueue, threadId]);
 
   const connectEventStream = useCallback(
     async (id: string) => {
@@ -622,6 +629,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setActiveTurnId(null);
       setLastTurnId(null);
       const optimisticMessageId = `user-${crypto.randomUUID()}`;
+      const clientRequestId = crypto.randomUUID();
       setMessages((current) => [
         ...current,
         {
@@ -655,7 +663,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/turns`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, model, effort }),
+          body: JSON.stringify({ message, model, effort, clientRequestId }),
         });
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         if (!response.ok) {
@@ -683,7 +691,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             const retryResponse = await fetch(`/api/agent/threads/${encodeURIComponent(replacementThreadId)}/turns`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ message, model, effort }),
+              body: JSON.stringify({ message, model, effort, clientRequestId }),
             });
             const retryPayload = (await retryResponse.json().catch(() => null)) as Record<string, unknown> | null;
             if (!retryResponse.ok) {
@@ -750,7 +758,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/queue`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, clientRequestId: crypto.randomUUID() }),
         });
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         if (!response.ok) {

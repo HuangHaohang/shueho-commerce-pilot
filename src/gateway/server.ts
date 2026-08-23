@@ -7,6 +7,7 @@ import { CodexAppServerClient } from "../codex/app-server-client.js";
 import type { AppServerEvent, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
 import { ensureAppOwnedCodexConfig } from "../codex/runtime-config.js";
 import { CommerceProviderClient, CommerceProviderError, type ImageGenerationInput } from "../provider/commerce-provider-client.js";
+import { normalizeProviderUsage } from "../provider/provider-usage.js";
 import { readGatewayConfig } from "./config.js";
 import {
   readThreadContextUsage,
@@ -21,6 +22,14 @@ import {
   type PendingSteerState,
 } from "./pending-steer-state.js";
 import { PendingSteerStore } from "./pending-steer-store.js";
+import {
+  AgentEventOutbox,
+  type AgentOutboxEvent,
+  type RuntimeScope,
+  type TurnCompletedEvent,
+  type UsageCompletedEvent,
+} from "./agent-event-outbox.js";
+import { AgentOutboxProcessLock } from "./agent-outbox-process-lock.js";
 
 type CompactionTrigger = "automatic" | "manual" | "harness";
 
@@ -30,8 +39,9 @@ type CompactionState = {
   requestedAt: number;
   turnId: string | null;
   timeout: NodeJS.Timeout | null;
-  inputTokens: number | null;
+  contextTokens: number | null;
   modelContextWindow: number | null;
+  admissionRequestId: string | null;
 };
 
 type QueuedSubmissionView = {
@@ -39,6 +49,11 @@ type QueuedSubmissionView = {
   clientUserMessageId: string;
   content: string;
   pendingSteer: boolean;
+};
+
+type TurnModelState = {
+  requestedModel: string | null;
+  effectiveModel: string | null;
 };
 
 type ManagedMcpRuntimeState = ManagedMcpStatus & {
@@ -82,7 +97,15 @@ const compactionStates = new Map<string, CompactionState>();
 const pendingSteers = new PendingSteerRegistry();
 const pendingSteerStore = new PendingSteerStore(config.codexHome);
 const threadOperations = new ThreadOperationQueue();
+const threadScopes = new Map<string, RuntimeScope>();
+const pendingTurnModels = new Map<string, string | null>();
+const turnModels = new Map<string, TurnModelState>();
+const agentEventOutbox = new AgentEventOutbox(config.codexHome);
+const agentOutboxProcessLock = new AgentOutboxProcessLock(config.codexHome);
+const pendingAgentEventWrites = new Set<Promise<void>>();
+await agentOutboxProcessLock.acquire("gateway");
 pendingSteers.hydrate(await pendingSteerStore.load());
+await agentEventOutbox.load();
 let managedMcpState: ManagedMcpRuntimeState = {
   state: "unknown",
   available: false,
@@ -93,6 +116,18 @@ let managedMcpState: ManagedMcpRuntimeState = {
   error: null,
 };
 let managedMcpReadyPromise: Promise<void> | null = null;
+let agentEventFlushPromise: Promise<void> | null = null;
+let agentEventRetryTimer: NodeJS.Timeout | null = null;
+let runtimeAuthorizationTimer: NodeJS.Timeout | null = null;
+let runtimeAuthorizationPollPromise: Promise<void> | null = null;
+let agentEventSinkError: string | null = null;
+let agentEventSinkCheckedAt: string | null = null;
+let agentEventRetryAttempt = 0;
+let runtimeAuthorizationCheckedAt: string | null = null;
+let runtimeAuthorizationError: string | null = null;
+const pendingRuntimeRevocations = new Map<string, RuntimeScope>();
+const notifiedRuntimeRevocations = new Set<string>();
+let shuttingDown = false;
 const browserEventMethods = new Set([
   "turn/started",
   "turn/completed",
@@ -103,9 +138,13 @@ const browserEventMethods = new Set([
   "commerce/imageGeneration/completed",
   "commerce/contextCompaction/started",
   "commerce/contextCompaction/failed",
+  "commerce/authorization/revoked",
   "thread/queue/changed",
   "error",
 ]);
+const MAX_JSON_BODY_BYTES = 64 * 1024;
+const MAX_QUEUED_MESSAGES_PER_THREAD = 50;
+const MAX_QUEUED_MESSAGE_BYTES_PER_THREAD = 500_000;
 
 codex.on("event", (event: AppServerEvent) => {
   if (event.type === "process" && event.event === "exit") {
@@ -113,6 +152,8 @@ codex.on("event", (event: AppServerEvent) => {
     activeTurnsByThread.clear();
     turnStartReservations.clear();
     latestContextUsage.clear();
+    pendingTurnModels.clear();
+    turnModels.clear();
     threadOperations.clear();
     managedMcpReadyPromise = null;
     managedMcpState = {
@@ -167,8 +208,13 @@ const server = createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/health") {
+      const eventPipeline = readEventPipelineHealth();
       const runtimeReady =
-        codex.isRunning && codex.isInitialized && managedMcpState.state === "ready" && managedMcpState.available;
+        codex.isRunning &&
+        codex.isInitialized &&
+        managedMcpState.state === "ready" &&
+        managedMcpState.available &&
+        eventPipeline.healthy;
       sendJson(res, runtimeReady ? 200 : 503, {
         ok: runtimeReady,
         gateway: "shueho-commerce-pilot",
@@ -198,9 +244,23 @@ const server = createServer(async (req, res) => {
           localPathImageReader: false,
           hooks: process.env.NODE_ENV === "production" ? "managed-only" : "app-owned-development",
           maxTurnDurationMs: config.maxTurnDurationMs,
+          maxAgentThreadsPerSession: config.maxAgentThreadsPerSession,
           autoCompactThresholdPercent: config.autoCompactThresholdPercent,
           compactionTimeoutMs: config.compactionTimeoutMs,
           compactingThreads: compactionStates.size,
+          enterpriseRuntime: {
+            dedicatedTenant: Boolean(config.runtimeTenantId),
+            scopedThreads: threadScopes.size,
+            eventSinkConfigured: Boolean(config.agentEventSinkUrl),
+            authorizationConfigured: Boolean(config.agentAuthorizationUrl),
+            authorizationCheckedAt: runtimeAuthorizationCheckedAt,
+            authorizationError: runtimeAuthorizationError,
+            pendingEvents: agentEventOutbox.list().length,
+            deadLetterEvents: agentEventOutbox.deadLetterCount(),
+            eventSinkCheckedAt: agentEventSinkCheckedAt,
+            eventSinkError: agentEventSinkError,
+            eventPipeline,
+          },
         },
       });
       return;
@@ -246,16 +306,16 @@ const server = createServer(async (req, res) => {
       return;
     }
 
-    if (req.method === "POST" && url.pathname === "/api/images/generations") {
-      const body = await readJsonBody<ImageGenerationInput>(req);
-      const validated = validateImageGenerationInput(body, config.provider.imageModel);
-      const result = await provider.generateImage(validated);
-      sendJson(res, 200, { result });
-      return;
-    }
-
     if (req.method === "GET" && url.pathname === "/api/codex/events") {
-      openSse(res, url.searchParams.get("threadId") || undefined);
+      const threadId = url.searchParams.get("threadId") || undefined;
+      if (threadId) {
+        if (!isSafeAgentId(threadId)) {
+          sendJson(res, 400, { error: "Invalid thread id." });
+          return;
+        }
+        bindRequestRuntimeScope(req, threadId);
+      }
+      openSse(res, threadId);
       return;
     }
 
@@ -263,6 +323,7 @@ const server = createServer(async (req, res) => {
       await ensureCommerceWebMcpReady();
       const body = await readJsonBody<ThreadStartInput>(req);
       const model = body.model ?? config.defaultModel;
+      const requestedScope = readRequestRuntimeScope(req, "", model ?? null);
       const modelProvider = config.defaultModelProvider;
       if (modelProvider === config.provider.id && model) {
         await provider.assertAgentModel(model);
@@ -277,11 +338,19 @@ const server = createServer(async (req, res) => {
         config: createRuntimeRequestConfig(),
         developerInstructions: createRuntimeDeveloperInstructions(),
         ephemeral: false,
+        experimentalRawEvents: true,
         dynamicTools: createCommerceDynamicToolSpecs(),
       });
       const startedThreadId = readResultThreadId(result);
       if (startedThreadId) {
         loadedThreadIds.add(startedThreadId);
+        if (requestedScope) {
+          threadScopes.set(startedThreadId, {
+            ...requestedScope,
+            rootThreadId: startedThreadId,
+            parentThreadId: null,
+          });
+        }
       }
       sendJson(res, 200, { result });
       return;
@@ -294,6 +363,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
+      bindRequestRuntimeScope(req, threadId);
       // Resume first so persisted threads receive the current managed MCP catalog
       // and runtime overrides before any read can load them with stale capabilities.
       await ensureThreadLoaded(threadId);
@@ -306,10 +376,20 @@ const server = createServer(async (req, res) => {
     const compactMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/compact$/);
     if (req.method === "POST" && compactMatch) {
       const threadId = decodeURIComponent(compactMatch[1] ?? "");
+      const body = await readJsonBody<{ clientRequestId?: unknown }>(req);
+      const clientRequestId =
+        typeof body.clientRequestId === "string" && isUuid(body.clientRequestId)
+          ? body.clientRequestId
+          : "";
       if (!isSafeAgentId(threadId)) {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
+      if (!clientRequestId) {
+        sendJson(res, 400, { error: "Compaction requires a valid client request id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
       if (activeTurnsByThread.has(threadId)) {
         sendJson(res, 409, { error: "Thread has an active turn and cannot be compacted." });
         return;
@@ -320,7 +400,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 202, { accepted: true, alreadyRunning: true, trigger: existing.trigger });
         return;
       }
-      const state = reserveCompaction(threadId, "manual");
+      const state = reserveCompaction(threadId, "manual", undefined, clientRequestId);
       broadcastCompactionStarted(state);
       await issueCompactionRequest(state);
       sendJson(res, 202, { accepted: true, alreadyRunning: false, trigger: state.trigger });
@@ -329,7 +409,11 @@ const server = createServer(async (req, res) => {
 
     const turnMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/turns$/);
     if (req.method === "POST" && turnMatch) {
-      const body = await readJsonBody<Omit<TurnStartInput, "threadId">>(req);
+      if (!isEventPipelineWritable()) {
+        sendJson(res, 503, { error: "Enterprise usage event pipeline requires operator attention." });
+        return;
+      }
+      const body = await readJsonBody<Omit<TurnStartInput, "threadId"> & { clientRequestId?: string }>(req);
       const message = typeof body.message === "string" ? body.message.trim() : "";
       if (!message || message.length > 50_000) {
         sendJson(res, 400, { error: "Expected a message between 1 and 50000 characters." });
@@ -340,6 +424,10 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
+      const clientUserMessageId = isSafeAgentId(body.clientRequestId ?? "")
+        ? (body.clientRequestId as string)
+        : randomUUID();
+      bindRequestRuntimeScope(req, threadId, body.model ?? null);
       if (compactionStates.has(threadId)) {
         sendJson(res, 409, { error: "Thread context is being compacted. Retry after compaction completes." });
         return;
@@ -358,11 +446,7 @@ const server = createServer(async (req, res) => {
         if (activeTurnId) {
           activeTurnsByThread.set(threadId, activeTurnId);
           const queuedResult = await serializeSteerTransition(threadId, () =>
-            codex.request("thread/queue/add", {
-              threadId,
-              clientUserMessageId: randomUUID(),
-              input: [{ type: "text", text: message, text_elements: [] }],
-            }),
+            addQueuedSubmissionWithCapacity(threadId, clientUserMessageId, message),
           );
           sendJson(res, 202, {
             queued: true,
@@ -376,14 +460,23 @@ const server = createServer(async (req, res) => {
           activeTurnsByThread.delete(threadId);
           clearTurnTimeout(staleTurnId);
         }
-        const result = await codex.request("turn/start", {
-          threadId,
-          input: [{ type: "text", text: message, text_elements: [] }],
-          model: body.model,
-          effort: body.effort,
-        });
+        const requestedModel = body.model ?? threadScopes.get(threadId)?.model ?? config.defaultModel ?? null;
+        pendingTurnModels.set(threadId, requestedModel);
+        const result = await codex
+          .request("turn/start", {
+            threadId,
+            clientUserMessageId,
+            input: [{ type: "text", text: message, text_elements: [] }],
+            model: body.model,
+            effort: body.effort,
+          })
+          .finally(() => {
+            if (pendingTurnModels.get(threadId) === requestedModel) pendingTurnModels.delete(threadId);
+          });
         const startedTurnId = readResultTurnId(result);
         if (startedTurnId) {
+          bindTurnModel(threadId, startedTurnId, requestedModel);
+          updateThreadRuntimeModel(threadId, requestedModel);
           activeTurnsByThread.set(threadId, startedTurnId);
           scheduleTurnTimeout(threadId, startedTurnId);
         }
@@ -401,6 +494,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
+      bindRequestRuntimeScope(req, threadId);
       await ensureThreadLoaded(threadId);
       const result = await codex.request("thread/queue/list", {
         threadId,
@@ -422,12 +516,18 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && queueMatch) {
       const threadId = decodeURIComponent(queueMatch[1] ?? "");
-      const body = await readJsonBody<{ message?: unknown }>(req);
+      const body = await readJsonBody<{ message?: unknown; clientRequestId?: unknown }>(req);
       const message = typeof body.message === "string" ? body.message.trim() : "";
+      const clientUserMessageId = isSafeAgentId(
+        typeof body.clientRequestId === "string" ? body.clientRequestId : "",
+      )
+        ? (body.clientRequestId as string)
+        : randomUUID();
       if (!isSafeAgentId(threadId)) {
         sendJson(res, 400, { error: "Invalid thread id." });
         return;
       }
+      bindRequestRuntimeScope(req, threadId);
       if (!message || message.length > 50_000) {
         sendJson(res, 400, { error: "Expected a queued message between 1 and 50000 characters." });
         return;
@@ -438,11 +538,7 @@ const server = createServer(async (req, res) => {
       }
       await ensureThreadLoaded(threadId);
       const result = await serializeSteerTransition(threadId, () =>
-        codex.request("thread/queue/add", {
-          threadId,
-          clientUserMessageId: randomUUID(),
-          input: [{ type: "text", text: message, text_elements: [] }],
-        }),
+        addQueuedSubmissionWithCapacity(threadId, clientUserMessageId, message),
       );
       sendJson(res, 200, { queuedSubmission: readQueuedSubmissionResult(result) });
       return;
@@ -456,6 +552,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread or queued submission id." });
         return;
       }
+      bindRequestRuntimeScope(req, threadId);
       if (hasPendingSteer(threadId, queuedSubmissionId)) {
         sendJson(res, 409, { error: "Queued submission is waiting to be committed to the active turn." });
         return;
@@ -502,6 +599,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid thread, turn, queued submission, or client message id." });
         return;
       }
+      bindRequestRuntimeScope(req, threadId);
       try {
         await ensureThreadLoaded(threadId);
         const result = await serializeSteerTransition(threadId, () =>
@@ -522,9 +620,16 @@ const server = createServer(async (req, res) => {
 
     const interruptMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/turns\/([^/]+)\/interrupt$/);
     if (req.method === "POST" && interruptMatch) {
+      const threadId = decodeURIComponent(interruptMatch[1] ?? "");
+      const turnId = decodeURIComponent(interruptMatch[2] ?? "");
+      if (!isSafeAgentId(threadId) || !isSafeAgentId(turnId)) {
+        sendJson(res, 400, { error: "Invalid thread or turn id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
       const result = await codex.request("turn/interrupt", {
-        threadId: decodeURIComponent(interruptMatch[1] ?? ""),
-        turnId: decodeURIComponent(interruptMatch[2] ?? ""),
+        threadId,
+        turnId,
       });
       sendJson(res, 200, { result });
       return;
@@ -536,7 +641,6 @@ const server = createServer(async (req, res) => {
         "GET /health",
         "GET /api/models",
         "GET /api/generated-images/:filename",
-        "POST /api/images/generations",
         "GET /api/codex/events",
         "POST /api/threads",
         "GET /api/threads/:threadId",
@@ -552,12 +656,17 @@ const server = createServer(async (req, res) => {
     });
   } catch (error) {
     const serialized = serializeError(error);
-    const statusCode = error instanceof CommerceProviderError ? error.statusCode : 500;
+    const statusCode =
+      error instanceof CommerceProviderError || error instanceof GatewayRequestError
+        ? error.statusCode
+        : 500;
     sendJson(res, statusCode, serialized);
   }
 });
 
 await ensureCommerceWebMcpReady(true);
+scheduleAgentEventFlush(0);
+startRuntimeAuthorizationPoll();
 
 server.listen(config.port, config.host, () => {
   console.log(`Commerce Agent Gateway listening on http://${config.host}:${config.port}`);
@@ -567,6 +676,16 @@ process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 
 async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  if (agentEventRetryTimer) {
+    clearTimeout(agentEventRetryTimer);
+    agentEventRetryTimer = null;
+  }
+  if (runtimeAuthorizationTimer) {
+    clearInterval(runtimeAuthorizationTimer);
+    runtimeAuthorizationTimer = null;
+  }
   for (const timeout of turnTimeouts.values()) {
     clearTimeout(timeout);
   }
@@ -582,16 +701,46 @@ async function shutdown(): Promise<void> {
   }
   sseClients.clear();
   await codex.stop();
+  if (runtimeAuthorizationPollPromise) await runtimeAuthorizationPollPromise.catch(() => undefined);
+  await Promise.allSettled([...pendingAgentEventWrites]);
+  await agentEventOutbox.flush();
+  await flushAgentEventOutbox().catch(() => undefined);
+  await agentEventOutbox.flush();
+  await agentOutboxProcessLock.release();
   server.close(() => {
     process.exit(0);
   });
 }
 
 function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notification" }>): void {
+  if (event.method === "thread/started") {
+    inheritSubagentRuntimeScope(event.params);
+    return;
+  }
+
+  if (event.method === "rawResponse/completed") {
+    const usageEvent = readUsageCompletedEvent(event);
+    if (usageEvent) scheduleAgentEvent(usageEvent);
+    return;
+  }
+
   if (event.method === "thread/tokenUsage/updated") {
     const usage = readThreadContextUsage(event.params);
     if (usage && isSafeAgentId(usage.threadId) && isSafeAgentId(usage.turnId)) {
       latestContextUsage.set(usage.threadId, usage);
+    }
+    return;
+  }
+
+  if (event.method === "model/rerouted") {
+    const reroute = readModelReroute(event.params);
+    if (reroute) {
+      const key = turnModelKey(reroute.threadId, reroute.turnId);
+      const existing = turnModels.get(key);
+      turnModels.set(key, {
+        requestedModel: existing?.requestedModel ?? reroute.fromModel,
+        effectiveModel: reroute.toModel,
+      });
     }
     return;
   }
@@ -602,6 +751,10 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
   }
 
   if (event.method === "item/started" || event.method === "item/completed") {
+    if (event.method === "item/completed") {
+      const providerUsageEvent = readManagedMcpProviderUsageEvent(event);
+      if (providerUsageEvent) scheduleAgentEvent(providerUsageEvent);
+    }
     const clientId = readUserMessageClientId(event.params);
     const pendingSteer = readPendingSteers(threadId)[0] ?? null;
     if (clientId && pendingSteer?.clientUserMessageId === clientId) {
@@ -613,6 +766,8 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
   if (event.method === "turn/started") {
     const turnId = readEventTurnId(event.params);
     if (turnId) {
+      const requestedModel = pendingTurnModels.get(threadId) ?? threadScopes.get(threadId)?.model ?? null;
+      bindTurnModel(threadId, turnId, requestedModel);
       activeTurnsByThread.set(threadId, turnId);
       const state = compactionStates.get(threadId);
       if (state && !state.turnId) {
@@ -625,13 +780,16 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
   if (event.method === "item/started" && isContextCompactionItem(event.params)) {
     const turnId = readEventTurnIdFromItemParams(event.params);
     let state = compactionStates.get(threadId);
+    let created = false;
     if (!state) {
       state = reserveCompaction(threadId, "harness");
+      created = true;
       broadcastCompactionStarted(state);
     }
     if (turnId) {
       state.turnId = turnId;
     }
+    if (created) void admitHarnessCompaction(state);
     return;
   }
 
@@ -652,6 +810,9 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
     return;
   }
   clearTurnTimeout(turnId);
+  const completedEvent = readTurnCompletedOutboxEvent(event, threadId, turnId);
+  if (completedEvent) scheduleAgentEvent(completedEvent);
+  turnModels.delete(turnModelKey(threadId, turnId));
   if (activeTurnsByThread.get(threadId) === turnId) {
     activeTurnsByThread.delete(threadId);
   }
@@ -675,10 +836,8 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
     !state &&
     shouldAutoCompact(usage, config.autoCompactThresholdPercent)
   ) {
-    const automaticState = reserveCompaction(threadId, "automatic", usage);
     queueMicrotask(() => {
-      broadcastCompactionStarted(automaticState);
-      void issueCompactionRequest(automaticState).catch(() => undefined);
+      void startAutomaticCompaction(threadId, usage);
     });
   }
 }
@@ -687,6 +846,7 @@ function reserveCompaction(
   threadId: string,
   trigger: CompactionTrigger,
   usage?: ThreadContextUsage,
+  admissionRequestId: string | null = null,
 ): CompactionState {
   const existing = compactionStates.get(threadId);
   if (existing) {
@@ -698,8 +858,9 @@ function reserveCompaction(
     requestedAt: Date.now(),
     turnId: null,
     timeout: null,
-    inputTokens: usage?.inputTokens ?? null,
+    contextTokens: usage?.totalTokens ?? null,
     modelContextWindow: usage?.modelContextWindow ?? null,
+    admissionRequestId,
   };
   compactionStates.set(threadId, state);
   return state;
@@ -707,6 +868,9 @@ function reserveCompaction(
 
 async function issueCompactionRequest(state: CompactionState): Promise<void> {
   try {
+    if (!isEventPipelineWritable()) {
+      throw new GatewayRequestError("Enterprise usage event pipeline requires operator attention.", 503);
+    }
     await codex.request("thread/compact/start", { threadId: state.threadId }, 30_000);
     state.timeout = setTimeout(() => {
       if (state.turnId) {
@@ -721,6 +885,38 @@ async function issueCompactionRequest(state: CompactionState): Promise<void> {
     failCompaction(state, "Codex context compaction could not start.");
     throw error;
   }
+}
+
+async function startAutomaticCompaction(threadId: string, usage: ThreadContextUsage): Promise<void> {
+  if (compactionStates.has(threadId) || activeTurnsByThread.has(threadId)) return;
+  const admission = await reserveRuntimeCompactionAdmission(threadId);
+  if (!admission || !admission.requestId) return;
+  if (compactionStates.has(threadId) || activeTurnsByThread.has(threadId)) {
+    await releaseRuntimeCompactionAdmission(threadId, admission.requestId);
+    return;
+  }
+  const state = reserveCompaction(threadId, "automatic", usage, admission.requestId);
+  broadcastCompactionStarted(state);
+  await issueCompactionRequest(state).catch(() => undefined);
+}
+
+async function admitHarnessCompaction(state: CompactionState): Promise<void> {
+  const admission = await reserveRuntimeCompactionAdmission(state.threadId, state.turnId);
+  if (compactionStates.get(state.threadId) !== state) {
+    if (admission?.requestId) await releaseRuntimeCompactionAdmission(state.threadId, admission.requestId);
+    return;
+  }
+  if (admission?.attached) return;
+  if (admission?.requestId) {
+    state.admissionRequestId = admission.requestId;
+    return;
+  }
+  if (state.turnId) {
+    await codex
+      .request("turn/interrupt", { threadId: state.threadId, turnId: state.turnId }, 10_000)
+      .catch(() => undefined);
+  }
+  failCompaction(state, "Enterprise quota denied context compaction.");
 }
 
 function finishCompaction(state: CompactionState): void {
@@ -739,6 +935,9 @@ function failCompaction(state: CompactionState, message: string): void {
   }
   if (compactionStates.get(state.threadId) === state) {
     compactionStates.delete(state.threadId);
+  }
+  if (state.admissionRequestId && !state.turnId) {
+    void releaseRuntimeCompactionAdmission(state.threadId, state.admissionRequestId);
   }
   broadcastEvent({
     type: "notification",
@@ -760,7 +959,7 @@ function broadcastCompactionStarted(state: CompactionState): void {
     params: {
       threadId: state.threadId,
       trigger: state.trigger,
-      inputTokens: state.inputTokens,
+      contextTokens: state.contextTokens,
       modelContextWindow: state.modelContextWindow,
       thresholdPercent: config.autoCompactThresholdPercent,
     },
@@ -871,6 +1070,27 @@ function readUserMessageClientId(params: unknown): string | null {
 
 async function serializeSteerTransition<T>(threadId: string, task: () => Promise<T>): Promise<T> {
   return threadOperations.run(threadId, task);
+}
+
+async function addQueuedSubmissionWithCapacity(
+  threadId: string,
+  clientUserMessageId: string,
+  message: string,
+): Promise<unknown> {
+  const listed = await codex.request("thread/queue/list", { threadId, cursor: null, limit: 100 });
+  const queued = readQueuedSubmissions(listed);
+  if (queued.length >= MAX_QUEUED_MESSAGES_PER_THREAD) {
+    throw new GatewayRequestError("Thread queue has reached its item limit.", 429);
+  }
+  const queuedBytes = queued.reduce((total, item) => total + Buffer.byteLength(item.content, "utf8"), 0);
+  if (queuedBytes + Buffer.byteLength(message, "utf8") > MAX_QUEUED_MESSAGE_BYTES_PER_THREAD) {
+    throw new GatewayRequestError("Thread queue has reached its storage limit.", 413);
+  }
+  return codex.request("thread/queue/add", {
+    threadId,
+    clientUserMessageId,
+    input: [{ type: "text", text: message, text_elements: [] }],
+  });
 }
 
 async function promoteQueuedSubmissionToSteer(
@@ -1245,7 +1465,10 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
   });
   loadedThreadIds.add(threadId);
   if (readPendingSteers(threadId).length > 0) {
-    await serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, undefined, true));
+    // A restarted Gateway may restore application-authorized input to the
+    // durable queue, but it must not start billable work without a fresh BFF
+    // quota lease.
+    await serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, undefined, false));
   }
 }
 
@@ -1305,6 +1528,564 @@ async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
   })();
 
   return managedMcpReadyPromise;
+}
+
+function readRequestRuntimeScope(
+  req: IncomingMessage,
+  rootThreadId: string,
+  model: string | null,
+): RuntimeScope | null {
+  const tenantId = readSingleHeader(req, "x-commerce-tenant-id");
+  const workspaceId = readSingleHeader(req, "x-commerce-workspace-id");
+  const userId = readSingleHeader(req, "x-commerce-user-id");
+  const supplied = [tenantId, workspaceId, userId].filter(Boolean).length;
+  if (supplied === 0) {
+    if (process.env.NODE_ENV === "production") {
+      throw new GatewayRequestError("Enterprise runtime scope is required.", 400);
+    }
+    return null;
+  }
+  if (
+    supplied !== 3 ||
+    !isUuid(tenantId as string) ||
+    !isUuid(workspaceId as string) ||
+    !userId ||
+    userId.length > 255 ||
+    /[\r\n\0]/.test(userId)
+  ) {
+    throw new GatewayRequestError("Invalid enterprise runtime scope.", 400);
+  }
+  if (config.runtimeTenantId && tenantId !== config.runtimeTenantId) {
+    throw new GatewayRequestError("Enterprise tenant is not assigned to this runtime.", 404);
+  }
+  return {
+    tenantId: tenantId as string,
+    workspaceId: workspaceId as string,
+    userId,
+    rootThreadId,
+    parentThreadId: null,
+    model,
+  };
+}
+
+function bindRequestRuntimeScope(req: IncomingMessage, threadId: string, model: string | null = null): void {
+  const incoming = readRequestRuntimeScope(req, threadId, model);
+  if (!incoming) return;
+  const existing = threadScopes.get(threadId);
+  if (
+    existing &&
+    (existing.tenantId !== incoming.tenantId ||
+      existing.workspaceId !== incoming.workspaceId ||
+      existing.userId !== incoming.userId)
+  ) {
+    throw new GatewayRequestError("Thread runtime scope does not match.", 404);
+  }
+  threadScopes.set(threadId, {
+    ...(existing ?? incoming),
+    model: existing?.model ?? model ?? null,
+  });
+}
+
+function updateThreadRuntimeModel(threadId: string, model: string | null): void {
+  const scope = threadScopes.get(threadId);
+  if (!scope) return;
+  threadScopes.set(threadId, { ...scope, model });
+}
+
+function turnModelKey(threadId: string, turnId: string): string {
+  return `${threadId}:${turnId}`;
+}
+
+function bindTurnModel(threadId: string, turnId: string, requestedModel: string | null): void {
+  const key = turnModelKey(threadId, turnId);
+  const existing = turnModels.get(key);
+  turnModels.set(key, {
+    requestedModel: existing?.requestedModel ?? requestedModel,
+    effectiveModel: existing?.effectiveModel ?? requestedModel,
+  });
+}
+
+function readModelReroute(params: unknown): {
+  threadId: string;
+  turnId: string;
+  fromModel: string;
+  toModel: string;
+} | null {
+  if (!isRecord(params)) return null;
+  const threadId = typeof params.threadId === "string" ? params.threadId : "";
+  const turnId = typeof params.turnId === "string" ? params.turnId : "";
+  const fromModel = typeof params.fromModel === "string" ? params.fromModel : "";
+  const toModel = typeof params.toModel === "string" ? params.toModel : "";
+  return isSafeAgentId(threadId) && isSafeAgentId(turnId) && fromModel && toModel
+    ? { threadId, turnId, fromModel, toModel }
+    : null;
+}
+
+function inheritSubagentRuntimeScope(params: unknown): void {
+  if (!isRecord(params) || !isRecord(params.thread)) return;
+  const threadId = typeof params.thread.id === "string" ? params.thread.id : "";
+  const parentThreadId = typeof params.thread.parentThreadId === "string" ? params.thread.parentThreadId : "";
+  if (!isSafeAgentId(threadId) || !isSafeAgentId(parentThreadId)) return;
+  const parent = threadScopes.get(parentThreadId);
+  if (!parent) return;
+  threadScopes.set(threadId, {
+    ...parent,
+    parentThreadId,
+    rootThreadId: parent.rootThreadId,
+    model: typeof params.thread.model === "string" ? params.thread.model : parent.model,
+  });
+}
+
+function readUsageCompletedEvent(
+  event: Extract<AppServerEvent, { type: "notification" }>,
+): UsageCompletedEvent | null {
+  if (!isRecord(event.params)) return null;
+  const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
+  const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
+  const responseId = typeof event.params.responseId === "string" ? event.params.responseId : "";
+  const scope = threadScopes.get(threadId);
+  const turnModel = turnModels.get(turnModelKey(threadId, turnId));
+  const reportedUsage = isRecord(event.params.usage) ? readUsageBreakdown(event.params.usage) : null;
+  const usage = reportedUsage ?? {
+    totalTokens: 0,
+    inputTokens: 0,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    outputTokens: 0,
+    reasoningOutputTokens: 0,
+  };
+  if (!scope || !isSafeAgentId(threadId) || !isSafeAgentId(turnId) || !responseId) return null;
+  return {
+    kind: "usage.response.completed",
+    eventId: `usage:${scope.tenantId}:${config.provider.id}:${responseId}`,
+    ...scope,
+    threadId,
+    turnId,
+    responseId,
+    providerId: config.provider.id,
+    source: "codex_harness",
+    requestedModel: turnModel?.requestedModel ?? scope.model,
+    usageStatus: reportedUsage ? "reported" : "missing",
+    model: turnModel?.effectiveModel ?? scope.model,
+    usage,
+    occurredAt: event.at,
+  };
+}
+
+function readManagedMcpProviderUsageEvent(
+  event: Extract<AppServerEvent, { type: "notification" }>,
+): UsageCompletedEvent | null {
+  if (!isRecord(event.params) || !isRecord(event.params.item)) return null;
+  const item = event.params.item;
+  if (
+    item.type !== "mcpToolCall" ||
+    item.server !== "commerce_web" ||
+    item.tool !== "search" ||
+    item.status !== "completed" ||
+    !isRecord(item.result) ||
+    !isRecord(item.result._meta) ||
+    !isRecord(item.result._meta.commercePilotUsage)
+  ) {
+    return null;
+  }
+  const metadata = item.result._meta.commercePilotUsage;
+  if (metadata.source !== "commerce_web_mcp" || metadata.providerId !== config.provider.id) return null;
+  const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
+  const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
+  const itemId = typeof item.id === "string" ? item.id : "";
+  const scope = threadScopes.get(threadId);
+  if (!scope || !isSafeAgentId(threadId) || !isSafeAgentId(turnId) || !isSafeAgentId(itemId)) return null;
+  const responseId =
+    typeof metadata.responseId === "string" && metadata.responseId.length <= 255
+      ? metadata.responseId
+      : `mcp-${itemId}`;
+  const model = typeof metadata.model === "string" ? metadata.model : scope.model;
+  return createProviderUsageEvent({
+    scope,
+    source: "commerce_web_mcp",
+    responseId,
+    threadId,
+    turnId,
+    model,
+    usage: metadata.usage,
+    occurredAt: event.at,
+  });
+}
+
+function createProviderUsageEvent(input: {
+  scope: RuntimeScope;
+  source: "commerce_web_mcp" | "commerce_web_tool" | "commerce_image_tool";
+  responseId: string;
+  threadId: string;
+  turnId: string;
+  model: string | null;
+  usage: unknown;
+  occurredAt: string;
+}): UsageCompletedEvent {
+  const turnModel = turnModels.get(turnModelKey(input.threadId, input.turnId));
+  const normalized = normalizeProviderUsage(input.usage);
+  const { usageStatus, ...usage } = normalized;
+  return {
+    kind: "usage.response.completed",
+    eventId: `usage:${input.scope.tenantId}:${config.provider.id}:${input.responseId}`,
+    ...input.scope,
+    source: input.source,
+    usageStatus,
+    requestedModel: turnModel?.requestedModel ?? input.model,
+    model: input.model,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    responseId: input.responseId,
+    providerId: config.provider.id,
+    usage,
+    occurredAt: input.occurredAt,
+  };
+}
+
+function readTurnCompletedOutboxEvent(
+  event: Extract<AppServerEvent, { type: "notification" }>,
+  threadId: string,
+  turnId: string,
+): TurnCompletedEvent | null {
+  const scope = threadScopes.get(threadId);
+  const turnModel = turnModels.get(turnModelKey(threadId, turnId));
+  const compaction = compactionStates.get(threadId);
+  const status = readTurnCompletionStatus(event.params);
+  if (!scope || (status !== "completed" && status !== "interrupted" && status !== "failed")) return null;
+  const turn = isRecord(event.params) && isRecord(event.params.turn) ? event.params.turn : null;
+  return {
+    kind: "turn.completed",
+    eventId: `turn:${threadId}:${turnId}:${status}`,
+    ...scope,
+    model: turnModel?.effectiveModel ?? scope.model,
+    threadId,
+    turnId,
+    status,
+    durationMs: turn && typeof turn.durationMs === "number" ? turn.durationMs : null,
+    ...(compaction?.turnId === turnId && compaction.admissionRequestId
+      ? { requestId: compaction.admissionRequestId }
+      : {}),
+    occurredAt: event.at,
+  };
+}
+
+function readUsageBreakdown(value: Record<string, unknown>): UsageCompletedEvent["usage"] | null {
+  const keys = [
+    "totalTokens",
+    "inputTokens",
+    "cachedInputTokens",
+    "cacheWriteInputTokens",
+    "outputTokens",
+    "reasoningOutputTokens",
+  ] as const;
+  const values = Object.fromEntries(
+    keys.map((key) => [key, readSafeTokenCount(value[key])]),
+  ) as Record<(typeof keys)[number], number | null>;
+  if (keys.some((key) => values[key] === null)) return null;
+  return values as UsageCompletedEvent["usage"];
+}
+
+async function enqueueAgentEvent(event: AgentOutboxEvent): Promise<void> {
+  await agentEventOutbox.enqueue(event);
+  scheduleAgentEventFlush(0);
+}
+
+function scheduleAgentEvent(event: AgentOutboxEvent): void {
+  const task = enqueueAgentEvent(event).finally(() => pendingAgentEventWrites.delete(task));
+  pendingAgentEventWrites.add(task);
+}
+
+function scheduleAgentEventFlush(delayMs: number): void {
+  if (!config.agentEventSinkUrl || !config.internalToken || agentEventRetryTimer) return;
+  agentEventRetryTimer = setTimeout(() => {
+    agentEventRetryTimer = null;
+    void flushAgentEventOutbox();
+  }, delayMs);
+  agentEventRetryTimer.unref();
+}
+
+async function flushAgentEventOutbox(): Promise<void> {
+  if (agentEventFlushPromise) return agentEventFlushPromise;
+  if (!config.agentEventSinkUrl || !config.internalToken) return;
+  agentEventFlushPromise = (async () => {
+    let shouldRetry = false;
+    const acknowledged: string[] = [];
+    try {
+      for (const event of agentEventOutbox.list()) {
+        const response = await fetch(config.agentEventSinkUrl as string, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Commerce-Gateway-Token": config.internalToken as string,
+          },
+          body: JSON.stringify(event),
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!response.ok && [400, 404, 409, 422].includes(response.status)) {
+          await agentEventOutbox.quarantine(event.eventId, `Agent event sink returned HTTP ${response.status}.`);
+          continue;
+        }
+        if (!response.ok) throw new Error(`Agent event sink returned HTTP ${response.status}.`);
+        acknowledged.push(event.eventId);
+      }
+      await agentEventOutbox.acknowledgeMany(acknowledged);
+      agentEventSinkCheckedAt = new Date().toISOString();
+      agentEventSinkError = null;
+      agentEventRetryAttempt = 0;
+    } catch (error) {
+      agentEventSinkCheckedAt = new Date().toISOString();
+      agentEventSinkError = error instanceof Error ? error.message.slice(0, 300) : "Agent event delivery failed.";
+      agentEventRetryAttempt += 1;
+      shouldRetry = true;
+    } finally {
+      agentEventFlushPromise = null;
+      if (shouldRetry && !shuttingDown) {
+        scheduleAgentEventFlush(Math.min(60_000, 1_000 * 2 ** Math.min(agentEventRetryAttempt, 6)));
+      } else if (!shuttingDown && agentEventOutbox.list().length > 0) {
+        // An event may have been persisted after this flush captured its list
+        // while another caller observed the in-flight promise. Drain again.
+        scheduleAgentEventFlush(0);
+      }
+    }
+  })();
+  return agentEventFlushPromise;
+}
+
+function readEventPipelineHealth(): {
+  healthy: boolean;
+  pendingEvents: number;
+  oldestPendingAgeMs: number;
+  deadLetterEvents: number;
+} {
+  const pending = agentEventOutbox.list();
+  const oldestOccurredAt = pending.reduce<number | null>((oldest, event) => {
+    const timestamp = Date.parse(event.occurredAt);
+    if (!Number.isFinite(timestamp)) return oldest;
+    return oldest === null ? timestamp : Math.min(oldest, timestamp);
+  }, null);
+  const oldestPendingAgeMs = oldestOccurredAt === null ? 0 : Math.max(0, Date.now() - oldestOccurredAt);
+  const deadLetterEvents = agentEventOutbox.deadLetterCount();
+  return {
+    healthy:
+      deadLetterEvents === 0 &&
+      agentEventSinkError === null &&
+      pending.length < 1_000 &&
+      oldestPendingAgeMs < 60_000,
+    pendingEvents: pending.length,
+    oldestPendingAgeMs,
+    deadLetterEvents,
+  };
+}
+
+function isEventPipelineWritable(): boolean {
+  const health = readEventPipelineHealth();
+  return health.deadLetterEvents === 0 && health.pendingEvents < 1_000 && agentEventSinkError === null;
+}
+
+function startRuntimeAuthorizationPoll(): void {
+  if (!config.agentAuthorizationUrl || !config.internalToken || runtimeAuthorizationTimer) return;
+  runtimeAuthorizationTimer = setInterval(() => {
+    void pollRuntimeAuthorizations();
+  }, config.authorizationPollMs);
+  runtimeAuthorizationTimer.unref();
+}
+
+async function pollRuntimeAuthorizations(): Promise<void> {
+  if (runtimeAuthorizationPollPromise) return runtimeAuthorizationPollPromise;
+  runtimeAuthorizationPollPromise = (async () => {
+    const scopes = new Map<string, RuntimeScope>(pendingRuntimeRevocations);
+    for (const threadId of activeTurnsByThread.keys()) {
+      const scope = threadScopes.get(threadId);
+      if (scope) scopes.set(runtimeRootKey(scope), scope);
+    }
+    await Promise.all(
+      [...scopes.entries()].map(async ([key, scope]) => {
+        const authorized = await readRuntimeAuthorization(scope);
+        if (authorized) {
+          pendingRuntimeRevocations.delete(key);
+          notifiedRuntimeRevocations.delete(key);
+          return;
+        }
+        pendingRuntimeRevocations.set(key, scope);
+        if (!notifiedRuntimeRevocations.has(key)) {
+          notifiedRuntimeRevocations.add(key);
+          broadcastEvent({
+            type: "notification",
+            method: "commerce/authorization/revoked",
+            params: { threadId: scope.rootThreadId },
+            at: new Date().toISOString(),
+          });
+        }
+        if (await revokeRuntimeRoot(scope)) pendingRuntimeRevocations.delete(key);
+      }),
+    );
+  })().finally(() => {
+    runtimeAuthorizationPollPromise = null;
+  });
+  return runtimeAuthorizationPollPromise;
+}
+
+async function readRuntimeAuthorization(scope: RuntimeScope): Promise<boolean> {
+  if (!config.agentAuthorizationUrl || !config.internalToken) {
+    return process.env.NODE_ENV !== "production";
+  }
+  try {
+    const response = await fetch(config.agentAuthorizationUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Commerce-Gateway-Token": config.internalToken,
+      },
+      body: JSON.stringify({
+        tenantId: scope.tenantId,
+        workspaceId: scope.workspaceId,
+        userId: scope.userId,
+        rootThreadId: scope.rootThreadId,
+        runtimeMaxAgentThreads: config.maxAgentThreadsPerSession,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    runtimeAuthorizationCheckedAt = new Date().toISOString();
+    if (!response.ok) {
+      runtimeAuthorizationError = `Authorization endpoint returned HTTP ${response.status}.`;
+      return false;
+    }
+    const payload = (await response.json().catch(() => null)) as { authorized?: unknown } | null;
+    const authorized = payload?.authorized === true;
+    runtimeAuthorizationError = authorized ? null : "Authorization endpoint denied the runtime scope.";
+    return authorized;
+  } catch (error) {
+    runtimeAuthorizationCheckedAt = new Date().toISOString();
+    runtimeAuthorizationError = error instanceof Error ? error.message.slice(0, 300) : "Authorization check failed.";
+    return false;
+  }
+}
+
+async function reserveRuntimeCompactionAdmission(
+  threadId: string,
+  turnId: string | null = null,
+): Promise<{ requestId: string | null; attached: boolean } | null> {
+  const scope = threadScopes.get(threadId);
+  if (!scope || !config.agentAdmissionUrl || !config.internalToken) return null;
+  const requestId = randomUUID();
+  try {
+    const response = await fetch(config.agentAdmissionUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Commerce-Gateway-Token": config.internalToken,
+      },
+      body: JSON.stringify({
+        tenantId: scope.tenantId,
+        workspaceId: scope.workspaceId,
+        userId: scope.userId,
+        rootThreadId: scope.rootThreadId,
+        runtimeMaxAgentThreads: config.maxAgentThreadsPerSession,
+        requestId,
+        kind: "context_compaction",
+        action: turnId ? "attach_or_reserve" : "reserve",
+        ...(turnId ? { turnId } : {}),
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json().catch(() => null)) as {
+      admitted?: unknown;
+      attached?: unknown;
+    } | null;
+    if (payload?.admitted !== true) return null;
+    return payload.attached === true
+      ? { requestId: null, attached: true }
+      : { requestId, attached: false };
+  } catch {
+    return null;
+  }
+}
+
+async function releaseRuntimeCompactionAdmission(threadId: string, requestId: string): Promise<void> {
+  const scope = threadScopes.get(threadId);
+  if (!scope || !config.agentAdmissionUrl || !config.internalToken) return;
+  await fetch(config.agentAdmissionUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Commerce-Gateway-Token": config.internalToken,
+    },
+    body: JSON.stringify({
+      tenantId: scope.tenantId,
+      workspaceId: scope.workspaceId,
+      userId: scope.userId,
+      rootThreadId: scope.rootThreadId,
+      runtimeMaxAgentThreads: config.maxAgentThreadsPerSession,
+      requestId,
+      kind: "context_compaction",
+      action: "release",
+    }),
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => undefined);
+}
+
+async function revokeRuntimeRoot(scope: RuntimeScope): Promise<boolean> {
+  const key = runtimeRootKey(scope);
+  const targets: Array<{ threadId: string; turnId: string }> = [];
+  for (const [threadId, turnId] of activeTurnsByThread) {
+    const activeScope = threadScopes.get(threadId);
+    if (!activeScope || runtimeRootKey(activeScope) !== key) continue;
+    targets.push({ threadId, turnId });
+  }
+  const interruptionResults = await Promise.allSettled(
+    targets.map(({ threadId, turnId }) => codex.request("turn/interrupt", { threadId, turnId }, 10_000)),
+  );
+  const interruptsAccepted = interruptionResults.every((result) => result.status === "fulfilled");
+  let queueEmpty = false;
+  try {
+    await ensureThreadLoaded(scope.rootThreadId);
+    queueEmpty = await serializeSteerTransition(scope.rootThreadId, async () => {
+      const listed = await codex.request("thread/queue/list", {
+        threadId: scope.rootThreadId,
+        cursor: null,
+        limit: 100,
+      });
+      for (const queued of readQueuedSubmissions(listed)) {
+        await codex.request("thread/queue/delete", {
+          threadId: scope.rootThreadId,
+          queuedSubmissionId: queued.id,
+        });
+      }
+      const verified = await codex.request("thread/queue/list", {
+        threadId: scope.rootThreadId,
+        cursor: null,
+        limit: 100,
+      });
+      return readQueuedSubmissions(verified).length === 0;
+    });
+  } catch {
+    queueEmpty = false;
+  }
+  const activeChecks = await Promise.allSettled(
+    targets.map(({ threadId }) => readHarnessActiveTurnId(threadId)),
+  );
+  const noActiveTurns = activeChecks.every(
+    (result) => result.status === "fulfilled" && result.value === null,
+  );
+  return interruptsAccepted && queueEmpty && noActiveTurns;
+}
+
+function runtimeRootKey(scope: RuntimeScope): string {
+  return `${scope.tenantId}:${scope.workspaceId}:${scope.userId}:${scope.rootThreadId}`;
+}
+
+function readSingleHeader(req: IncomingMessage, name: string): string | null {
+  const value = req.headers[name];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
+function readSafeTokenCount(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 function readEventTurnId(params: unknown): string | null {
@@ -1378,9 +2159,19 @@ function sendJson(res: ServerResponse, statusCode: number, body: unknown): void 
 }
 
 async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
+  const contentLength = Number.parseInt(req.headers["content-length"] || "0", 10);
+  if (Number.isFinite(contentLength) && contentLength > MAX_JSON_BODY_BYTES) {
+    throw new GatewayRequestError("JSON request body is too large.", 413);
+  }
   const chunks: Buffer[] = [];
+  let receivedBytes = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    receivedBytes += buffer.byteLength;
+    if (receivedBytes > MAX_JSON_BODY_BYTES) {
+      throw new GatewayRequestError("JSON request body is too large.", 413);
+    }
+    chunks.push(buffer);
   }
 
   if (chunks.length === 0) {
@@ -1388,7 +2179,11 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   }
 
   const raw = Buffer.concat(chunks).toString("utf8");
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new GatewayRequestError("Request body must be valid JSON.", 400);
+  }
 }
 
 function matchPath(pathname: string, pattern: RegExp): RegExpMatchArray | null {
@@ -1449,6 +2244,24 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
   }
   const namespace = typeof event.params.namespace === "string" ? event.params.namespace : null;
   const tool = typeof event.params.tool === "string" ? event.params.tool : "";
+  const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
+  const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
+  const callId = typeof event.params.callId === "string" ? event.params.callId : "";
+  const scope = threadScopes.get(threadId);
+  if (
+    !scope ||
+    !isSafeAgentId(threadId) ||
+    !isSafeAgentId(turnId) ||
+    !isSafeAgentId(callId)
+  ) {
+    throw new Error("Commerce tool calls require a bound enterprise thread, turn, and call id.");
+  }
+  if (!isEventPipelineWritable()) {
+    throw new Error("Enterprise usage event pipeline requires operator attention.");
+  }
+  if (!(await readRuntimeAuthorization(scope))) {
+    throw new Error("Enterprise authorization was revoked before the commerce tool call.");
+  }
   if (namespace === "commerce_web" && tool === "search") {
     const args = isRecord(event.params.arguments) ? event.params.arguments : {};
     const query = typeof args.query === "string" ? args.query.trim() : "";
@@ -1460,6 +2273,18 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
       throw new Error("Commerce web search requires CODEX_DEFAULT_MODEL.");
     }
     const result = await provider.searchWeb({ model, query });
+    await enqueueAgentEvent(
+      createProviderUsageEvent({
+        scope,
+        source: "commerce_web_tool",
+        responseId: result.responseId ?? `web-${callId}`,
+        threadId,
+        turnId,
+        model: result.model,
+        usage: result.usage,
+        occurredAt: new Date().toISOString(),
+      }),
+    );
     codex.respondToServerRequest(event.id, {
       success: true,
       contentItems: [
@@ -1504,11 +2329,6 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
     at: new Date().toISOString(),
   });
 
-  const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
-  const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
-  if (!isSafeAgentId(threadId) || !isSafeAgentId(turnId)) {
-    throw new Error("Image generation requires valid thread and turn ids.");
-  }
   const generated = await provider.generateImage(input);
   const saved = await generatedImages.save({
     base64: generated.base64,
@@ -1520,6 +2340,18 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
     quality: generated.quality,
     size: generated.size,
   });
+  await enqueueAgentEvent(
+    createProviderUsageEvent({
+      scope,
+      source: "commerce_image_tool",
+      responseId: generated.responseId ?? `image-${callId}`,
+      threadId,
+      turnId,
+      model: generated.model,
+      usage: generated.usage,
+      occurredAt: new Date().toISOString(),
+    }),
+  );
   const publicUrl = `/api/provider/generated-images/${encodeURIComponent(saved.filename)}`;
   codex.respondToServerRequest(event.id, {
     success: true,

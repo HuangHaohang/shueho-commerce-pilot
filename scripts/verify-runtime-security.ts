@@ -44,9 +44,14 @@ const missingLines = requiredLines.filter((line) => !generatedConfig.includes(li
 if (missingLines.length > 0) {
   throw new Error(`Generated Codex config is missing security controls: ${missingLines.join(", ")}`);
 }
+if (process.platform === "win32" && !generatedConfig.includes("commerce-runtime-hook.cmd")) {
+  throw new Error("Generated Windows Codex config is missing the managed Hook command wrapper.");
+}
 
 const managedHookPath = join(config.codexHome, "managed-hooks/commerce-runtime-hook.mjs");
+const managedWindowsHookPath = join(config.codexHome, "managed-hooks/commerce-runtime-hook.cmd");
 const managedHookSource = await readFile(managedHookPath, "utf8");
+const managedWindowsHookSource = await readFile(managedWindowsHookPath, "utf8");
 const productionRequirements = await readFile(
   resolve("runtime/commerce-requirements.toml"),
   "utf8",
@@ -77,6 +82,12 @@ if (!managedHookSource.includes("Commerce Pilot runtime allowlist")) {
 if (!managedHookSource.includes('"web_search"')) {
   throw new Error("Managed Hook runner does not allow the native Codex Web Search tool.");
 }
+if (!managedHookSource.includes("Object.keys(output).length > 0")) {
+  throw new Error("Managed Hook runner must keep successful observe-only Hook stdout empty.");
+}
+if (process.platform === "win32" && !managedWindowsHookSource.includes('set "SystemRoot=')) {
+  throw new Error("Managed Windows Hook wrapper does not initialize SystemRoot.");
+}
 
 if (generatedConfig.includes('sandbox_mode = "workspace-write"') || generatedConfig.includes('sandbox_mode = "danger-full-access"')) {
   throw new Error("Generated Codex config enables a write-capable sandbox.");
@@ -88,7 +99,7 @@ const thresholdUsage = readThreadContextUsage({
   threadId: "thread_12345",
   turnId: "turn_12345",
   tokenUsage: {
-    last: { inputTokens: 75_000 },
+    last: { inputTokens: 75_000, totalTokens: 75_000 },
     modelContextWindow: 100_000,
   },
 });

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { gatewayHeaders, gatewayUrl } from "@/lib/agent/http";
+import { gatewayHeaders, gatewayUrl, requireAgentContext } from "@/lib/agent/http";
 import {
   deleteAgentThreadRecord,
   listAgentThreadsForUser,
@@ -8,13 +8,18 @@ import {
   updateAgentThreadStatus,
   type AgentThreadRecord,
 } from "@/lib/agent/thread-ownership";
-import { getAuthenticatedUserId } from "@/lib/auth/require-session";
+import type { EnterpriseContext } from "@/lib/enterprise/types";
+import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
+import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
 
 export async function POST(request: Request) {
-  const userId = await getAuthenticatedUserId(request);
-  if (!userId) {
-    return NextResponse.json({ error: "请先登录。" }, { status: 401 });
-  }
+  const access = await requireAgentContext(request, "thread.create");
+  if (!access.ok) return access.response;
+  const runnable = await requireAgentContext(request, "agent.run");
+  if (!runnable.ok) return runnable.response;
+  const context = access.context;
+  const rateLimited = await enforceEnterpriseRateLimit(context, "thread.create", 20, 60);
+  if (rateLimited) return rateLimited;
 
   const body = (await request.json().catch(() => null)) as { model?: unknown; title?: unknown } | null;
   if (!body || typeof body.model !== "string" || body.model.length > 128) {
@@ -25,7 +30,7 @@ export async function POST(request: Request) {
   try {
     const response = await fetch(gatewayUrl("/api/threads"), {
       method: "POST",
-      headers: gatewayHeaders({ "Content-Type": "application/json" }),
+      headers: gatewayHeaders({ "Content-Type": "application/json" }, context),
       body: JSON.stringify({
         model: body.model,
       }),
@@ -42,7 +47,7 @@ export async function POST(request: Request) {
     if (!threadId) {
       return NextResponse.json({ error: "Agent Gateway 未返回会话标识。" }, { status: 502 });
     }
-    await registerAgentThreadOwner(threadId, userId, title);
+    await registerAgentThreadOwner(threadId, context, title);
     return NextResponse.json(
       { result: { thread: { id: threadId } } },
       { headers: { "Cache-Control": "no-store" } },
@@ -53,13 +58,14 @@ export async function POST(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const userId = await getAuthenticatedUserId(request);
-  if (!userId) {
-    return NextResponse.json({ error: "请先登录。" }, { status: 401 });
-  }
+  const access = await requireAgentContext(request, "thread.read.own");
+  if (!access.ok) return access.response;
+  const context = access.context;
   try {
-    const threads = await listAgentThreadsForUser(userId);
-    await Promise.all(threads.filter((thread) => thread.status === "running").map((thread) => reconcileRunningThread(thread, userId)));
+    const threads = await listAgentThreadsForUser(context);
+    await Promise.all(
+      threads.filter((thread) => thread.status === "running").map((thread) => reconcileRunningThread(thread, context)),
+    );
     return NextResponse.json(
       { threads: threads.filter((thread) => thread.status !== "idle" || thread.title !== "__deleted__") },
       { headers: { "Cache-Control": "no-store" } },
@@ -69,10 +75,10 @@ export async function GET(request: Request) {
   }
 }
 
-async function reconcileRunningThread(thread: AgentThreadRecord, userId: string): Promise<void> {
+async function reconcileRunningThread(thread: AgentThreadRecord, context: EnterpriseContext): Promise<void> {
   try {
     const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(thread.threadId)}`), {
-      headers: gatewayHeaders(),
+      headers: gatewayHeaders(undefined, context),
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });
@@ -80,7 +86,7 @@ async function reconcileRunningThread(thread: AgentThreadRecord, userId: string)
     if (!response.ok || !payload) {
       const message = payload && typeof payload.error === "string" ? payload.error : "";
       if (/thread not found/i.test(message)) {
-        await deleteAgentThreadRecord(thread.threadId, userId);
+        await deleteAgentThreadRecord(thread.threadId, context);
         thread.title = "__deleted__";
         thread.status = "idle";
       }
@@ -99,7 +105,10 @@ async function reconcileRunningThread(thread: AgentThreadRecord, userId: string)
     thread.activeTurnId = status === "running" && typeof lastTurn.id === "string" ? lastTurn.id : null;
     thread.durationMs = durationMs;
     if (status !== "running") {
-      await updateAgentThreadStatus(thread.threadId, userId, status, durationMs);
+      await updateAgentThreadStatus(thread.threadId, context, status, durationMs);
+      if (typeof lastTurn.id === "string") {
+        await releaseAgentTurnLeaseForTurn(context, thread.threadId, lastTurn.id);
+      }
     }
   } catch {
     // Keep the last known running state; the next list poll will retry.

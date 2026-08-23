@@ -5,11 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "next dev -H 127.0.0.1 -p 3000",
-    "build": "NEXT_DIST_DIR=.next-build next build",
-    "start": "NEXT_DIST_DIR=.next-build next start -H 127.0.0.1 -p 3000",
+    "build": "node scripts/run-next.mjs build",
+    "start": "node scripts/run-next.mjs start -H 127.0.0.1 -p 3000",
     "check": "tsc --noEmit",
     "test": "vitest run",
-    "auth:migrate": "tsx scripts/migrate-auth.ts"
+    "auth:migrate": "tsx scripts/migrate-auth.ts",
+    "enterprise:bootstrap": "tsx scripts/bootstrap-enterprise.ts",
+    "enterprise:verify-isolation": "tsx scripts/verify-enterprise-isolation.ts",
+    "enterprise:reconcile-usage": "tsx scripts/reconcile-enterprise-usage.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",

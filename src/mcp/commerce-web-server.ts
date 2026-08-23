@@ -49,6 +49,15 @@ server.registerTool(
       return {
         content: [{ type: "text" as const, text: JSON.stringify(payload) }],
         structuredContent: payload,
+        _meta: {
+          commercePilotUsage: {
+            source: "commerce_web_mcp",
+            providerId: config.provider.id,
+            responseId: result.responseId,
+            model: result.model,
+            usage: result.usage,
+          },
+        },
       };
     } catch (error) {
       return {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -9,6 +9,7 @@ import {
   ArrowUp,
   BookOpen,
   Bot,
+  Building2,
   Check,
   CheckCircle2,
   ChevronDown,
@@ -171,7 +172,7 @@ const reasoningEffortOptions: Array<{
   { value: "ultra", label: "超高", color: "#4f46c8", gradientEnd: "#c64dde" },
 ];
 
-export function CommerceWorkbenchShell() {
+export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPublicRegistration: boolean }) {
   const [mode, setMode] = useState<WorkMode>("work");
   const [draft, setDraft] = useState("");
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
@@ -180,6 +181,8 @@ export function CommerceWorkbenchShell() {
   const [selectedModel, setSelectedModel] = useState("gpt-5.6-sol");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("low");
   const autoRestoreAttemptedRef = useRef(false);
+  const previousAuthUserIdRef = useRef<string | null | undefined>(undefined);
+  const queryClient = useQueryClient();
 
   const sessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -245,6 +248,20 @@ export function CommerceWorkbenchShell() {
   const navigationLocked = agentThread.status === "connecting" && !agentThread.threadId;
 
   useEffect(() => {
+    const currentUserId = authUser?.id ?? null;
+    if (
+      previousAuthUserIdRef.current !== undefined &&
+      previousAuthUserIdRef.current !== currentUserId
+    ) {
+      agentThread.resetThread();
+      autoRestoreAttemptedRef.current = false;
+      queryClient.removeQueries({ queryKey: ["agent-threads"] });
+      queryClient.removeQueries({ queryKey: ["provider-models"] });
+    }
+    previousAuthUserIdRef.current = currentUserId;
+  }, [agentThread.resetThread, authUser?.id, queryClient]);
+
+  useEffect(() => {
     if (!isAuthenticated) {
       autoRestoreAttemptedRef.current = false;
       return;
@@ -299,6 +316,8 @@ export function CommerceWorkbenchShell() {
   }
 
   async function logout() {
+    agentThread.resetThread();
+    autoRestoreAttemptedRef.current = false;
     await fetch("/api/account/logout", { method: "POST" });
     await sessionQuery.refetch();
   }
@@ -344,6 +363,7 @@ export function CommerceWorkbenchShell() {
             <TopAuthActions
               onOpenLogin={() => openAuthDialog("login")}
               onOpenRegister={() => openAuthDialog("register")}
+              allowPublicRegistration={allowPublicRegistration}
             />
           ) : null}
         </div>
@@ -432,6 +452,7 @@ export function CommerceWorkbenchShell() {
       {authDialogOpen ? (
         <AuthDialog
           initialMode={authDialogMode}
+          allowPublicRegistration={allowPublicRegistration}
           onClose={() => setAuthDialogOpen(false)}
           onAuthenticated={async () => {
             await sessionQuery.refetch();
@@ -1978,19 +1999,28 @@ function AuthenticatedSidebarFooter({ user, onLogout }: { user: AuthUser; onLogo
   const initial = user.name.trim().slice(0, 1).toUpperCase() || "用";
 
   return (
-    <div className="flex h-[52px] items-center gap-1 rounded-[var(--cp-radius-item)] px-2 hover:bg-[var(--cp-surface-hover)]">
-      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--cp-surface-hover)] text-sm font-medium text-[var(--cp-text)]">
-        {initial}
-      </span>
-      <span className="min-w-0 flex-1 text-left">
-        <span className="block truncate text-sm leading-5 text-[var(--cp-text)]">{user.name}</span>
-        <span className="block truncate text-xs leading-4 text-[var(--cp-text-muted)]">{user.displayIdentifier}</span>
-      </span>
-      <IconTooltip label="退出登录">
-        <Button type="button" variant="ghost" size="icon" className="size-8" aria-label="退出登录" onClick={onLogout}>
-          <LogOut className="size-4" strokeWidth={1.8} />
-        </Button>
-      </IconTooltip>
+    <div className="border-t border-[var(--cp-border-subtle)] pt-2">
+      <Link
+        href="/enterprise/admin"
+        className="mb-1 flex h-[var(--cp-sidebar-item-height)] items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-sm text-[var(--cp-text-soft)] transition-colors hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+      >
+        <Building2 className="size-[var(--cp-sidebar-icon-size)]" strokeWidth={1.8} />
+        <span className="truncate">企业管理</span>
+      </Link>
+      <div className="flex h-[52px] items-center gap-1 rounded-[var(--cp-radius-item)] px-2 hover:bg-[var(--cp-surface-hover)]">
+        <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--cp-surface-hover)] text-sm font-medium text-[var(--cp-text)]">
+          {initial}
+        </span>
+        <span className="min-w-0 flex-1 text-left">
+          <span className="block truncate text-sm leading-5 text-[var(--cp-text)]">{user.name}</span>
+          <span className="block truncate text-xs leading-4 text-[var(--cp-text-muted)]">{user.displayIdentifier}</span>
+        </span>
+        <IconTooltip label="退出登录">
+          <Button type="button" variant="ghost" size="icon" className="size-8" aria-label="退出登录" onClick={onLogout}>
+            <LogOut className="size-4" strokeWidth={1.8} />
+          </Button>
+        </IconTooltip>
+      </div>
     </div>
   );
 }
@@ -2026,24 +2056,35 @@ function MobileTopbar({
 function TopAuthActions({
   onOpenLogin,
   onOpenRegister,
+  allowPublicRegistration,
 }: {
   onOpenLogin: () => void;
   onOpenRegister: () => void;
+  allowPublicRegistration: boolean;
 }) {
   return (
     <div className="pointer-events-auto absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-2">
+      <Button asChild variant="ghost" size="md" className="h-10 rounded-full px-4">
+        <Link href="/enterprise">Enterprise</Link>
+      </Button>
       <Button type="button" size="md" className="h-10 rounded-full px-5" onClick={onOpenLogin}>
         登录
       </Button>
-      <Button
-        type="button"
-        variant="subtle"
-        size="md"
-        className="h-10 rounded-full bg-[var(--cp-surface)] px-5 shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_rgba(0,0,0,0.04)] hover:bg-[var(--cp-surface)] hover:shadow-[0_2px_8px_rgba(0,0,0,0.1),0_0_0_1px_rgba(0,0,0,0.05)]"
-        onClick={onOpenRegister}
-      >
-        免费注册
-      </Button>
+      {allowPublicRegistration ? (
+        <Button
+          type="button"
+          variant="subtle"
+          size="md"
+          className="h-10 rounded-full bg-[var(--cp-surface)] px-5 shadow-[0_1px_2px_rgba(0,0,0,0.08),0_0_0_1px_rgba(0,0,0,0.04)] hover:bg-[var(--cp-surface)] hover:shadow-[0_2px_8px_rgba(0,0,0,0.1),0_0_0_1px_rgba(0,0,0,0.05)]"
+          onClick={onOpenRegister}
+        >
+          本地注册
+        </Button>
+      ) : (
+        <Button asChild variant="subtle" size="md" className="h-10 rounded-full px-5">
+          <Link href="/enterprise#contact-sales">联系销售</Link>
+        </Button>
+      )}
     </div>
   );
 }
@@ -2052,7 +2093,12 @@ function UnauthenticatedSidebarFooter({ onOpenAuth }: { onOpenAuth: () => void }
   return (
     <div className="border-t border-[var(--cp-border-subtle)] pt-3">
       <div className="space-y-1">
-        <SidebarUtilityItem icon={Sparkles} label="查看套餐和定价" trailingIcon={ExternalLink} />
+        <SidebarUtilityItem
+          icon={Sparkles}
+          label="查看套餐和定价"
+          trailingIcon={ChevronRight}
+          href="/enterprise"
+        />
         <SidebarUtilityItem icon={Settings} label="设置" />
         <SidebarUtilityItem icon={HelpCircle} label="帮助" trailingIcon={ExternalLink} />
       </div>
@@ -2079,33 +2125,50 @@ function SidebarUtilityItem({
   icon: Icon,
   label,
   trailingIcon: TrailingIcon,
+  href,
 }: {
   icon: typeof Sparkles;
   label: string;
   trailingIcon?: typeof ExternalLink;
+  href?: string;
 }) {
-  return (
-    <button
-      type="button"
-      className="flex h-9 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-2 text-left text-sm text-[var(--cp-text-soft)] transition-colors hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-    >
+  const className =
+    "flex h-9 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-2 text-left text-sm text-[var(--cp-text-soft)] transition-colors hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]";
+  const content = (
+    <>
       <Icon className="size-4 shrink-0" strokeWidth={1.8} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {TrailingIcon ? <TrailingIcon className="size-3.5 shrink-0 text-[var(--cp-text-muted)]" strokeWidth={1.8} /> : null}
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link href={href} className={className}>
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <button type="button" className={className}>
+      {content}
     </button>
   );
 }
 
 function AuthDialog({
   initialMode,
+  allowPublicRegistration,
   onClose,
   onAuthenticated,
 }: {
   initialMode: AuthMode;
+  allowPublicRegistration: boolean;
   onClose: () => void;
   onAuthenticated: () => Promise<void>;
 }) {
-  const [authMode, setAuthMode] = useState<AuthMode>(initialMode);
+  const [authMode, setAuthMode] = useState<AuthMode>(allowPublicRegistration ? initialMode : "login");
   const [identifierType, setIdentifierType] = useState<AuthIdentifierType>("email");
   const [identifier, setIdentifier] = useState("");
   const [name, setName] = useState("");
@@ -2311,16 +2374,22 @@ function AuthDialog({
           </Button>
         </form>
 
-        <p className="mb-0 mt-5 text-sm text-[var(--cp-text-muted)]">
-          {authMode === "login" ? "还没有账号？" : "已经有账号？"}
-          <button
-            type="button"
-            className="ml-1 font-medium text-[var(--cp-text)] underline underline-offset-4"
-            onClick={() => switchAuthMode(authMode === "login" ? "register" : "login")}
-          >
-            {authMode === "login" ? "免费注册" : "登录"}
-          </button>
-        </p>
+        {allowPublicRegistration ? (
+          <p className="mb-0 mt-5 text-sm text-[var(--cp-text-muted)]">
+            {authMode === "login" ? "还没有本地测试账号？" : "已经有账号？"}
+            <button
+              type="button"
+              className="ml-1 font-medium text-[var(--cp-text)] underline underline-offset-4"
+              onClick={() => switchAuthMode(authMode === "login" ? "register" : "login")}
+            >
+              {authMode === "login" ? "本地注册" : "登录"}
+            </button>
+          </p>
+        ) : (
+          <p className="mb-0 mt-5 text-sm text-[var(--cp-text-muted)]">
+            新企业请先<Link href="/enterprise#contact-sales" className="ml-1 font-medium underline underline-offset-4">联系销售</Link>；成员请使用邀请链接创建账号。
+          </p>
+        )}
       </section>
     </div>
   );
@@ -2429,6 +2498,12 @@ function GuestComposer({
       >
         你能做什么？
       </button>
+      <Link
+        href="/enterprise"
+        className="mt-4 rounded-[var(--cp-radius-item)] px-2 py-1 text-sm text-[var(--cp-text-muted)] underline decoration-[var(--cp-border-strong)] underline-offset-4 hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+      >
+        了解 Enterprise
+      </Link>
     </div>
   );
 }

@@ -1,31 +1,30 @@
 import { NextResponse } from "next/server";
 
-import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl } from "@/lib/agent/http";
+import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
 import {
   deleteAgentThreadRecord,
   getAgentThreadForUser,
   updateAgentThreadTitle,
   updateAgentThreadStatus,
 } from "@/lib/agent/thread-ownership";
-import { getAuthenticatedUserId } from "@/lib/auth/require-session";
+import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
 
-export async function GET(request: Request, context: { params: Promise<{ threadId: string }> }) {
-  const userId = await getAuthenticatedUserId(request);
-  if (!userId) {
-    return NextResponse.json({ error: "请先登录。" }, { status: 401 });
-  }
-  const { threadId } = await context.params;
+export async function GET(request: Request, routeContext: { params: Promise<{ threadId: string }> }) {
+  const { threadId } = await routeContext.params;
   if (!AGENT_ID_PATTERN.test(threadId)) {
     return NextResponse.json({ error: "会话标识无效。" }, { status: 400 });
   }
-  const record = await getAgentThreadForUser(threadId, userId);
+  const access = await requireAgentThreadContext(request, threadId);
+  if (!access.ok) return access.response;
+  const enterpriseContext = access.context;
+  const record = await getAgentThreadForUser(threadId, enterpriseContext);
   if (!record) {
     return NextResponse.json({ error: "会话不存在。" }, { status: 404 });
   }
 
   try {
     const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(threadId)}`), {
-      headers: gatewayHeaders(),
+      headers: gatewayHeaders(undefined, enterpriseContext),
       cache: "no-store",
       signal: AbortSignal.timeout(30_000),
     });
@@ -34,7 +33,7 @@ export async function GET(request: Request, context: { params: Promise<{ threadI
       const upstreamMessage = payload && typeof payload.error === "string" ? payload.error : "";
       const status = /thread not found/i.test(upstreamMessage) ? 404 : response.status;
       if (status === 404) {
-        await deleteAgentThreadRecord(threadId, userId);
+        await deleteAgentThreadRecord(threadId, enterpriseContext);
       }
       return NextResponse.json(
         { error: status === 404 ? "该对话记录已不可恢复。" : "无法读取对话记录。" },
@@ -44,10 +43,22 @@ export async function GET(request: Request, context: { params: Promise<{ threadI
     const preview = readThreadPreview(payload);
     if (record.title === "新任务" && preview) {
       record.title = normalizeTitle(preview);
-      await updateAgentThreadTitle(threadId, userId, record.title);
+      await updateAgentThreadTitle(threadId, enterpriseContext, record.title);
     }
     const normalized = normalizeThreadHistory(payload, record);
-    await updateAgentThreadStatus(threadId, userId, normalized.thread.status, normalized.thread.durationMs);
+    await updateAgentThreadStatus(
+      threadId,
+      enterpriseContext,
+      normalized.thread.status,
+      normalized.thread.durationMs,
+    );
+    if (normalized.thread.status !== "running" && normalized.thread.lastTurnId) {
+      await releaseAgentTurnLeaseForTurn(
+        enterpriseContext,
+        threadId,
+        normalized.thread.lastTurnId,
+      );
+    }
     return NextResponse.json(normalized, {
       headers: { "Cache-Control": "no-store" },
     });

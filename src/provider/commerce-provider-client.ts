@@ -24,6 +24,7 @@ export type ProviderModelCatalog = {
 };
 
 export type GeneratedImage = {
+  responseId: string | null;
   model: string;
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   base64: string;
@@ -33,6 +34,7 @@ export type GeneratedImage = {
 };
 
 export type WebSearchResult = {
+  responseId: string | null;
   model: string;
   answer: string;
   sources: Array<{ url: string; title: string | null }>;
@@ -41,6 +43,7 @@ export type WebSearchResult = {
 
 type CachedCatalog = {
   expiresAt: number;
+  staleUntil: number;
   value: ProviderModelCatalog;
 };
 
@@ -66,7 +69,22 @@ export class CommerceProviderClient {
       return this.cache.value;
     }
 
-    const response = await this.request("models", { method: "GET" }, 15_000);
+    let response: Response | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        response = await this.request("models", { method: "GET" }, 15_000);
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableModelCatalogError(error) || attempt === 1) break;
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+    }
+    if (!response) {
+      if (!forceRefresh && this.cache && this.cache.staleUntil > Date.now()) return this.cache.value;
+      throw lastError;
+    }
     const payload = (await response.json().catch(() => null)) as unknown;
     const rows = readModelRows(payload);
     const models = rows.map((row) => normalizeModel(row, this.config.imageModel));
@@ -92,6 +110,7 @@ export class CommerceProviderClient {
 
     this.cache = {
       expiresAt: Date.now() + this.config.modelCacheTtlMs,
+      staleUntil: Date.now() + Math.max(10 * this.config.modelCacheTtlMs, 10 * 60_000),
       value: catalog,
     };
     return catalog;
@@ -135,6 +154,7 @@ export class CommerceProviderClient {
     }
 
     return {
+      responseId: typeof payload.id === "string" ? payload.id : null,
       model: input.model,
       mimeType: inferImageMimeType(payload.output_format),
       base64,
@@ -209,6 +229,7 @@ export class CommerceProviderClient {
       throw new CommerceProviderError("Web search provider returned no source URL.", 502);
     }
     return {
+      responseId: typeof payload.id === "string" ? payload.id : null,
       model: input.model,
       answer,
       sources: [...sources.values()].slice(0, 20),
@@ -255,6 +276,13 @@ export class CommerceProviderClient {
       clearTimeout(timeout);
     }
   }
+}
+
+function isRetryableModelCatalogError(error: unknown): boolean {
+  return (
+    error instanceof CommerceProviderError &&
+    (error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504)
+  );
 }
 
 export type ImageGenerationInput = {

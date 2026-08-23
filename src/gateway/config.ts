@@ -13,6 +13,12 @@ export type GatewayConfig = {
   maxTurnDurationMs: number;
   autoCompactThresholdPercent: number;
   compactionTimeoutMs: number;
+  agentEventSinkUrl?: string;
+  agentAuthorizationUrl?: string;
+  agentAdmissionUrl?: string;
+  authorizationPollMs: number;
+  maxAgentThreadsPerSession: number;
+  runtimeTenantId?: string;
   provider: CommerceProviderConfig;
   defaultModel?: string;
   defaultModelProvider?: string;
@@ -36,8 +42,27 @@ export function readGatewayConfig(): GatewayConfig {
   const provider = readCommerceProviderConfig();
   const codexHome = resolve(appRoot, process.env.CODEX_HOME || ".runtime/codex");
   const internalToken = emptyToUndefined(process.env.COMMERCE_GATEWAY_INTERNAL_TOKEN);
+  const agentEventSinkUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_EVENT_SINK_URL);
+  const agentAuthorizationUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_AUTHORIZATION_URL);
+  const agentAdmissionUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_ADMISSION_URL);
+  const runtimeTenantId = emptyToUndefined(process.env.COMMERCE_RUNTIME_TENANT_ID);
   if (process.env.NODE_ENV === "production" && (!internalToken || internalToken.length < 32)) {
     throw new Error("COMMERCE_GATEWAY_INTERNAL_TOKEN must contain at least 32 characters in production.");
+  }
+  if (process.env.NODE_ENV === "production" && !agentEventSinkUrl) {
+    throw new Error("COMMERCE_AGENT_EVENT_SINK_URL is required in production.");
+  }
+  if (process.env.NODE_ENV === "production" && !agentAuthorizationUrl) {
+    throw new Error("COMMERCE_AGENT_AUTHORIZATION_URL is required in production.");
+  }
+  if (process.env.NODE_ENV === "production" && !agentAdmissionUrl) {
+    throw new Error("COMMERCE_AGENT_ADMISSION_URL is required in production.");
+  }
+  if (runtimeTenantId && !isUuid(runtimeTenantId)) {
+    throw new Error("COMMERCE_RUNTIME_TENANT_ID must be a UUID.");
+  }
+  if (process.env.NODE_ENV === "production" && !runtimeTenantId) {
+    throw new Error("COMMERCE_RUNTIME_TENANT_ID is required for a dedicated production Gateway.");
   }
   return {
     host: process.env.COMMERCE_AGENT_HOST || "127.0.0.1",
@@ -58,6 +83,22 @@ export function readGatewayConfig(): GatewayConfig {
       process.env.COMMERCE_AGENT_COMPACTION_TIMEOUT_MS || "180000",
       "COMMERCE_AGENT_COMPACTION_TIMEOUT_MS",
     ),
+    agentEventSinkUrl,
+    agentAuthorizationUrl,
+    agentAdmissionUrl,
+    authorizationPollMs: parseBoundedInteger(
+      process.env.COMMERCE_AGENT_AUTHORIZATION_POLL_MS || "10000",
+      "COMMERCE_AGENT_AUTHORIZATION_POLL_MS",
+      5_000,
+      60_000,
+    ),
+    maxAgentThreadsPerSession: parseBoundedInteger(
+      process.env.COMMERCE_AGENT_MAX_THREADS_PER_SESSION || "4",
+      "COMMERCE_AGENT_MAX_THREADS_PER_SESSION",
+      1,
+      16,
+    ),
+    runtimeTenantId,
     provider,
     defaultModel: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL),
     defaultModelProvider: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL_PROVIDER) ?? provider.id,
@@ -139,6 +180,16 @@ function emptyToUndefined(value: string | undefined): string | undefined {
   return value && value.trim().length > 0 ? value.trim() : undefined;
 }
 
+function parseOptionalHttpUrl(value: string | undefined): string | undefined {
+  const normalized = emptyToUndefined(value);
+  if (!normalized) return undefined;
+  const url = new URL(normalized);
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("COMMERCE_AGENT_EVENT_SINK_URL must use HTTP or HTTPS.");
+  }
+  return url.toString();
+}
+
 function parseCsv(value: string): string[] {
   const values = value
     .split(",")
@@ -148,4 +199,8 @@ function parseCsv(value: string): string[] {
     throw new Error("COMMERCE_AGENT_MODEL_SELECTORS must contain at least one selector.");
   }
   return values;
+}
+
+function isUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 }

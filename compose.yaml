@@ -16,6 +16,7 @@ services:
       retries: 20
     volumes:
       - commerce-pilot-postgres-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
 
 volumes:
   commerce-pilot-postgres-data:

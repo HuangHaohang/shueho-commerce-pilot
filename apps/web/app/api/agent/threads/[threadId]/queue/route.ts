@@ -4,8 +4,9 @@ import {
   AGENT_ID_PATTERN,
   gatewayHeaders,
   gatewayUrl,
-  requireAgentThreadOwner,
+  requireAgentThreadContext,
 } from "@/lib/agent/http";
+import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
 
 export async function GET(request: Request, context: { params: Promise<{ threadId: string }> }) {
   return proxyQueueRequest(request, context, "GET");
@@ -24,23 +25,30 @@ async function proxyQueueRequest(
   if (!AGENT_ID_PATTERN.test(threadId)) {
     return NextResponse.json({ error: "会话标识无效。" }, { status: 400 });
   }
-  const unauthorized = await requireAgentThreadOwner(request, threadId);
-  if (unauthorized) {
-    return unauthorized;
-  }
+  const access = await requireAgentThreadContext(request, threadId, "queue.manage");
+  if (!access.ok) return access.response;
   let body: string | undefined;
   if (method === "POST") {
-    const payload = (await request.json().catch(() => null)) as { message?: unknown } | null;
+    const rateLimited = await enforceEnterpriseRateLimit(access.context, "queue.add", 120, 60);
+    if (rateLimited) return rateLimited;
+    const payload = (await request.json().catch(() => null)) as {
+      message?: unknown;
+      clientRequestId?: unknown;
+    } | null;
     const message = typeof payload?.message === "string" ? payload.message.trim() : "";
     if (!message || message.length > 50_000) {
       return NextResponse.json({ error: "排队消息长度必须在 1 到 50000 个字符之间。" }, { status: 400 });
     }
-    body = JSON.stringify({ message });
+    const clientRequestId =
+      typeof payload?.clientRequestId === "string" && /^[0-9a-f-]{36}$/i.test(payload.clientRequestId)
+        ? payload.clientRequestId
+        : crypto.randomUUID();
+    body = JSON.stringify({ message, clientRequestId });
   }
   try {
     const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(threadId)}/queue`), {
       method,
-      headers: gatewayHeaders(body ? { "Content-Type": "application/json" } : undefined),
+      headers: gatewayHeaders(body ? { "Content-Type": "application/json" } : undefined, access.context),
       body,
       cache: "no-store",
       signal: AbortSignal.timeout(30_000),

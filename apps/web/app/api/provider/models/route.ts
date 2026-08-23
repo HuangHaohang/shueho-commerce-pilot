@@ -1,19 +1,17 @@
 import { NextResponse } from "next/server";
 
-import { hasAuthenticatedSession } from "@/lib/auth/require-session";
-import { gatewayHeaders } from "@/lib/agent/http";
+import { gatewayHeaders, requireAgentContext } from "@/lib/agent/http";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  if (!(await hasAuthenticatedSession(request))) {
-    return NextResponse.json({ error: "请先登录。" }, { status: 401 });
-  }
+  const access = await requireAgentContext(request, "agent.run");
+  if (!access.ok) return access.response;
 
   const gatewayUrl = process.env.COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8787";
   try {
     const response = await fetch(new URL("/api/models", gatewayUrl), {
-      headers: gatewayHeaders(),
+      headers: gatewayHeaders(undefined, access.context),
       cache: "no-store",
       signal: AbortSignal.timeout(20_000),
     });
