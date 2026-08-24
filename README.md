@@ -208,6 +208,8 @@ The browser selects only the model. Provider identity and runtime policy remain 
 }
 ```
 
+Thread titles are generated after the first completed result by the dedicated `COMMERCE_TITLE_MODEL` (default `gpt-5.3-codex-spark`). The Gateway reads the authoritative App Server history, generates an outcome-oriented title through the configured provider, calls App Server `thread/name/set`, and updates the tenant-scoped thread index. The browser cannot submit a title or choose the title model. See [Commerce Thread Titles](./docs/architecture/commerce-thread-titles.md).
+
 The gateway exposes `gpt-image-2` only as the Codex-hosted `commerce_image.generate` tool; no direct image-generation HTTP route exists. Authenticated artifact reads still verify thread ownership. Generated files are stored under the tenant-owned `$CODEX_HOME/generated_images`, provider keys remain server-side, and image-provider usage is recorded separately.
 
 Generated-image artifact metadata is stored separately under `$CODEX_HOME/generated_image_metadata` and binds each immutable filename to its originating thread and turn. For installations that created images before this metadata existed, run `npm run backfill:image-artifacts` once before serving restored history.

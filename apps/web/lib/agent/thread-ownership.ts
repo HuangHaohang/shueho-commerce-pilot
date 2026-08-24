@@ -10,6 +10,9 @@ export type AgentThreadRecord = {
   activeTurnId: string | null;
   turnStartedAt: string | null;
   durationMs: number | null;
+  titleModel: string | null;
+  titleGeneratedAt: string | null;
+  recipeId: "copywriting" | null;
 };
 
 type AgentThreadRow = {
@@ -21,19 +24,23 @@ type AgentThreadRow = {
   active_turn_id: string | null;
   turn_started_at: Date | null;
   duration_ms: number | null;
+  title_model: string | null;
+  title_generated_at: Date | null;
+  recipe_id: "copywriting" | null;
 };
 
 export async function registerAgentThreadOwner(
   threadId: string,
   scope: EnterpriseScope,
   title: string,
+  recipeId: "copywriting" | null = null,
 ): Promise<void> {
   await withEnterpriseDatabaseContext(scope, async (client) => {
     const result = await client.query<{ created_by_user_id: string }>(
       `
         INSERT INTO commerce_agent_thread
-          (thread_id, user_id, created_by_user_id, tenant_id, workspace_id, title, updated_at, status)
-        VALUES ($1, $2, $2, $3, $4, $5, CURRENT_TIMESTAMP, 'idle')
+          (thread_id, user_id, created_by_user_id, tenant_id, workspace_id, title, recipe_id, updated_at, status)
+        VALUES ($1, $2, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, 'idle')
         ON CONFLICT (thread_id) DO UPDATE
         SET title = CASE
               WHEN commerce_agent_thread.tenant_id = EXCLUDED.tenant_id
@@ -44,10 +51,16 @@ export async function registerAgentThreadOwner(
               WHEN commerce_agent_thread.tenant_id = EXCLUDED.tenant_id
                AND commerce_agent_thread.workspace_id = EXCLUDED.workspace_id
                AND commerce_agent_thread.created_by_user_id = EXCLUDED.created_by_user_id
-              THEN CURRENT_TIMESTAMP ELSE commerce_agent_thread.updated_at END
+              THEN CURRENT_TIMESTAMP ELSE commerce_agent_thread.updated_at END,
+            recipe_id = CASE
+              WHEN commerce_agent_thread.tenant_id = EXCLUDED.tenant_id
+               AND commerce_agent_thread.workspace_id = EXCLUDED.workspace_id
+               AND commerce_agent_thread.created_by_user_id = EXCLUDED.created_by_user_id
+              THEN COALESCE(EXCLUDED.recipe_id, commerce_agent_thread.recipe_id)
+              ELSE commerce_agent_thread.recipe_id END
         RETURNING created_by_user_id
       `,
-      [threadId, scope.userId, scope.tenantId, scope.workspaceId, title],
+      [threadId, scope.userId, scope.tenantId, scope.workspaceId, title, recipeId],
     );
     if (result.rows[0]?.created_by_user_id !== scope.userId) {
       throw new Error("Agent thread is already bound to another enterprise principal.");
@@ -60,7 +73,8 @@ export async function listAgentThreadsForUser(scope: EnterpriseScope, limit = 50
     const result = await client.query<AgentThreadRow>(
       `
         SELECT thread_id, title, created_at, updated_at, status,
-               active_turn_id, turn_started_at, duration_ms
+               active_turn_id, turn_started_at, duration_ms,
+               title_model, title_generated_at, recipe_id
         FROM commerce_agent_thread
         WHERE tenant_id = $1 AND workspace_id = $2 AND created_by_user_id = $3
         ORDER BY updated_at DESC
@@ -80,7 +94,8 @@ export async function getAgentThreadForUser(
     const result = await client.query<AgentThreadRow>(
       `
         SELECT thread_id, title, created_at, updated_at, status,
-               active_turn_id, turn_started_at, duration_ms
+               active_turn_id, turn_started_at, duration_ms,
+               title_model, title_generated_at, recipe_id
         FROM commerce_agent_thread
         WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4
         LIMIT 1
@@ -110,6 +125,22 @@ export async function updateAgentThreadTitle(
     scope,
     "UPDATE commerce_agent_thread SET title = $5, updated_at = CURRENT_TIMESTAMP",
     [title],
+  );
+}
+
+export async function updateAgentThreadGeneratedTitle(
+  threadId: string,
+  scope: EnterpriseScope,
+  title: string,
+  model: string,
+): Promise<void> {
+  await updateOwnedThread(
+    threadId,
+    scope,
+    `UPDATE commerce_agent_thread
+     SET title = $5, title_model = $6, title_generated_at = CURRENT_TIMESTAMP,
+         updated_at = CURRENT_TIMESTAMP`,
+    [title, model],
   );
 }
 
@@ -221,5 +252,8 @@ function toAgentThreadRecord(row: AgentThreadRow): AgentThreadRecord {
     activeTurnId: row.active_turn_id,
     turnStartedAt: row.turn_started_at?.toISOString() ?? null,
     durationMs: row.duration_ms,
+    titleModel: row.title_model,
+    titleGeneratedAt: row.title_generated_at?.toISOString() ?? null,
+    recipeId: row.recipe_id,
   };
 }

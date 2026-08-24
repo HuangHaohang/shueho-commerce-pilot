@@ -92,6 +92,16 @@ The UI catalog is discovery-based but intentionally curated. `COMMERCE_AGENT_MOD
 
 This prevents an upstream catalog expansion from silently exposing unsupported models while avoiding a hardcoded frontend list.
 
+## Thread Title Generation
+
+Conversation and Task Recipe titles use a separate utility model:
+
+```bash
+COMMERCE_TITLE_MODEL=gpt-5.3-codex-spark
+```
+
+The model id is not added to the end-user model selector. Gateway verifies the exact id against `/models`, calls `/responses` with low reasoning and a fixed title JSON schema, and never falls back to the active conversation model. Title generation is asynchronous after the first completed result and is recorded as `title_generation` usage.
+
 ## Image Generation
 
 The app-owned Codex runtime synchronizes the built-in `imagegen` system skill and enables `features.image_generation`. Third-party App Server clients do not automatically receive the first-party image executor, so Commerce Pilot supplies a host dynamic tool through the harness `dynamicTools` and `item/tool/call` protocol:

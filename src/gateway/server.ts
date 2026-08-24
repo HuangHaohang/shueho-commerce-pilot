@@ -264,6 +264,7 @@ const server = createServer(async (req, res) => {
           id: config.provider.id,
           configured: Boolean(config.provider.apiKey),
           imageModel: config.provider.imageModel,
+          titleModel: config.titleModel,
           wireApi: "responses",
         },
         managedMcp: managedMcpState,
@@ -416,6 +417,46 @@ const server = createServer(async (req, res) => {
       const result = await readThreadWithStartupRetry(threadId, true);
       const generatedImageArtifacts = await generatedImages.listForThread(threadId);
       sendJson(res, 200, { result, generatedImages: generatedImageArtifacts });
+      return;
+    }
+
+    const threadTitleMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/title$/);
+    if (req.method === "POST" && threadTitleMatch) {
+      const threadId = decodeURIComponent(threadTitleMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId, config.titleModel);
+      await ensureThreadLoaded(threadId);
+      const result = await readThreadWithStartupRetry(threadId, true);
+      const titleContext = readThreadTitleContext(result);
+      if (!titleContext) {
+        sendJson(res, 409, { error: "Thread has no completed result for title generation." });
+        return;
+      }
+      const generated = await provider.generateThreadTitle({
+        model: config.titleModel,
+        userText: titleContext.userText,
+        assistantText: titleContext.assistantText,
+      });
+      await codex.request("thread/name/set", { threadId, name: generated.title });
+      const scope = threadScopes.get(threadId);
+      if (scope) {
+        await enqueueAgentEvent(
+          createProviderUsageEvent({
+            scope,
+            source: "title_generation",
+            responseId: generated.responseId ?? `title-${randomUUID()}`,
+            threadId,
+            turnId: titleContext.turnId,
+            model: generated.model,
+            usage: generated.usage,
+            occurredAt: new Date().toISOString(),
+          }),
+        );
+      }
+      sendJson(res, 200, { title: generated.title, model: generated.model });
       return;
     }
 
@@ -1115,6 +1156,43 @@ function readResultThreadId(result: unknown): string | null {
     return null;
   }
   return typeof result.thread.id === "string" ? result.thread.id : null;
+}
+
+function readThreadTitleContext(result: unknown): {
+  userText: string;
+  assistantText: string;
+  turnId: string;
+} | null {
+  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) return null;
+  let userText = "";
+  let assistantText = "";
+  let assistantTurnId = "";
+  for (const turn of result.thread.turns.filter(isRecord)) {
+    const turnId = typeof turn.id === "string" ? turn.id : "";
+    const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+    for (const item of items) {
+      if (item.type === "userMessage" && !userText && Array.isArray(item.content)) {
+        userText = item.content
+          .filter(isRecord)
+          .filter((content) => content.type === "text" && typeof content.text === "string")
+          .map((content) => content.text as string)
+          .join("\n")
+          .trim();
+      }
+      if (
+        item.type === "agentMessage" &&
+        typeof item.text === "string" &&
+        item.text.trim() &&
+        item.phase !== "commentary"
+      ) {
+        assistantText = item.text.trim();
+        assistantTurnId = turnId;
+      }
+    }
+  }
+  return userText && assistantText && assistantTurnId
+    ? { userText, assistantText, turnId: assistantTurnId }
+    : null;
 }
 
 async function readHarnessActiveTurnId(threadId: string): Promise<string | null> {
@@ -1868,7 +1946,7 @@ function readManagedMcpProviderUsageEvent(
 
 function createProviderUsageEvent(input: {
   scope: RuntimeScope;
-  source: "commerce_web_mcp" | "commerce_web_tool" | "commerce_image_tool";
+  source: "commerce_web_mcp" | "commerce_web_tool" | "commerce_image_tool" | "title_generation";
   responseId: string;
   threadId: string;
   turnId: string;

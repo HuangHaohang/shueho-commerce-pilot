@@ -83,7 +83,6 @@ export type PendingRequestUserInput = {
 };
 
 export type AgentSubmitOptions = {
-  title?: string;
   workflow?: "commerce-copywriting";
 };
 
@@ -96,6 +95,7 @@ export type AgentThreadSummary = {
   activeTurnId: string | null;
   turnStartedAt: string | null;
   durationMs: number | null;
+  recipeId: "copywriting" | null;
 };
 
 type StoredThreadResponse = {
@@ -106,6 +106,7 @@ type StoredThreadResponse = {
     status: "running" | "completed" | "interrupted" | "failed";
     durationMs: number | null;
     startedAt: string | null;
+    recipeId: "copywriting" | null;
   };
   messages: ConversationMessage[];
   activities: AgentActivity[];
@@ -154,6 +155,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const pendingSteerRequestsRef = useRef(new Map<string, QueuedMessage>());
   const committedUserMessageClientIdsRef = useRef(new Set<string>());
   const threadReconcileInFlightRef = useRef(false);
+  const titleGenerationAttemptRef = useRef(new Set<string>());
 
   const refreshQueue = useCallback(async (id: string): Promise<void> => {
     try {
@@ -738,7 +740,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setLastTurnId(null);
       const optimisticMessageId = `user-${crypto.randomUUID()}`;
       const clientRequestId = crypto.randomUUID();
-      const requestedTitle = options?.title?.trim().slice(0, 80) || createThreadTitle(message);
+      const requestedTitle = "新任务";
       setMessages((current) => [
         ...current,
         {
@@ -760,7 +762,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           const response = await fetch("/api/agent/threads", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, title: requestedTitle }),
+            body: JSON.stringify({
+              model,
+              title: requestedTitle,
+              recipeId: options?.workflow === "commerce-copywriting" ? "copywriting" : null,
+            }),
           });
           const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
           currentThreadId = readThreadId(payload);
@@ -785,7 +791,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             const createResponse = await fetch("/api/agent/threads", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model, title: requestedTitle }),
+              body: JSON.stringify({
+                model,
+                title: requestedTitle,
+                recipeId: options?.workflow === "commerce-copywriting" ? "copywriting" : null,
+              }),
             });
             const createPayload = (await createResponse.json().catch(() => null)) as Record<string, unknown> | null;
             const replacementThreadId = readThreadId(createPayload);
@@ -1143,6 +1153,28 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     const timeout = window.setTimeout(expire, remainingMs);
     return () => window.clearTimeout(timeout);
   }, [activeTurnId, failActiveTurn, runtimeHealth?.maxTurnDurationMs, startedAt, status, threadId]);
+
+  useEffect(() => {
+    if (status !== "completed" || !threadId || !lastTurnId || titleGenerationAttemptRef.current.has(threadId)) {
+      return;
+    }
+    titleGenerationAttemptRef.current.add(threadId);
+    void (async () => {
+      try {
+        const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/title`, {
+          method: "POST",
+        });
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok || !payload || typeof payload.title !== "string") {
+          titleGenerationAttemptRef.current.delete(threadId);
+          return;
+        }
+        setThreadTitle(payload.title);
+      } catch {
+        titleGenerationAttemptRef.current.delete(threadId);
+      }
+    })();
+  }, [lastTurnId, status, threadId]);
 
   useEffect(() => {
     return () => {
@@ -1508,10 +1540,6 @@ function parseObject(value: string): Record<string, unknown> | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function createThreadTitle(message: string): string {
-  return message.length > 18 ? `${message.slice(0, 18)}…` : message;
 }
 
 function compactText(value: string): string {

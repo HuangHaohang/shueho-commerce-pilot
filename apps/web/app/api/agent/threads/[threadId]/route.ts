@@ -4,7 +4,6 @@ import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext
 import {
   deleteAgentThreadRecord,
   getAgentThreadForUser,
-  updateAgentThreadTitle,
   updateAgentThreadStatus,
 } from "@/lib/agent/thread-ownership";
 import { readWebSourcesFromToolItem } from "@/lib/agent/web-sources";
@@ -40,11 +39,6 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
         { error: status === 404 ? "该对话记录已不可恢复。" : "无法读取对话记录。" },
         { status },
       );
-    }
-    const preview = readThreadPreview(payload);
-    if (record.title === "新任务" && preview) {
-      record.title = normalizeTitle(preview);
-      await updateAgentThreadTitle(threadId, enterpriseContext, record.title);
     }
     const normalized = normalizeThreadHistory(payload, record);
     await updateAgentThreadStatus(
@@ -161,6 +155,7 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
         lastTurn && typeof lastTurn.startedAt === "number"
           ? new Date(lastTurn.startedAt * 1000).toISOString()
           : null,
+      recipeId: record?.recipeId ?? null,
     },
     messages,
     activities,
@@ -248,17 +243,6 @@ function normalizeStatus(value: string): "running" | "completed" | "interrupted"
       : value === "interrupted"
         ? "interrupted"
         : "completed";
-}
-
-function readThreadPreview(payload: Record<string, unknown>): string | null {
-  const result = isRecord(payload.result) ? payload.result : null;
-  const thread = result && isRecord(result.thread) ? result.thread : null;
-  return thread && typeof thread.preview === "string" && thread.preview.trim() ? thread.preview.trim() : null;
-}
-
-function normalizeTitle(value: string): string {
-  const title = value.replace(/\s+/g, " ").trim();
-  return title.length > 40 ? `${title.slice(0, 40)}…` : title;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

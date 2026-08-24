@@ -333,7 +333,7 @@ export function CommerceWorkbenchShell({
     if (agentThread.threadId) {
       void threadsQuery.refetch();
     }
-  }, [agentThread.status, agentThread.threadId]);
+  }, [agentThread.status, agentThread.threadId, agentThread.threadTitle]);
 
   async function submitDraft() {
     const value = draft.trim();
@@ -412,7 +412,6 @@ export function CommerceWorkbenchShell({
 
   async function executeCopywritingRecipe(goal: string, answerSummary: string) {
     await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal, answerSummary), {
-      title: `文案任务 · ${goal.trim().slice(0, 28)}`,
       workflow: "commerce-copywriting",
     });
   }
@@ -613,7 +612,11 @@ export function CommerceWorkbenchShell({
 }
 
 function isCopywritingThread(thread: AgentThreadSummary): boolean {
-  return thread.title.startsWith("文案生成 ·") || thread.title.startsWith("文案任务 ·");
+  return (
+    thread.recipeId === "copywriting" ||
+    thread.title.startsWith("文案生成 ·") ||
+    thread.title.startsWith("文案任务 ·")
+  );
 }
 
 function ComplianceFooter() {

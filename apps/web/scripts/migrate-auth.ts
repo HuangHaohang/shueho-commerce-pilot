@@ -131,6 +131,14 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260823_011_usage_reconciliation_and_role_cleanup",
       path: resolve(process.cwd(), "migrations/011_usage_reconciliation_and_role_cleanup.sql"),
     },
+    {
+      version: "20260824_012_model_generated_thread_titles",
+      path: resolve(process.cwd(), "migrations/012_model_generated_thread_titles.sql"),
+    },
+    {
+      version: "20260824_013_task_recipe_metadata",
+      path: resolve(process.cwd(), "migrations/013_task_recipe_metadata.sql"),
+    },
   ];
 
   for (const migration of migrations) {

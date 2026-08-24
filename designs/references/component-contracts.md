@@ -59,6 +59,8 @@
 - 弹出菜单使用 `--cp-radius-popover`、轻边框和 `--cp-shadow-popover`，并提供 `aria-expanded`、`aria-haspopup` 与 menu roles。
 - 点击菜单外、按 `Escape` 或选择菜单项时关闭弹出菜单。
 - 登录用户的“最近”列表来自服务端 thread 索引并按更新时间倒序显示；选中项映射到真实 Codex thread id。
+- 所有普通对话和 Task Recipe 的显示标题必须在首个结果完成后由服务端固定的 `gpt-5.3-codex-spark` 生成；前端截断原始 prompt 只能显示临时“新任务”，不得持久化为最终标题。生成结果同步写入 App Server `thread/name/set` 与租户线程索引。
+- Task Recipe 身份使用独立 `recipeId` 元数据，不能从模型生成标题或标题前缀推断。
 - Account footer 中的“企业管理”必须由受认证的 Enterprise context 权限结果控制，默认隐藏。无 tenant/workspace、context 请求失败、空角色，或仅有 Agent 运行权限时不得渲染；只有具备企业后台可读或可管理权限时才显示。前端隐藏不是授权边界，`/enterprise/admin` 及其 API 仍必须独立执行服务端权限检查。
 - Enterprise 管理桌面壳固定为一屏高度，侧栏不参与内容滚动；仅主内容区允许纵向滚动并使用 `overscroll-contain` 阻止滚动链传递。滚动内容中的 `sr-only`、弹出层和绝对定位控件必须有局部定位上下文，不得扩大浏览器根页面的滚动范围。
 - “新任务”必须清除当前客户端 thread/SSE 状态并返回空白 composer，但不得删除历史记录；活动 turn 期间暂时禁用，避免遗失运行状态。

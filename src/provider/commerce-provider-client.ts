@@ -41,6 +41,13 @@ export type WebSearchResult = {
   usage: unknown;
 };
 
+export type GeneratedThreadTitle = {
+  responseId: string | null;
+  model: string;
+  title: string;
+  usage: unknown;
+};
+
 type CachedCatalog = {
   expiresAt: number;
   staleUntil: number;
@@ -61,6 +68,7 @@ export class CommerceProviderError extends Error {
 
 export class CommerceProviderClient {
   private cache?: CachedCatalog;
+  private availableModelIds = new Set<string>();
 
   constructor(private readonly config: CommerceProviderConfig) {}
 
@@ -88,6 +96,7 @@ export class CommerceProviderClient {
     const payload = (await response.json().catch(() => null)) as unknown;
     const rows = readModelRows(payload);
     const models = rows.map((row) => normalizeModel(row, this.config.imageModel));
+    this.availableModelIds = new Set(models.map((model) => model.id));
     const catalog: ProviderModelCatalog = {
       provider: {
         id: this.config.id,
@@ -121,6 +130,84 @@ export class CommerceProviderClient {
     if (!catalog.agentModels.some((model) => model.id === modelId)) {
       throw new CommerceProviderError(`Model ${modelId} is not an available agent model.`, 400);
     }
+  }
+
+  async assertModelAvailable(modelId: string): Promise<void> {
+    await this.listModels();
+    if (!this.availableModelIds.has(modelId)) {
+      throw new CommerceProviderError(`Model ${modelId} is not available from the provider.`, 503);
+    }
+  }
+
+  async generateThreadTitle(input: {
+    model: string;
+    userText: string;
+    assistantText: string;
+  }): Promise<GeneratedThreadTitle> {
+    await this.assertModelAvailable(input.model);
+    const response = await this.request(
+      "responses",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: input.model,
+          input: [
+            {
+              role: "developer",
+              content: [
+                {
+                  type: "input_text",
+                  text: [
+                    "Generate one concise Chinese task title from the user's goal and the completed result.",
+                    "The title must describe the business object and outcome, not the conversation mechanics.",
+                    "Use 8-24 Chinese characters when possible. Do not use prefixes such as 任务、对话、文案生成、帮我、请帮我.",
+                    "Do not add quotation marks, punctuation at the end, emoji, model names, or technical terms.",
+                  ].join(" "),
+                },
+              ],
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `用户目标：${input.userText.slice(0, 4_000)}\n\n完成结果：${input.assistantText.slice(0, 4_000)}`,
+                },
+              ],
+            },
+          ],
+          reasoning: { effort: "low" },
+          max_output_tokens: 80,
+          text: {
+            format: {
+              type: "json_schema",
+              name: "thread_title",
+              strict: true,
+              schema: {
+                type: "object",
+                properties: { title: { type: "string" } },
+                required: ["title"],
+                additionalProperties: false,
+              },
+            },
+          },
+          stream: false,
+        }),
+      },
+      30_000,
+    );
+    const payload = (await response.json()) as unknown;
+    if (!isRecord(payload)) throw new CommerceProviderError("Title provider returned an invalid response.");
+    const outputText = readResponseOutputText(payload.output);
+    const title = normalizeGeneratedTitle(outputText);
+    if (!title) throw new CommerceProviderError("Title provider returned no usable title.");
+    return {
+      responseId: typeof payload.id === "string" ? payload.id : null,
+      model: input.model,
+      title,
+      usage: payload.usage ?? null,
+    };
   }
 
   async generateImage(input: ImageGenerationInput): Promise<GeneratedImage> {
@@ -387,6 +474,38 @@ function collectSearchSources(
       sources.set(url, { url, title: typeof source.title === "string" ? source.title : null });
     }
   }
+}
+
+function readResponseOutputText(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  const parts: string[] = [];
+  for (const output of value.filter(isRecord)) {
+    if (output.type !== "message" || !Array.isArray(output.content)) continue;
+    for (const content of output.content.filter(isRecord)) {
+      if (content.type === "output_text" && typeof content.text === "string") parts.push(content.text);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function normalizeGeneratedTitle(value: string): string {
+  let title = value.trim();
+  try {
+    const parsed = JSON.parse(title) as unknown;
+    if (isRecord(parsed) && typeof parsed.title === "string") title = parsed.title;
+  } catch {
+    // Compatibility with providers that return the schema content as plain text.
+  }
+  title = title
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "")
+    .replace(/^(标题|任务标题|对话标题)\s*[：:]\s*/i, "")
+    .replace(/^["'“”‘’]+|["'“”‘’]+$/g, "")
+    .replace(/[。！？!?；;，,：:]$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const characters = Array.from(title);
+  return characters.length > 32 ? `${characters.slice(0, 32).join("")}…` : title;
 }
 
 function isHttpUrl(value: string): boolean {

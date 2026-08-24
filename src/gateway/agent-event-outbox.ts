@@ -21,7 +21,7 @@ type AgentEventBase = Omit<RuntimeScope, "model"> & {
 
 export type UsageCompletedEvent = AgentEventBase & {
   kind: "usage.response.completed";
-  source?: "codex_harness" | "commerce_web_mcp" | "commerce_web_tool" | "commerce_image_tool";
+  source?: "codex_harness" | "commerce_web_mcp" | "commerce_web_tool" | "commerce_image_tool" | "title_generation";
   responseId: string;
   providerId: string;
   requestedModel?: string | null;

@@ -21,7 +21,7 @@ const scopeSchema = z.object({
 export const usageEventSchema = scopeSchema.extend({
   kind: z.literal("usage.response.completed"),
   source: z
-    .enum(["codex_harness", "commerce_web_mcp", "commerce_web_tool", "commerce_image_tool"])
+    .enum(["codex_harness", "commerce_web_mcp", "commerce_web_tool", "commerce_image_tool", "title_generation"])
     .default("codex_harness"),
   eventId: z.string().min(1).max(512),
   responseId: z.string().min(1).max(255),

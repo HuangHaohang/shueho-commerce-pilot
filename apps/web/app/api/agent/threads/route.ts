@@ -21,11 +21,15 @@ export async function POST(request: Request) {
   const rateLimited = await enforceEnterpriseRateLimit(context, "thread.create", 20, 60);
   if (rateLimited) return rateLimited;
 
-  const body = (await request.json().catch(() => null)) as { model?: unknown; title?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as { model?: unknown; recipeId?: unknown } | null;
   if (!body || typeof body.model !== "string" || body.model.length > 128) {
     return NextResponse.json({ error: "请选择有效模型。" }, { status: 400 });
   }
-  const title = typeof body.title === "string" ? normalizeThreadTitle(body.title) : "新任务";
+  const title = "新任务";
+  const recipeId = body.recipeId === "copywriting" ? "copywriting" : null;
+  if (body.recipeId !== undefined && body.recipeId !== null && !recipeId) {
+    return NextResponse.json({ error: "任务类型无效。" }, { status: 400 });
+  }
 
   try {
     const response = await fetch(gatewayUrl("/api/threads"), {
@@ -47,7 +51,7 @@ export async function POST(request: Request) {
     if (!threadId) {
       return NextResponse.json({ error: "Agent Gateway 未返回会话标识。" }, { status: 502 });
     }
-    await registerAgentThreadOwner(threadId, context, title);
+    await registerAgentThreadOwner(threadId, context, title, recipeId);
     return NextResponse.json(
       { result: { thread: { id: threadId } } },
       { headers: { "Cache-Control": "no-store" } },
@@ -127,12 +131,4 @@ function normalizeRuntimeStatus(value: string): AgentThreadRecord["status"] {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalizeThreadTitle(value: string): string {
-  const title = value.replace(/\s+/g, " ").trim();
-  if (!title) {
-    return "新任务";
-  }
-  return title.length > 40 ? `${title.slice(0, 40)}…` : title;
 }

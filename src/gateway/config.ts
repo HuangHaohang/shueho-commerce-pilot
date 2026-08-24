@@ -22,6 +22,7 @@ export type GatewayConfig = {
   provider: CommerceProviderConfig;
   defaultModel?: string;
   defaultModelProvider?: string;
+  titleModel: string;
 };
 
 export type CommerceProviderConfig = {
@@ -102,6 +103,7 @@ export function readGatewayConfig(): GatewayConfig {
     provider,
     defaultModel: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL),
     defaultModelProvider: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL_PROVIDER) ?? provider.id,
+    titleModel: process.env.COMMERCE_TITLE_MODEL?.trim() || "gpt-5.3-codex-spark",
   };
 }
 
