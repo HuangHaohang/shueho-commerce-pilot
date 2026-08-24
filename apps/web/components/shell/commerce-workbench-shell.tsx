@@ -641,7 +641,15 @@ function ConversationWorkspace({
     ...imagesAfterStatus.map((image) => ({ type: "image" as const, sequence: image.sequence, image })),
     ...(running && latestCurrentActivity
       ? [{ type: "activity" as const, sequence: latestCurrentActivity.sequence, activity: latestCurrentActivity }]
-      : []),
+      : !running && currentActivities.length > 0
+        ? [
+            {
+              type: "activityDisclosure" as const,
+              sequence: Math.min(...currentActivities.map((activity) => activity.sequence)),
+              activities: currentActivities,
+            },
+          ]
+        : []),
   ].sort((left, right) => left.sequence - right.sequence);
 
   const updateMinimap = useCallback(() => {
@@ -826,18 +834,19 @@ function ConversationWorkspace({
                     <ConversationTimelineMessage key={entry.message.id} message={entry.message} />
                   ) : entry.type === "image" ? (
                     <GeneratedImageCard key={entry.image.id} image={entry.image} />
-                  ) : (
+                  ) : entry.type === "activity" ? (
                     <ActivityRow key="current-turn-activity" activity={entry.activity} />
+                  ) : (
+                    <ActivityDisclosure
+                      key={`activity-disclosure-${currentTurnId ?? "completed"}`}
+                      activities={entry.activities}
+                    />
                   ),
                 )}
               </div>
             ) : null}
             {pendingSteers.length > 0 ? <PendingSteerPreview messages={pendingSteers} /> : null}
           </div>
-
-          {!running && currentActivities.length > 0 ? (
-            <ActivityDisclosure key={currentTurnId} activities={currentActivities} />
-          ) : null}
 
           {error ? (
             <div className="mt-6 rounded-[var(--cp-radius-item)] bg-[var(--cp-danger-bg)] px-4 py-3 text-sm text-[var(--cp-danger)]" role="alert">

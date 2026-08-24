@@ -121,6 +121,8 @@ let managedMcpState: ManagedMcpRuntimeState = {
   error: null,
 };
 let managedMcpReadyPromise: Promise<void> | null = null;
+const managedMcpReadyThreadIds = new Set<string>();
+const managedMcpThreadReadyPromises = new Map<string, Promise<void>>();
 let agentEventFlushPromise: Promise<void> | null = null;
 let agentEventRetryTimer: NodeJS.Timeout | null = null;
 let runtimeAuthorizationTimer: NodeJS.Timeout | null = null;
@@ -161,6 +163,8 @@ codex.on("event", (event: AppServerEvent) => {
     turnModels.clear();
     threadOperations.clear();
     managedMcpReadyPromise = null;
+    managedMcpReadyThreadIds.clear();
+    managedMcpThreadReadyPromises.clear();
     managedMcpState = {
       state: "unknown",
       available: false,
@@ -349,6 +353,7 @@ const server = createServer(async (req, res) => {
       const startedThreadId = readResultThreadId(result);
       if (startedThreadId) {
         loadedThreadIds.add(startedThreadId);
+        managedMcpReadyThreadIds.add(startedThreadId);
         if (requestedScope) {
           threadScopes.set(startedThreadId, {
             ...requestedScope,
@@ -718,6 +723,17 @@ async function shutdown(): Promise<void> {
 }
 
 function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notification" }>): void {
+  if (event.method === "mcpServer/startupStatus/updated") {
+    const params = isRecord(event.params) ? event.params : {};
+    if (
+      params.name === "commerce_web" &&
+      typeof params.threadId === "string" &&
+      params.status !== "ready"
+    ) {
+      managedMcpReadyThreadIds.delete(params.threadId);
+    }
+    return;
+  }
   if (event.method === "thread/started") {
     inheritSubagentRuntimeScope(event.params);
     return;
@@ -1454,6 +1470,7 @@ function isNoActiveInterruptError(error: unknown): boolean {
 async function ensureThreadLoaded(threadId: string, model?: string): Promise<void> {
   await ensureCommerceWebMcpReady();
   if (loadedThreadIds.has(threadId)) {
+    await ensureCommerceWebMcpReadyForThread(threadId);
     return;
   }
   await codex.request("thread/resume", {
@@ -1469,12 +1486,46 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
     excludeTurns: true,
   });
   loadedThreadIds.add(threadId);
+  await ensureCommerceWebMcpReadyForThread(threadId);
   if (readPendingSteers(threadId).length > 0) {
     // A restarted Gateway may restore application-authorized input to the
     // durable queue, but it must not start billable work without a fresh BFF
     // quota lease.
     await serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, undefined, false));
   }
+}
+
+async function ensureCommerceWebMcpReadyForThread(threadId: string): Promise<void> {
+  if (managedMcpReadyThreadIds.has(threadId)) return;
+  const existing = managedMcpThreadReadyPromises.get(threadId);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    // App Server reload refreshes already-loaded threads. A global-ready MCP
+    // catalog alone does not prove that a resumed thread received the tool.
+    await codex.request("config/mcpServer/reload", {}, 30_000);
+    const deadline = Date.now() + 20_000;
+    let lastStatus = readManagedMcpStatus(null, "commerce_web");
+    while (Date.now() < deadline) {
+      const result = await codex.request(
+        "mcpServerStatus/list",
+        { threadId, cursor: null, limit: 100, detail: "toolsAndAuthOnly" },
+        30_000,
+      );
+      lastStatus = readManagedMcpStatus(result, "commerce_web");
+      if (lastStatus.available && lastStatus.tools.includes("search")) {
+        managedMcpReadyThreadIds.add(threadId);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new GatewayRequestError(
+      `Thread ${threadId} did not receive required MCP tool commerce_web.search; discovered tools: ${lastStatus.tools.join(", ") || "none"}.`,
+      503,
+    );
+  })().finally(() => managedMcpThreadReadyPromises.delete(threadId));
+  managedMcpThreadReadyPromises.set(threadId, promise);
+  return promise;
 }
 
 async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
@@ -1486,6 +1537,7 @@ async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
   }
 
   managedMcpReadyPromise = (async () => {
+    if (forceReload) managedMcpReadyThreadIds.clear();
     managedMcpState = {
       ...managedMcpState,
       state: "loading",

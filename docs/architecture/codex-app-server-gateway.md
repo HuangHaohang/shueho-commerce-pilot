@@ -71,6 +71,8 @@ Browser input, tenant files, project-local `.codex`, plugins, and user uploads m
 
 Interactive turns have a server-enforced deadline (`COMMERCE_AGENT_MAX_TURN_DURATION_MS`, default 10 minutes). Long-running commerce work must use an application tool that creates a background job and returns a tenant-scoped job id; it must not keep an interactive App Server turn open indefinitely.
 
+Managed MCP readiness has two levels. Global `mcpServerStatus/list` proves that App Server discovered the required server, while resumed persisted threads must be verified separately with `mcpServerStatus/list.threadId`. After `thread/resume`, Gateway invokes `config/mcpServer/reload`, waits until that exact thread exposes `commerce_web.search`, and fails the turn start with `503` if it does not. App Server process exit and per-thread MCP startup failures invalidate this cache. This follows the App Server contract that reload queues refreshes for loaded threads; a global-ready catalog must never be treated as proof that an older thread received a newly configured MCP tool.
+
 ## Enterprise Runtime Scope
 
 The authenticated BFF resolves the customer's organization and its one-to-one tenant, then derives tenant, workspace, and user ids from the session and active memberships. Organization is a commercial/control-plane identity; the tenant id is the runtime security selector forwarded over the authenticated internal service connection. These values are not accepted from browser input. Gateway requires tenant, workspace, and user, binds every loaded root thread to that scope, rejects scope changes as `404`, and propagates the root scope to subagent threads.
