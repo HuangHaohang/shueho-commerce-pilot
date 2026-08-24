@@ -44,7 +44,7 @@
 - `CreativeSpace` 或等价创作空间入口。
 - `KnowledgeBase`。
 - `More`，内部收纳 `Scheduled` 和 `Plugins`，不得把这两项同时放在一级导航。
-- `More > Plugins` 必须进入真实 `/plugins` 页面。插件目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
+- `More > Plugins` 必须在现有工作台壳内打开插件目录；桌面侧栏、最近任务与账号区保持稳定，只替换主内容区。`/plugins` 仅作为可直达入口，并复用同一工作台壳，不得另造独立页面框架。目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；列表项加号用于进入同壳详情视图，不代表安装成功。第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
 - Account/workspace footer。
 
 交互：

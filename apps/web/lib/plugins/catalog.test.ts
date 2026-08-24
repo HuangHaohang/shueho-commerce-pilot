@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommercePluginInventory,
   commercePluginManifestSchema,
+  filterCommercePlugins,
 } from "./catalog";
 
 const healthySignals = {
@@ -39,6 +40,18 @@ describe("commerce plugin catalog", () => {
     expect(plugins[1]).toMatchObject({ enabled: true, health: "ready" });
   });
 
+  it("filters the managed directory by display metadata and registered tool names", () => {
+    const plugins = buildCommercePluginInventory(healthySignals);
+
+    expect(filterCommercePlugins(plugins, "公开网络").map((plugin) => plugin.manifest.name)).toEqual([
+      "commerce-web-search",
+    ]);
+    expect(filterCommercePlugins(plugins, "commerce_image.generate").map((plugin) => plugin.manifest.name)).toEqual([
+      "commerce-image-generation",
+    ]);
+    expect(filterCommercePlugins(plugins, "  ")).toHaveLength(2);
+  });
+
   it("rejects manifests that request an invalid package name", () => {
     expect(
       commercePluginManifestSchema.safeParse({
@@ -50,6 +63,8 @@ describe("commerce plugin catalog", () => {
           shortDescription: "Unsafe",
           category: "自动化",
           capabilities: [],
+          icon: "search",
+          coverImage: "/plugins/unsafe.png",
         },
         components: { skills: [], mcpServers: [], tools: [], ui: false },
         security: { network: "none", dataAccess: "none", writeEffects: false },

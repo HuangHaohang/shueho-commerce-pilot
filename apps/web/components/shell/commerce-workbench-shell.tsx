@@ -61,6 +61,7 @@ import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { PluginDirectory } from "@/components/plugins/plugin-directory";
 import {
   useAgentThread,
   type AgentActivity,
@@ -86,6 +87,7 @@ import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
+type WorkbenchView = "workbench" | "plugins";
 type AuthMode = "login" | "register";
 type AuthIdentifierType = "email" | "phone";
 
@@ -158,7 +160,7 @@ const primaryNavItems = [
 
 const moreNavItems = [
   { label: "已安排", icon: Clock3, active: false, href: null },
-  { label: "插件", icon: Plug, active: false, href: "/plugins" },
+  { label: "插件", icon: Plug, active: false, href: null },
 ];
 
 const creativeNavItems = [
@@ -184,7 +186,14 @@ const reasoningEffortOptions: Array<{
   { value: "ultra", label: "超高", color: "#4f46c8", gradientEnd: "#c64dde" },
 ];
 
-export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPublicRegistration: boolean }) {
+export function CommerceWorkbenchShell({
+  allowPublicRegistration,
+  initialView = "workbench",
+}: {
+  allowPublicRegistration: boolean;
+  initialView?: WorkbenchView;
+}) {
+  const [activeView, setActiveView] = useState<WorkbenchView>(initialView);
   const [mode, setMode] = useState<WorkMode>("work");
   const [draft, setDraft] = useState("");
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
@@ -355,6 +364,7 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
     }
     setDraft("");
     setSubmittedDraft(null);
+    setActiveView("workbench");
     agentThread.resetThread();
     void threadsQuery.refetch();
   }
@@ -364,6 +374,7 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
       return;
     }
     setDraft("");
+    setActiveView("workbench");
     void agentThread.loadThread(thread);
   }
 
@@ -371,12 +382,14 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
     <div className="flex h-dvh overflow-hidden bg-[var(--cp-bg)] text-[var(--cp-text)]">
       <Sidebar
         user={authUser}
+        activeView={activeView}
         canOpenEnterpriseAdmin={canOpenEnterpriseAdmin}
         threads={threadsQuery.data?.threads ?? []}
         activeThreadId={agentThread.threadId}
         navigationLocked={navigationLocked}
         onNewTask={startNewTask}
         onOpenThread={openStoredThread}
+        onOpenPlugins={() => setActiveView("plugins")}
         onOpenAuth={() => openAuthDialog("login")}
         onLogout={logout}
       />
@@ -384,6 +397,10 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
       <main className="relative flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
         <MobileTopbar user={authUser} onOpenAuth={() => openAuthDialog("login")} onLogout={logout} />
 
+        {activeView === "plugins" ? (
+          <PluginDirectory />
+        ) : (
+        <>
         <div className="pointer-events-none sticky top-0 z-20 hidden h-[var(--cp-topbar-height)] items-center justify-center bg-[rgba(255,255,255,0.92)] md:flex">
           {isAuthenticated && !hasActiveThread ? <ModeSwitch mode={mode} onModeChange={setMode} /> : null}
           {isAuthenticated && hasActiveThread ? <ConversationTopActions /> : null}
@@ -475,6 +492,8 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
         )}
 
         {!hasActiveThread ? <ComplianceFooter /> : null}
+        </>
+        )}
       </main>
 
       {authDialogOpen ? (
@@ -1885,22 +1904,26 @@ function formatCompactDuration(durationMs: number): string {
 
 function Sidebar({
   user,
+  activeView,
   canOpenEnterpriseAdmin,
   threads,
   activeThreadId,
   navigationLocked,
   onNewTask,
   onOpenThread,
+  onOpenPlugins,
   onOpenAuth,
   onLogout,
 }: {
   user: AuthUser | null;
+  activeView: WorkbenchView;
   canOpenEnterpriseAdmin: boolean;
   threads: AgentThreadSummary[];
   activeThreadId: string | null;
   navigationLocked: boolean;
   onNewTask: () => void;
   onOpenThread: (thread: AgentThreadSummary) => void;
+  onOpenPlugins: () => void;
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
 }) {
@@ -2009,7 +2032,7 @@ function Sidebar({
               type="button"
               className={cn(
                 "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-                isNewTask && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                isNewTask && activeView === "workbench" && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                 creativeOpen && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                 navigationLocked && isNewTask && "cursor-not-allowed opacity-50",
               )}
@@ -2031,7 +2054,7 @@ function Sidebar({
             type="button"
             className={cn(
               "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-              openSidebarFlyout === "more" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+              (openSidebarFlyout === "more" || activeView === "plugins") && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
             )}
             aria-expanded={openSidebarFlyout === "more"}
             aria-haspopup="menu"
@@ -2054,31 +2077,26 @@ function Sidebar({
                 className="fixed z-50 w-[252px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)]"
                 style={{ left: sidebarFlyoutPosition.left, top: sidebarFlyoutPosition.top }}
               >
-                {(openSidebarFlyout === "creative" ? creativeNavItems : moreNavItems).map((item) =>
-                  "href" in item && item.href ? (
-                    <Link
-                      key={item.label}
-                      href={item.href}
-                      role="menuitem"
-                      className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                      onClick={() => setOpenSidebarFlyout(null)}
-                    >
-                      <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
-                      <span className="truncate">{item.label}</span>
-                    </Link>
-                  ) : (
+                {(openSidebarFlyout === "creative" ? creativeNavItems : moreNavItems).map((item) => (
                     <button
                       key={item.label}
                       type="button"
                       role="menuitem"
-                      className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                      onClick={() => setOpenSidebarFlyout(null)}
+                      className={cn(
+                        "flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                        item.label === "插件" && activeView === "plugins" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                      )}
+                      onClick={() => {
+                        setOpenSidebarFlyout(null);
+                        if (item.label === "插件") {
+                          onOpenPlugins();
+                        }
+                      }}
                     >
                       <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
                       <span className="truncate">{item.label}</span>
                     </button>
-                  ),
-                )}
+                  ))}
               </div>,
               document.body,
             )
@@ -2096,7 +2114,7 @@ function Sidebar({
                   data-thread-status={thread.status}
                   className={cn(
                     "flex h-[var(--cp-sidebar-item-height)] w-full items-center rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-                    thread.threadId === activeThreadId && "bg-[var(--cp-surface-hover)]",
+                    activeView === "workbench" && thread.threadId === activeThreadId && "bg-[var(--cp-surface-hover)]",
                     navigationLocked && thread.threadId !== activeThreadId && "cursor-not-allowed opacity-50",
                   )}
                   disabled={navigationLocked && thread.threadId !== activeThreadId}

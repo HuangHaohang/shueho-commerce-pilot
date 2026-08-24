@@ -9,6 +9,8 @@ export const commercePluginManifestSchema = z.object({
     shortDescription: z.string().min(1).max(120),
     category: z.enum(["研究", "创作", "电商运营", "数据", "自动化"]),
     capabilities: z.array(z.string().min(1).max(40)).max(8),
+    icon: z.enum(["search", "image"]),
+    coverImage: z.string().startsWith("/plugins/"),
   }),
   components: z.object({
     skills: z.array(z.string()).default([]),
@@ -57,6 +59,8 @@ const builtinManifests = [
       shortDescription: "检索公开网页并为回答提供可核验来源",
       category: "研究",
       capabilities: ["只读", "公开网络", "结构化来源"],
+      icon: "search",
+      coverImage: "/plugins/web-search-cover.png",
     },
     components: {
       mcpServers: ["commerce_web"],
@@ -77,6 +81,8 @@ const builtinManifests = [
       shortDescription: "生成商品主图、场景图和电商创意素材",
       category: "创作",
       capabilities: ["生成内容", "租户制品", "无宿主文件访问"],
+      icon: "image",
+      coverImage: "/plugins/image-generation-cover.png",
     },
     components: {
       tools: ["commerce_image.generate"],
@@ -120,5 +126,31 @@ export function buildCommercePluginInventory(
       statusLabel: enabled ? `运行正常 · ${signals.imageModel}` : "图片 Provider 未配置",
       lockedReason: "由 Commerce Pilot 注册为应用工具，图片制品绑定租户与线程。",
     };
+  });
+}
+
+export function filterCommercePlugins(
+  plugins: CommercePluginInventoryItem[],
+  query: string,
+): CommercePluginInventoryItem[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
+  if (!normalizedQuery) {
+    return plugins;
+  }
+
+  return plugins.filter((plugin) => {
+    const searchableText = [
+      plugin.manifest.interface.displayName,
+      plugin.manifest.interface.shortDescription,
+      plugin.manifest.interface.category,
+      ...plugin.manifest.interface.capabilities,
+      ...plugin.manifest.components.skills,
+      ...plugin.manifest.components.mcpServers,
+      ...plugin.manifest.components.tools,
+    ]
+      .join(" ")
+      .toLocaleLowerCase("zh-CN");
+
+    return searchableText.includes(normalizedQuery);
   });
 }

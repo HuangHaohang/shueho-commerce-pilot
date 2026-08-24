@@ -30,6 +30,8 @@ Commerce manifests intentionally mirror the stable subset of Codex plugin metada
 - components: skills, MCP servers, application tools, and optional UI
 - security declaration: network scope, data scope, and external write effects
 
+The browser directory is a workbench view, not a separate product shell. It keeps navigation and account context stable, renders installed plugins from `GET /api/plugins`, and opens a read-only detail view inside the same main region. The per-plugin plus control means "view details" until a reviewed lifecycle API exists; it must never imply that a browser-side install succeeded. Lucide icons identify plugin types, while application-owned raster covers may illustrate detail pages without becoming executable plugin content.
+
 Runtime support is narrower than the manifest vocabulary:
 
 1. **Managed MCP plugin** - application-controlled MCP process or remote service, explicit enabled-tool allowlist, tenant authorization, and App Server thread-level readiness verification.
