@@ -6,6 +6,11 @@ import {
   reconcilePendingInputState,
   type QueuedMessage,
 } from "./pending-input-state";
+import {
+  activateTurnClock,
+  shouldExpireActiveTurn,
+  shouldIgnoreTerminalSnapshotWhileConnecting,
+} from "./turn-lifecycle";
 
 export type { QueuedMessage } from "./pending-input-state";
 
@@ -150,6 +155,19 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     }
   }, []);
 
+  const activateTurn = useCallback((turnId: string, observedAt = Date.now()) => {
+    const nextClock = activateTurnClock(
+      { turnId: activeTurnIdRef.current, startedAt: startedAtRef.current },
+      turnId,
+      observedAt,
+    );
+    activeTurnIdRef.current = nextClock.turnId;
+    startedAtRef.current = nextClock.startedAt;
+    setActiveTurnId(nextClock.turnId);
+    setLastTurnId(nextClock.turnId);
+    setStartedAt(nextClock.startedAt);
+  }, []);
+
   const failActiveTurn = useCallback((message: string) => {
     const failedTurnId = activeTurnIdRef.current;
     activeTurnIdRef.current = null;
@@ -228,17 +246,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     if (method === "turn/started") {
       const turn = isRecord(params.turn) ? params.turn : {};
       if (typeof turn.id === "string") {
-        activeTurnIdRef.current = turn.id;
-        setActiveTurnId(turn.id);
-        setLastTurnId(turn.id);
+        activateTurn(turn.id);
         if (!compactingRef.current) {
           setMessages((current) => bindLatestUserMessageToTurn(current, turn.id as string));
         }
-      }
-      if (startedAtRef.current === null) {
-        const eventStartedAt = Date.now();
-        startedAtRef.current = eventStartedAt;
-        setStartedAt(eventStartedAt);
       }
       setDurationMs(null);
       setError(null);
@@ -395,7 +406,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setError(typeof itemError.message === "string" ? itemError.message : "Agent 执行失败。");
       setStatus("failed");
     }
-  }, [failActiveTurn, refreshQueue, threadId]);
+  }, [activateTurn, failActiveTurn, refreshQueue, threadId]);
 
   const connectEventStream = useCallback(
     async (id: string) => {
@@ -463,7 +474,25 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         );
         setMessages((current) => mergeAuthoritativeMessages(current, payload.messages));
 
+        if (shouldIgnoreTerminalSnapshotWhileConnecting(status, payload.thread.status)) {
+          return;
+        }
+
         if (payload.thread.status === "running") {
+          if (payload.thread.lastTurnId) {
+            const authoritativeStartedAt = payload.thread.startedAt
+              ? new Date(payload.thread.startedAt).getTime()
+              : Date.now();
+            activateTurn(payload.thread.lastTurnId, authoritativeStartedAt);
+          }
+          return;
+        }
+
+        if (
+          activeTurnIdRef.current &&
+          payload.thread.lastTurnId &&
+          activeTurnIdRef.current !== payload.thread.lastTurnId
+        ) {
           return;
         }
 
@@ -485,9 +514,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setActiveTurnId(null);
         setLastTurnId(payload.thread.lastTurnId);
         setDurationMs(payload.thread.durationMs);
-        setStartedAt(
-          payload.thread.startedAt ? new Date(payload.thread.startedAt).getTime() : startedAtRef.current,
-        );
+        const terminalStartedAt = payload.thread.startedAt
+          ? new Date(payload.thread.startedAt).getTime()
+          : startedAtRef.current;
+        startedAtRef.current = terminalStartedAt;
+        setStartedAt(terminalStartedAt);
         setInterrupting(false);
         setCompacting(false);
         setPendingSteers([]);
@@ -507,7 +538,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [refreshQueue, status, threadId]);
+  }, [activateTurn, refreshQueue, status, threadId]);
 
   const resetThread = useCallback(() => {
     eventSourceRef.current?.close();
@@ -622,8 +653,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setInterrupting(false);
       setDurationMs(null);
       setQueuedMessages([]);
-      startedAtRef.current = Date.now();
-      setStartedAt(startedAtRef.current);
+      startedAtRef.current = null;
+      setStartedAt(null);
       activeTurnIdRef.current = null;
       runtimeInstanceIdRef.current = runtimeHealth?.instanceId ?? null;
       setActiveTurnId(null);
@@ -699,9 +730,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             }
             const retryTurnId = readTurnId(retryPayload);
             if (retryTurnId) {
-              activeTurnIdRef.current = retryTurnId;
-              setActiveTurnId(retryTurnId);
-              setLastTurnId(retryTurnId);
+              activateTurn(retryTurnId);
               setMessages((current) => bindLatestUserMessageToTurn(current, retryTurnId));
             }
             setStatus("running");
@@ -714,9 +743,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           const queuedActiveTurnId =
             typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
           if (!activeTurnIdRef.current && queuedActiveTurnId) {
-            activeTurnIdRef.current = queuedActiveTurnId;
-            setActiveTurnId(queuedActiveTurnId);
-            setLastTurnId(queuedActiveTurnId);
+            activateTurn(queuedActiveTurnId);
           }
           await refreshQueue(currentThreadId);
           setStatus("running");
@@ -724,9 +751,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         }
         const turnId = readTurnId(payload);
         if (turnId) {
-          activeTurnIdRef.current = turnId;
-          setActiveTurnId(turnId);
-          setLastTurnId(turnId);
+          activateTurn(turnId);
           setMessages((current) => bindLatestUserMessageToTurn(current, turnId));
         }
         setStatus("running");
@@ -735,7 +760,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setStatus("failed");
       }
     },
-    [connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
+    [activateTurn, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
   );
 
   const enqueueMessage = useCallback(
@@ -887,13 +912,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             transition?.mode === "interruptedAndResubmitted") &&
           startedTurnId
         ) {
-          activeTurnIdRef.current = startedTurnId;
-          setActiveTurnId(startedTurnId);
-          setLastTurnId(startedTurnId);
-          if (startedAtRef.current === null) {
-            startedAtRef.current = Date.now();
-            setStartedAt(startedAtRef.current);
-          }
+          activateTurn(startedTurnId);
           setStatus("running");
         }
         await refreshQueue(threadId);
@@ -908,7 +927,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         return false;
       }
     },
-    [queueOperationId, queuedMessages, refreshQueue, threadId],
+    [activateTurn, queueOperationId, queuedMessages, refreshQueue, threadId],
   );
 
   const clearQueuedMessages = useCallback(async (): Promise<void> => {
@@ -988,6 +1007,17 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     const maxDurationMs = runtimeHealth?.maxTurnDurationMs ?? 600_000;
     const remainingMs = maxDurationMs - (Date.now() - startedAt);
     const expire = () => {
+      if (
+        !shouldExpireActiveTurn(
+          { turnId: activeTurnIdRef.current, startedAt: startedAtRef.current },
+          activeTurnId,
+          startedAt,
+          Date.now(),
+          maxDurationMs,
+        )
+      ) {
+        return;
+      }
       void fetch(
         `/api/agent/threads/${encodeURIComponent(threadId)}/turns/${encodeURIComponent(activeTurnId)}/interrupt`,
         { method: "POST" },

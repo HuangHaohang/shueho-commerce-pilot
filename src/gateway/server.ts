@@ -29,6 +29,10 @@ import {
   type TurnCompletedEvent,
   type UsageCompletedEvent,
 } from "./agent-event-outbox.js";
+import {
+  isAgentEventPipelineHealthy,
+  isAgentEventPipelineWritable,
+} from "./agent-event-pipeline-health.js";
 import { AgentOutboxProcessLock } from "./agent-outbox-process-lock.js";
 
 type CompactionTrigger = "automatic" | "manual" | "harness";
@@ -72,6 +76,7 @@ class GatewayRequestError extends Error {
 const config = readGatewayConfig();
 await ensureAppOwnedCodexConfig(config);
 const gatewayInstanceId = randomUUID();
+const agentEventDeliveryEnabled = Boolean(config.agentEventSinkUrl && config.internalToken);
 
 const provider = new CommerceProviderClient(config.provider);
 const generatedImages = new GeneratedImageStore(config.codexHome);
@@ -251,7 +256,7 @@ const server = createServer(async (req, res) => {
           enterpriseRuntime: {
             dedicatedTenant: Boolean(config.runtimeTenantId),
             scopedThreads: threadScopes.size,
-            eventSinkConfigured: Boolean(config.agentEventSinkUrl),
+            eventSinkConfigured: agentEventDeliveryEnabled,
             authorizationConfigured: Boolean(config.agentAuthorizationUrl),
             authorizationCheckedAt: runtimeAuthorizationCheckedAt,
             authorizationError: runtimeAuthorizationError,
@@ -1786,6 +1791,7 @@ function readUsageBreakdown(value: Record<string, unknown>): UsageCompletedEvent
 }
 
 async function enqueueAgentEvent(event: AgentOutboxEvent): Promise<void> {
+  if (!agentEventDeliveryEnabled) return;
   await agentEventOutbox.enqueue(event);
   scheduleAgentEventFlush(0);
 }
@@ -1796,7 +1802,7 @@ function scheduleAgentEvent(event: AgentOutboxEvent): void {
 }
 
 function scheduleAgentEventFlush(delayMs: number): void {
-  if (!config.agentEventSinkUrl || !config.internalToken || agentEventRetryTimer) return;
+  if (!agentEventDeliveryEnabled || agentEventRetryTimer) return;
   agentEventRetryTimer = setTimeout(() => {
     agentEventRetryTimer = null;
     void flushAgentEventOutbox();
@@ -1806,7 +1812,7 @@ function scheduleAgentEventFlush(delayMs: number): void {
 
 async function flushAgentEventOutbox(): Promise<void> {
   if (agentEventFlushPromise) return agentEventFlushPromise;
-  if (!config.agentEventSinkUrl || !config.internalToken) return;
+  if (!agentEventDeliveryEnabled) return;
   agentEventFlushPromise = (async () => {
     let shouldRetry = false;
     const acknowledged: string[] = [];
@@ -1853,6 +1859,7 @@ async function flushAgentEventOutbox(): Promise<void> {
 
 function readEventPipelineHealth(): {
   healthy: boolean;
+  deliveryEnabled: boolean;
   pendingEvents: number;
   oldestPendingAgeMs: number;
   deadLetterEvents: number;
@@ -1865,12 +1872,16 @@ function readEventPipelineHealth(): {
   }, null);
   const oldestPendingAgeMs = oldestOccurredAt === null ? 0 : Math.max(0, Date.now() - oldestOccurredAt);
   const deadLetterEvents = agentEventOutbox.deadLetterCount();
+  const healthInput = {
+    deliveryEnabled: agentEventDeliveryEnabled,
+    pendingEvents: pending.length,
+    oldestPendingAgeMs,
+    deadLetterEvents,
+    sinkError: agentEventSinkError,
+  };
   return {
-    healthy:
-      deadLetterEvents === 0 &&
-      agentEventSinkError === null &&
-      pending.length < 1_000 &&
-      oldestPendingAgeMs < 60_000,
+    healthy: isAgentEventPipelineHealthy(healthInput),
+    deliveryEnabled: agentEventDeliveryEnabled,
     pendingEvents: pending.length,
     oldestPendingAgeMs,
     deadLetterEvents,
@@ -1879,7 +1890,13 @@ function readEventPipelineHealth(): {
 
 function isEventPipelineWritable(): boolean {
   const health = readEventPipelineHealth();
-  return health.deadLetterEvents === 0 && health.pendingEvents < 1_000 && agentEventSinkError === null;
+  return isAgentEventPipelineWritable({
+    deliveryEnabled: health.deliveryEnabled,
+    pendingEvents: health.pendingEvents,
+    oldestPendingAgeMs: health.oldestPendingAgeMs,
+    deadLetterEvents: health.deadLetterEvents,
+    sinkError: agentEventSinkError,
+  });
 }
 
 function startRuntimeAuthorizationPoll(): void {
