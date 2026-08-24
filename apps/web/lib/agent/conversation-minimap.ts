@@ -17,6 +17,9 @@ export type ConversationMinimapState = {
   markers: ConversationMinimapMarker[];
 };
 
+const MINIMAP_IDLE_MARKER_WIDTH = 6;
+const MINIMAP_HOVER_MARKER_WIDTHS = [24, 20, 16, 13, 10, 8] as const;
+
 export function calculateConversationMinimap(
   scrollTop: number,
   scrollHeight: number,
@@ -44,6 +47,32 @@ export function calculateConversationMinimap(
     viewportSizePercent,
     markers,
   };
+}
+
+export function findClosestConversationMinimapMarker(
+  markers: ConversationMinimapMarker[],
+  positionPercent: number,
+): ConversationMinimapMarker | null {
+  if (markers.length === 0) {
+    return null;
+  }
+  const target = clamp(positionPercent, 0, 100);
+  return markers.reduce((closest, marker) =>
+    Math.abs(marker.positionPercent - target) < Math.abs(closest.positionPercent - target)
+      ? marker
+      : closest,
+  );
+}
+
+export function calculateConversationMinimapMarkerWidth(
+  markerIndex: number,
+  hoveredMarkerIndex: number,
+): number {
+  if (hoveredMarkerIndex < 0) {
+    return MINIMAP_IDLE_MARKER_WIDTH;
+  }
+  const distance = Math.abs(markerIndex - hoveredMarkerIndex);
+  return MINIMAP_HOVER_MARKER_WIDTHS[distance] ?? MINIMAP_IDLE_MARKER_WIDTH;
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {

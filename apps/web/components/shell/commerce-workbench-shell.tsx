@@ -70,7 +70,9 @@ import {
   type QueuedMessage,
 } from "@/lib/agent/use-agent-thread";
 import {
+  calculateConversationMinimapMarkerWidth,
   calculateConversationMinimap,
+  findClosestConversationMinimapMarker,
   type ConversationMinimapMarker,
   type ConversationMinimapMarkerInput,
   type ConversationMinimapState,
@@ -1032,6 +1034,9 @@ function ConversationMinimap({
     return null;
   }
   const hoveredMarker = state.markers.find((marker) => marker.id === hoveredMarkerId) ?? null;
+  const hoveredMarkerIndex = hoveredMarker
+    ? state.markers.findIndex((marker) => marker.id === hoveredMarker.id)
+    : -1;
 
   function scrollToPosition(scrollPercent: number, behavior: ScrollBehavior = "auto") {
     const node = scrollContainerRef.current;
@@ -1049,6 +1054,15 @@ function ConversationMinimap({
     }
     const rect = event.currentTarget.getBoundingClientRect();
     scrollToPosition(((event.clientY - rect.top) / Math.max(1, rect.height)) * 100);
+  }
+
+  function handleTrackPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const pointerPosition = ((event.clientY - rect.top) / Math.max(1, rect.height)) * 100;
+    const closestMarker = findClosestConversationMinimapMarker(state.markers, pointerPosition);
+    if (closestMarker?.id !== hoveredMarkerId) {
+      onHoveredMarkerChange(closestMarker?.id ?? null);
+    }
   }
 
   function handleThumbPointerDown(event: React.PointerEvent<HTMLButtonElement>) {
@@ -1120,6 +1134,8 @@ function ConversationMinimap({
         aria-valuenow={Math.round(state.scrollPercent)}
         className="pointer-events-auto relative h-full w-8 cursor-pointer rounded-[var(--cp-radius-xs)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)]"
         onPointerDown={handleTrackPointerDown}
+        onPointerMove={handleTrackPointerMove}
+        onPointerLeave={() => onHoveredMarkerChange(null)}
         onKeyDown={handleScrollbarKeyDown}
       >
         <span
@@ -1130,22 +1146,16 @@ function ConversationMinimap({
           }}
           aria-hidden="true"
         />
-        {state.markers.map((marker) => (
+        {state.markers.map((marker, markerIndex) => (
           <button
             key={marker.id}
             type="button"
             tabIndex={-1}
             data-minimap-marker
-            className={cn(
-              "absolute left-0 h-px -translate-y-1/2 bg-[var(--cp-border-strong)] p-0 transition-[width,background-color] duration-[var(--cp-duration-fast)]",
-              minimapMarkerWidth(marker),
-              hoveredMarkerId === marker.id && "w-6 bg-[var(--cp-text)]",
-            )}
+            className="absolute left-0 h-3 w-8 -translate-y-1/2 bg-transparent p-0"
             style={{ top: `${marker.positionPercent}%` }}
             aria-label={`跳转到${minimapKindLabel(marker.kind)}：${marker.preview}`}
             onPointerDown={(event) => event.stopPropagation()}
-            onMouseEnter={() => onHoveredMarkerChange(marker.id)}
-            onMouseLeave={() => onHoveredMarkerChange(null)}
             onFocus={() => onHoveredMarkerChange(marker.id)}
             onBlur={() => onHoveredMarkerChange(null)}
             onClick={() => {
@@ -1158,7 +1168,18 @@ function ConversationMinimap({
                 behavior: "smooth",
               });
             }}
-          />
+          >
+            <span
+              className={cn(
+                "pointer-events-none absolute left-0 top-1/2 h-px -translate-y-1/2 rounded-full bg-[var(--cp-border-strong)] transition-[width,background-color] duration-150 ease-out motion-reduce:transition-none",
+                hoveredMarkerId === marker.id && "bg-[var(--cp-text)]",
+              )}
+              style={{
+                width: `${calculateConversationMinimapMarkerWidth(markerIndex, hoveredMarkerIndex)}px`,
+              }}
+              aria-hidden="true"
+            />
+          </button>
         ))}
         <button
           type="button"
@@ -1173,7 +1194,7 @@ function ConversationMinimap({
 
       {hoveredMarker ? (
         <div
-          className="pointer-events-none absolute left-9 w-[320px] rounded-[8px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-3 py-2.5 shadow-[var(--cp-shadow-popover)]"
+          className="pointer-events-none absolute left-9 w-[260px] rounded-[8px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-3 py-2.5 shadow-[var(--cp-shadow-popover)]"
           style={{
             top: `${Math.min(Math.max(hoveredMarker.positionPercent, 8), 92)}%`,
             transform: "translateY(-50%)",
@@ -1190,19 +1211,6 @@ function ConversationMinimap({
       ) : null}
     </aside>
   );
-}
-
-function minimapMarkerWidth(marker: ConversationMinimapMarker): string {
-  if (marker.kind === "user") {
-    return "w-4";
-  }
-  if (marker.kind === "image") {
-    return "w-3";
-  }
-  if (marker.kind === "status") {
-    return "w-2.5";
-  }
-  return marker.kind === "assistant" ? "w-2" : "w-1.5";
 }
 
 function minimapKindLabel(kind: ConversationMinimapMarker["kind"]): string {
