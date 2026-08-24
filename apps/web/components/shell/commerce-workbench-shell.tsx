@@ -457,6 +457,8 @@ export function CommerceWorkbenchShell({
             error={agentThread.error}
             pendingUserInput={agentThread.pendingUserInput}
             answeringUserInput={agentThread.answeringUserInput}
+            composerValue={draft}
+            onComposerChange={setDraft}
             modelLabel={`${formatModelName(selectedModel)} · ${
               reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
             }`}
@@ -464,6 +466,39 @@ export function CommerceWorkbenchShell({
             onExecute={executeCopywritingRecipe}
             onAdjust={adjustCopywritingDraft}
             onInterrupt={agentThread.interrupt}
+            renderComposer={({ placeholder, disabled, onSubmit }) => (
+              <AgentComposer
+                value={draft}
+                placeholder={placeholder}
+                running={agentThread.status === "connecting" || agentThread.status === "running"}
+                canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
+                interrupting={agentThread.interrupting}
+                compacting={agentThread.compacting}
+                queueSubmitting={agentThread.queueSubmitting}
+                queuedMessages={agentThread.queuedMessages}
+                queueOperationId={agentThread.queueOperationId}
+                models={modelsQuery.data?.agentModels ?? []}
+                modelsLoading={modelsQuery.isLoading}
+                selectedModel={selectedModel}
+                reasoningEffort={reasoningEffort}
+                disabled={disabled}
+                onChange={setDraft}
+                onSubmit={async () => {
+                  if (agentThread.status === "running" && agentThread.activeTurnId) {
+                    const queued = await agentThread.enqueueMessage(draft);
+                    if (queued) setDraft("");
+                    return;
+                  }
+                  await onSubmit();
+                }}
+                onInterrupt={agentThread.interrupt}
+                onQueueDelete={agentThread.deleteQueuedMessage}
+                onQueueSteer={agentThread.steerQueuedMessage}
+                onQueueClear={agentThread.clearQueuedMessages}
+                onModelChange={setSelectedModel}
+                onReasoningEffortChange={setReasoningEffort}
+              />
+            )}
           />
         ) : (
         <>
@@ -687,14 +722,12 @@ function ConversationWorkspace({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineContentRef = useRef<HTMLDivElement>(null);
-  const conversationInputRef = useRef<HTMLTextAreaElement>(null);
   const shouldFollowBottomRef = useRef(true);
   const scrollingToBottomRef = useRef(false);
   const minimapFrameRef = useRef<number | null>(null);
   const minimapMarkersRef = useRef<ConversationMinimapMarkerInput[]>([]);
   const minimapNeedsMeasurementRef = useRef(true);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
-  const [conversationInputExpanded, setConversationInputExpanded] = useState(false);
   const [minimapState, setMinimapState] = useState<ConversationMinimapState>(() =>
     calculateConversationMinimap(0, 1, 1, []),
   );
@@ -834,13 +867,6 @@ function ConversationWorkspace({
     };
   }, [scheduleMinimapUpdate]);
 
-  useEffect(() => {
-    if (conversationInputRef.current) {
-      const inputHeight = resizeTextarea(conversationInputRef.current, 32, 120);
-      setConversationInputExpanded(inputHeight > 32);
-    }
-  }, [value]);
-
   function handleConversationScroll() {
     const node = scrollRef.current;
     if (!node) {
@@ -869,24 +895,6 @@ function ConversationWorkspace({
     shouldFollowBottomRef.current = true;
     setShowScrollToBottom(false);
     node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-  }
-
-  function returnQueuedMessageToComposer(message: QueuedMessage): void {
-    const previousValue = value;
-    onChange(message.content);
-    requestAnimationFrame(() => {
-      const input = conversationInputRef.current;
-      if (!input) {
-        return;
-      }
-      input.focus();
-      input.setSelectionRange(message.content.length, message.content.length);
-    });
-    void onQueueDelete(message.id).then((deleted) => {
-      if (!deleted) {
-        onChange(previousValue);
-      }
-    });
   }
 
   return (
@@ -981,142 +989,212 @@ function ConversationWorkspace({
         <p className="mx-auto mb-2 max-w-[768px] text-center text-[11px] text-[var(--cp-text-faint)]">
           Commerce Pilot 也可能会犯错。请核查重要信息。
         </p>
-        {running && queuedMessages.length > 0 ? (
-          <QueuedSubmissionList
-            messages={queuedMessages}
-            operationId={queueOperationId}
-            onReturnToComposer={returnQueuedMessageToComposer}
-            onDelete={onQueueDelete}
-            onSteer={onQueueSteer}
-            onClear={onQueueClear}
-          />
-        ) : null}
-        <form
-          className={cn(
-            "mx-auto grid w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] gap-x-1 rounded-[28px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)] transition-[height,border-radius] duration-[var(--cp-duration-base)]",
-            conversationInputExpanded
-              ? "max-h-[180px] grid-rows-[auto_36px] items-end gap-y-1"
-              : "min-h-[56px] items-center",
-          )}
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!running || canInterrupt) {
-              void onSubmit();
-            }
-          }}
-        >
-          <IconTooltip label="添加内容">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className={cn("rounded-full", conversationInputExpanded && "col-start-1 row-start-2")}
-              aria-label="添加内容"
-            >
-              <Plus className="size-5" />
-            </Button>
-          </IconTooltip>
-          <textarea
-            ref={conversationInputRef}
-            data-conversation-input
-            rows={1}
-            value={value}
-            onChange={(event) => onChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                !event.shiftKey &&
-                !event.nativeEvent.isComposing &&
-                event.keyCode !== 229 &&
-                (!running || canInterrupt)
-              ) {
-                event.preventDefault();
-                if (value.trim()) {
-                  void onSubmit();
-                }
-              }
-            }}
-            placeholder={running && canInterrupt ? "输入调整方向" : "继续追问"}
-            className={cn(
-              "cp-composer-textarea min-h-8 max-h-[120px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]",
-              conversationInputExpanded
-                ? "col-span-3 col-start-1 row-start-1 w-full px-3"
-                : "col-start-2 row-start-1 w-full",
-            )}
-            aria-label="继续追问"
-          />
-          <div
-            className={cn(
-              "flex items-center gap-1",
-              conversationInputExpanded ? "col-start-3 row-start-2" : "col-start-3 row-start-1",
-            )}
-          >
-            <ModelAndReasoningControl
-              models={models}
-              loading={modelsLoading}
-              selectedModel={selectedModel}
-              reasoningEffort={reasoningEffort}
-              disabled={running}
-              placement="top"
-              onModelChange={onModelChange}
-              onReasoningEffortChange={onReasoningEffortChange}
-            />
-            <IconTooltip label="语音输入">
-              <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="语音输入">
-                <Mic />
-              </Button>
-            </IconTooltip>
-            {running && canInterrupt ? (
-              <>
-                {value.trim() ? (
-                  <IconTooltip label="加入任务队列">
-                    <Button
-                      type="submit"
-                      size="icon"
-                      className="rounded-full"
-                      aria-label="加入任务队列"
-                      disabled={queueSubmitting}
-                    >
-                      {queueSubmitting ? <Loader2 className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
-                    </Button>
-                  </IconTooltip>
-                ) : null}
-                <IconTooltip label="停止">
-                  <Button
-                    type="button"
-                    size="icon"
-                    className="rounded-full"
-                    aria-label="停止"
-                    disabled={interrupting}
-                    onClick={onInterrupt}
-                  >
-                    {interrupting ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
-                  </Button>
-                </IconTooltip>
-              </>
-            ) : running ? (
-              <IconTooltip label={compacting ? "正在整理上下文" : "正在启动任务"}>
-                <Button
-                  type="button"
-                  size="icon"
-                  className="rounded-full"
-                  aria-label={compacting ? "正在整理上下文" : "正在启动任务"}
-                  disabled
-                >
-                  <Loader2 className="size-4 animate-spin" />
-                </Button>
-              </IconTooltip>
-            ) : (
-              <IconTooltip label="发送">
-                <Button type="submit" size="icon" className="rounded-full" aria-label="发送" disabled={!value.trim()}>
-                  <ArrowUp />
-                </Button>
-              </IconTooltip>
-            )}
-          </div>
-        </form>
+        <AgentComposer
+          value={value}
+          placeholder={running && canInterrupt ? "输入调整方向" : "继续追问"}
+          running={running}
+          canInterrupt={canInterrupt}
+          interrupting={interrupting}
+          compacting={compacting}
+          queueSubmitting={queueSubmitting}
+          queuedMessages={queuedMessages}
+          queueOperationId={queueOperationId}
+          models={models}
+          modelsLoading={modelsLoading}
+          selectedModel={selectedModel}
+          reasoningEffort={reasoningEffort}
+          onChange={onChange}
+          onSubmit={onSubmit}
+          onInterrupt={onInterrupt}
+          onQueueDelete={onQueueDelete}
+          onQueueSteer={onQueueSteer}
+          onQueueClear={onQueueClear}
+          onModelChange={onModelChange}
+          onReasoningEffortChange={onReasoningEffortChange}
+        />
       </div>
     </section>
+  );
+}
+
+function AgentComposer({
+  value,
+  placeholder,
+  running,
+  canInterrupt,
+  interrupting,
+  compacting,
+  queueSubmitting,
+  queuedMessages,
+  queueOperationId,
+  models,
+  modelsLoading,
+  selectedModel,
+  reasoningEffort,
+  disabled = false,
+  onChange,
+  onSubmit,
+  onInterrupt,
+  onQueueDelete,
+  onQueueSteer,
+  onQueueClear,
+  onModelChange,
+  onReasoningEffortChange,
+}: {
+  value: string;
+  placeholder: string;
+  running: boolean;
+  canInterrupt: boolean;
+  interrupting: boolean;
+  compacting: boolean;
+  queueSubmitting: boolean;
+  queuedMessages: QueuedMessage[];
+  queueOperationId: string | null;
+  models: ProviderModelSummary[];
+  modelsLoading: boolean;
+  selectedModel: string;
+  reasoningEffort: ReasoningEffort;
+  disabled?: boolean;
+  onChange: (value: string) => void;
+  onSubmit: () => void | Promise<void>;
+  onInterrupt: () => void | Promise<void>;
+  onQueueDelete: (queuedSubmissionId: string) => Promise<boolean>;
+  onQueueSteer: (queuedSubmissionId: string) => Promise<boolean>;
+  onQueueClear: () => Promise<void>;
+  onModelChange: (model: string) => void;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
+}) {
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    if (!inputRef.current) return;
+    const inputHeight = resizeTextarea(inputRef.current, 32, 120);
+    setExpanded(inputHeight > 32);
+  }, [value]);
+
+  function returnQueuedMessageToComposer(message: QueuedMessage): void {
+    const previousValue = value;
+    onChange(message.content);
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(message.content.length, message.content.length);
+    });
+    void onQueueDelete(message.id).then((deleted) => {
+      if (!deleted) onChange(previousValue);
+    });
+  }
+
+  return (
+    <>
+      {running && queuedMessages.length > 0 ? (
+        <QueuedSubmissionList
+          messages={queuedMessages}
+          operationId={queueOperationId}
+          onReturnToComposer={returnQueuedMessageToComposer}
+          onDelete={onQueueDelete}
+          onSteer={onQueueSteer}
+          onClear={onQueueClear}
+        />
+      ) : null}
+      <form
+        className={cn(
+          "mx-auto grid w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] gap-x-1 rounded-[28px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)] transition-[height,border-radius] duration-[var(--cp-duration-base)]",
+          expanded ? "max-h-[180px] grid-rows-[auto_36px] items-end gap-y-1" : "min-h-[56px] items-center",
+        )}
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!disabled && (!running || canInterrupt)) void onSubmit();
+        }}
+      >
+        <IconTooltip label="添加内容">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className={cn("rounded-full", expanded && "col-start-1 row-start-2")}
+            aria-label="添加内容"
+            disabled={disabled}
+          >
+            <Plus className="size-5" />
+          </Button>
+        </IconTooltip>
+        <textarea
+          ref={inputRef}
+          data-conversation-input
+          rows={1}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (
+              event.key === "Enter" &&
+              !event.shiftKey &&
+              !event.nativeEvent.isComposing &&
+              event.keyCode !== 229 &&
+              !disabled &&
+              (!running || canInterrupt)
+            ) {
+              event.preventDefault();
+              if (value.trim()) void onSubmit();
+            }
+          }}
+          placeholder={placeholder}
+          className={cn(
+            "cp-composer-textarea min-h-8 max-h-[120px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]",
+            expanded ? "col-span-3 col-start-1 row-start-1 w-full px-3" : "col-start-2 row-start-1 w-full",
+          )}
+          aria-label={placeholder}
+          disabled={disabled}
+        />
+        <div className={cn("flex items-center gap-1", expanded ? "col-start-3 row-start-2" : "col-start-3 row-start-1")}>
+          <ModelAndReasoningControl
+            models={models}
+            loading={modelsLoading}
+            selectedModel={selectedModel}
+            reasoningEffort={reasoningEffort}
+            disabled={running || disabled}
+            placement="top"
+            onModelChange={onModelChange}
+            onReasoningEffortChange={onReasoningEffortChange}
+          />
+          <IconTooltip label="语音输入">
+            <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="语音输入" disabled={disabled}>
+              <Mic />
+            </Button>
+          </IconTooltip>
+          {running && canInterrupt ? (
+            <>
+              {value.trim() ? (
+                <IconTooltip label="加入任务队列">
+                  <Button type="submit" size="icon" className="rounded-full" aria-label="加入任务队列" disabled={queueSubmitting || disabled}>
+                    {queueSubmitting ? <Loader2 className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
+                  </Button>
+                </IconTooltip>
+              ) : null}
+              <IconTooltip label="停止">
+                <Button type="button" size="icon" className="rounded-full" aria-label="停止" disabled={interrupting} onClick={onInterrupt}>
+                  {interrupting ? <Loader2 className="size-4 animate-spin" /> : <Square className="size-3.5 fill-current" />}
+                </Button>
+              </IconTooltip>
+            </>
+          ) : running ? (
+            <IconTooltip label={compacting ? "正在整理上下文" : "正在启动任务"}>
+              <Button type="button" size="icon" className="rounded-full" aria-label={compacting ? "正在整理上下文" : "正在启动任务"} disabled>
+                <Loader2 className="size-4 animate-spin" />
+              </Button>
+            </IconTooltip>
+          ) : (
+            <IconTooltip label="发送">
+              <Button type="submit" size="icon" className="rounded-full" aria-label="发送" disabled={disabled || !value.trim()}>
+                <ArrowUp />
+              </Button>
+            </IconTooltip>
+          )}
+        </div>
+      </form>
+    </>
   );
 }
 

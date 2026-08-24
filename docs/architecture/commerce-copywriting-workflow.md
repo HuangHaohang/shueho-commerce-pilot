@@ -41,6 +41,7 @@ The Gateway also supports App Server's native `item/tool/requestUserInput` serve
 ## UI State
 
 - The first screen is a natural-language task composer, not a configuration form.
+- The first screen and completed artifact view render the same shared `AgentComposer` used by normal conversations. The Recipe owns submission semantics, not a second input implementation.
 - Missing channel and expression direction are collected one question at a time; each question offers an Agent-decides option.
 - Answering the final Recipe question starts generation immediately instead of showing a plan.
 - Running state uses the App Server turn clock and interrupt route.

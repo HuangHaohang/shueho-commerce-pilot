@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
@@ -7,8 +8,6 @@ import {
   ChevronRight,
   Copy,
   FileText,
-  PackageSearch,
-  SendHorizontal,
   Sparkles,
   Square,
 } from "lucide-react";
@@ -34,6 +33,11 @@ import { cn } from "@/lib/utils";
 
 type UserInputAnswers = Record<string, { answers: string[] }>;
 type RecipePhase = "idle" | "intake" | "executing" | "completed";
+type ComposerRenderConfig = {
+  placeholder: string;
+  disabled?: boolean;
+  onSubmit: () => void | Promise<void>;
+};
 
 const starterGoals = [
   "给这款商品写一套上新文案",
@@ -50,6 +54,9 @@ export function CopywritingWorkspace({
   pendingUserInput,
   answeringUserInput,
   modelLabel,
+  composerValue,
+  onComposerChange,
+  renderComposer,
   onAnswerUserInput,
   onExecute,
   onAdjust,
@@ -63,17 +70,18 @@ export function CopywritingWorkspace({
   pendingUserInput: PendingRequestUserInput | null;
   answeringUserInput: boolean;
   modelLabel: string;
+  composerValue: string;
+  onComposerChange: (value: string) => void;
+  renderComposer: (config: ComposerRenderConfig) => ReactNode;
   onAnswerUserInput: (answers: UserInputAnswers) => Promise<boolean>;
   onExecute: (goal: string, answerSummary: string) => void | Promise<void>;
   onAdjust: (instruction: string) => void | Promise<void>;
   onInterrupt: () => void | Promise<void>;
 }) {
-  const [goal, setGoal] = useState("");
   const [submittedGoal, setSubmittedGoal] = useState("");
   const [phase, setPhase] = useState<RecipePhase>("idle");
   const [selectedDraftIndex, setSelectedDraftIndex] = useState(0);
   const [editableDraft, setEditableDraft] = useState<CopywritingDraft | null>(null);
-  const [adjustment, setAdjustment] = useState("");
   const [copied, setCopied] = useState(false);
   const [goalError, setGoalError] = useState<string | null>(null);
   const [recipeQuestions, setRecipeQuestions] = useState<RequestUserInputQuestion[]>([]);
@@ -98,7 +106,6 @@ export function CopywritingWorkspace({
 
   useEffect(() => {
     if (restoredGoal && !submittedGoal) {
-      setGoal(restoredGoal);
       setSubmittedGoal(restoredGoal);
       setPhase(drafts.length ? "completed" : "intake");
     }
@@ -124,13 +131,14 @@ export function CopywritingWorkspace({
   }, [drafts, selectedDraftIndex]);
 
   async function startIntake() {
-    const normalizedGoal = goal.trim();
+    const normalizedGoal = composerValue.trim();
     if (!normalizedGoal) {
       setGoalError("请用一句话说明你想完成什么文案。");
       return;
     }
     setGoalError(null);
     setSubmittedGoal(normalizedGoal);
+    onComposerChange("");
     const questions = buildCopywritingRecipeQuestions(normalizedGoal);
     if (!questions.length) {
       setPhase("executing");
@@ -154,9 +162,9 @@ export function CopywritingWorkspace({
   }
 
   async function submitAdjustment() {
-    const instruction = adjustment.trim();
+    const instruction = composerValue.trim();
     if (!instruction || running) return;
-    setAdjustment("");
+    onComposerChange("");
     setPhase("executing");
     await onAdjust(instruction);
   }
@@ -214,10 +222,12 @@ export function CopywritingWorkspace({
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {!submittedGoal ? (
           <CopywritingStarter
-            goal={goal}
             error={goalError}
-            onChange={setGoal}
-            onSubmit={startIntake}
+            onStarterSelect={onComposerChange}
+            composer={renderComposer({
+              placeholder: "例如：给这款轻量通勤包写一套小红书上新文案",
+              onSubmit: startIntake,
+            })}
           />
         ) : pendingUserInput || recipeQuestions.length ? (
           <RequestUserInputPanel
@@ -231,15 +241,14 @@ export function CopywritingWorkspace({
             selectedDraftIndex={selectedDraftIndex}
             editableDraft={editableDraft}
             copied={copied}
-            adjustment={adjustment}
-            running={running}
             error={error}
             onSelectDraft={setSelectedDraftIndex}
             onDraftChange={setEditableDraft}
-            onAdjustmentChange={setAdjustment}
             onCopy={copyDraft}
-            onAdjust={submitAdjustment}
-            onInterrupt={onInterrupt}
+            composer={renderComposer({
+              placeholder: "继续调整语气、结构或卖点顺序",
+              onSubmit: submitAdjustment,
+            })}
           />
         ) : (
           <div className="flex min-h-full items-center justify-center px-5 py-16">
@@ -257,15 +266,13 @@ export function CopywritingWorkspace({
 }
 
 function CopywritingStarter({
-  goal,
   error,
-  onChange,
-  onSubmit,
+  onStarterSelect,
+  composer,
 }: {
-  goal: string;
   error: string | null;
-  onChange: (value: string) => void;
-  onSubmit: () => void | Promise<void>;
+  onStarterSelect: (value: string) => void;
+  composer: ReactNode;
 }) {
   return (
     <section className="mx-auto flex min-h-full w-full max-w-[760px] flex-col justify-center px-5 py-16 md:px-8">
@@ -275,30 +282,7 @@ function CopywritingStarter({
         </span>
         <h2 className="mb-0 mt-5 text-[24px] font-semibold leading-tight">想完成什么文案？</h2>
       </div>
-      <div className="mt-8 rounded-[var(--cp-radius-composer)] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-3 shadow-[var(--cp-shadow-composer)]">
-        <textarea
-          value={goal}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void onSubmit();
-            }
-          }}
-          rows={3}
-          className="max-h-44 min-h-[84px] w-full resize-none border-0 bg-transparent px-2 py-1 text-[15px] leading-7 outline-none placeholder:text-[var(--cp-text-faint)]"
-          placeholder="例如：给这款轻量通勤包写一套小红书上新文案"
-        />
-        <div className="flex items-center justify-between gap-3 pt-2">
-          <span className="inline-flex items-center gap-2 px-1 text-xs text-[var(--cp-text-faint)]">
-            <PackageSearch className="size-4" strokeWidth={1.7} />
-            可以直接写商品名、链接或已有资料
-          </span>
-          <Button type="button" size="icon" className="size-9 shrink-0 rounded-full bg-[var(--cp-text)] text-white" disabled={!goal.trim()} aria-label="开始任务" onClick={onSubmit}>
-            <SendHorizontal className="size-4" />
-          </Button>
-        </div>
-      </div>
+      <div className="mt-8">{composer}</div>
       {error ? <p className="mb-0 mt-3 text-center text-xs text-[var(--cp-danger)]">{error}</p> : null}
       <div className="mt-5 flex flex-wrap justify-center gap-2">
         {starterGoals.map((starter) => (
@@ -306,7 +290,7 @@ function CopywritingStarter({
             key={starter}
             type="button"
             className="rounded-[var(--cp-radius-segment)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2 text-xs text-[var(--cp-text-muted)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)]"
-            onClick={() => onChange(starter)}
+            onClick={() => onStarterSelect(starter)}
           >
             {starter}
           </button>
@@ -431,29 +415,21 @@ function CopywritingEditor({
   selectedDraftIndex,
   editableDraft,
   copied,
-  adjustment,
-  running,
   error,
   onSelectDraft,
   onDraftChange,
-  onAdjustmentChange,
   onCopy,
-  onAdjust,
-  onInterrupt,
+  composer,
 }: {
   drafts: Array<{ id: string; draft: CopywritingDraft }>;
   selectedDraftIndex: number;
   editableDraft: CopywritingDraft;
   copied: boolean;
-  adjustment: string;
-  running: boolean;
   error: string | null;
   onSelectDraft: (index: number) => void;
   onDraftChange: (draft: CopywritingDraft) => void;
-  onAdjustmentChange: (value: string) => void;
   onCopy: () => void | Promise<void>;
-  onAdjust: () => void | Promise<void>;
-  onInterrupt: () => void | Promise<void>;
+  composer: ReactNode;
 }) {
   return (
     <div className="flex min-h-full flex-col">
@@ -508,33 +484,8 @@ function CopywritingEditor({
           {error ? <p className="mt-5 text-xs text-[var(--cp-danger)]">{error}</p> : null}
         </div>
       </div>
-      <div className="shrink-0 border-t border-[var(--cp-border-subtle)] px-4 py-3 md:px-8">
-        <div className="mx-auto flex min-h-11 w-full max-w-[820px] items-end gap-2 rounded-[var(--cp-radius-composer)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2 shadow-[var(--cp-shadow-soft)]">
-          <textarea
-            value={adjustment}
-            onChange={(event) => onAdjustmentChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                void onAdjust();
-              }
-            }}
-            rows={1}
-            className="max-h-24 min-h-7 flex-1 resize-none border-0 bg-transparent px-1 py-1 text-sm leading-5 outline-none placeholder:text-[var(--cp-text-faint)]"
-            placeholder="继续调整语气、结构或卖点顺序"
-            disabled={running}
-          />
-          <Button
-            type="button"
-            size="icon"
-            className="size-8 shrink-0 rounded-full bg-[var(--cp-text)] text-white"
-            disabled={!running && !adjustment.trim()}
-            aria-label={running ? "停止生成" : "提交调整"}
-            onClick={running ? onInterrupt : onAdjust}
-          >
-            {running ? <Square className="size-3 fill-current" /> : <SendHorizontal className="size-4" />}
-          </Button>
-        </div>
+      <div className="shrink-0 border-t border-[var(--cp-border-subtle)] bg-[var(--cp-bg)] px-4 py-3 md:px-8">
+        {composer}
       </div>
     </div>
   );
@@ -545,7 +496,9 @@ function readOriginalRecipeGoal(messages: ConversationMessage[]): string {
     .filter((message) => message.role === "user")
     .sort((left, right) => left.sequence - right.sequence)[0];
   if (!firstUserMessage) return "";
-  const content = firstUserMessage.content.replace(/^\$commerce-copywriting\s*/i, "").trim();
+  const content = firstUserMessage.content
+    .replace(/^\$commerce-copywriting(?:-intake)?\s*/i, "")
+    .trim();
   const goal = content.match(/^用户目标：(.+)$/m)?.[1]?.trim();
   return goal || content;
 }
