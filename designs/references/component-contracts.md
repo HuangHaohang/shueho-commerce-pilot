@@ -226,7 +226,7 @@ type WorkComposerProps = {
 - SSE 是低延迟通道，不是唯一事实来源。active turn 期间前端必须每约 `3s` 通过认证 BFF 调用 App Server `thread/read` 做无 loading 的后台对账：持久化历史出现匹配 `userMessage.clientId` 时移除对应 pending preview，并把权威消息按 sequence 合并到正式时间线；thread 进入 completed/failed/interrupted 时用权威 messages、activities、images、duration 与 status 覆盖本地状态并停止计时。对账不得把待确认输入提前写入正式 messages，也不得改变滚动位置。这样 Gateway 重启、SSE 断线或漏事件时，运行状态最多延迟一个轮询周期恢复，禁止无限显示“正在处理/正在调整”。
 - 暂停跟随后显示圆形“回到底部”按钮：SSE 运行中使用三点上下跳动状态，回复完成后切换为向下箭头；点击后平滑滚到底部并恢复自动跟随，按钮必须有可访问名称和 tooltip。
 - 长对话在桌面端显示对话区左侧 Prompt 导航。每个正式用户 Prompt 对应一个刻度；Agent 回复、活动、图片和处理状态不得生成独立刻度。Prompt 刻度位于垂直居中的固定间距栈中，不按照回复高度投影，默认全部左侧对齐且等长。指针进入刻度栈后自动选取最近 Prompt，中心刻度变深并最长，前后相邻刻度按距离对称递减，以 `150ms` 左右的宽度过渡形成金字塔轮廓；离开后全部收回为等长。短对话或无溢出时隐藏，移动端不显示，并在 `prefers-reduced-motion` 下取消宽度动画。
-- 时间线当前位置使用深色短线与弱化视口范围表示。悬停刻度只显示对应用户 Prompt 的紧凑预览浮层；点击刻度平滑跳转，拖动当前位置线同步修改中间对话容器 `scrollTop`，键盘支持方向键、Page Up/Down、Home 和 End。待确认的调整方向只有在 Harness 返回权威 `userMessage` 并进入正式消息时间线后才生成 Prompt 刻度。该控件不得滚动页面、侧栏、顶栏、右侧输出区或底部 composer。
+- Prompt 导航不得叠加独立的深色“当前滚动位置”横线，避免它与悬停中心刻度形成两个视觉焦点。弱化视口范围可以保留；悬停刻度只显示对应用户 Prompt 的紧凑预览浮层，点击刻度平滑跳转，轨道点击与方向键、Page Up/Down、Home、End 继续控制中间对话容器。待确认的调整方向只有在 Harness 返回权威 `userMessage` 并进入正式消息时间线后才生成 Prompt 刻度。该控件不得滚动页面、侧栏、顶栏、右侧输出区或底部 composer。
 - SSE、历史恢复、图片加载、活动展开和容器尺寸变化后必须通过 `ResizeObserver` 与一帧节流重新测量时间线；测量和对账不得强制改变用户当前阅读位置。
 
 ## ApprovalPanel

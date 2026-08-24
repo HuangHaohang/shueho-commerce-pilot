@@ -1051,7 +1051,7 @@ function ConversationMinimap({
 
   function handleTrackPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     const target = event.target as HTMLElement;
-    if (target.closest("[data-minimap-marker], [data-minimap-thumb]")) {
+    if (target.closest("[data-minimap-marker]")) {
       return;
     }
     const rect = event.currentTarget.getBoundingClientRect();
@@ -1089,32 +1089,6 @@ function ConversationMinimap({
       top: Math.max(0, marker.offsetTop - node.clientHeight * 0.12),
       behavior: "smooth",
     });
-  }
-
-  function handleThumbPointerDown(event: React.PointerEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    const node = scrollContainerRef.current;
-    const rail = event.currentTarget.parentElement;
-    if (!node || !rail) {
-      return;
-    }
-    const railHeight = Math.max(1, rail.getBoundingClientRect().height);
-    const startY = event.clientY;
-    const startScrollTop = node.scrollTop;
-    const maximum = Math.max(0, node.scrollHeight - node.clientHeight);
-    const handlePointerMove = (pointerEvent: PointerEvent) => {
-      const scrollDelta = ((pointerEvent.clientY - startY) / railHeight) * maximum;
-      node.scrollTop = Math.min(Math.max(startScrollTop + scrollDelta, 0), maximum);
-    };
-    const stopDragging = () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", stopDragging);
-      window.removeEventListener("pointercancel", stopDragging);
-    };
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", stopDragging);
-    window.addEventListener("pointercancel", stopDragging);
   }
 
   function handleScrollbarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
@@ -1227,15 +1201,6 @@ function ConversationMinimap({
             </button>
           ))}
         </div>
-        <button
-          type="button"
-          tabIndex={-1}
-          data-minimap-thumb
-          className="absolute left-0 h-[3px] w-6 -translate-y-1/2 cursor-grab rounded-full bg-[var(--cp-text)] p-0 active:cursor-grabbing"
-          style={{ top: `${state.scrollPercent}%` }}
-          aria-label="拖动对话位置"
-          onPointerDown={handleThumbPointerDown}
-        />
       </div>
 
       {hoveredMarker ? (
