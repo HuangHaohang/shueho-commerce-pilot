@@ -157,8 +157,8 @@ const primaryNavItems = [
 ];
 
 const moreNavItems = [
-  { label: "已安排", icon: Clock3, active: false },
-  { label: "插件", icon: Plug, active: false },
+  { label: "已安排", icon: Clock3, active: false, href: null },
+  { label: "插件", icon: Plug, active: false, href: "/plugins" },
 ];
 
 const creativeNavItems = [
@@ -2054,18 +2054,31 @@ function Sidebar({
                 className="fixed z-50 w-[252px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)]"
                 style={{ left: sidebarFlyoutPosition.left, top: sidebarFlyoutPosition.top }}
               >
-                {(openSidebarFlyout === "creative" ? creativeNavItems : moreNavItems).map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    role="menuitem"
-                    className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                    onClick={() => setOpenSidebarFlyout(null)}
-                  >
-                    <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
-                    <span className="truncate">{item.label}</span>
-                  </button>
-                ))}
+                {(openSidebarFlyout === "creative" ? creativeNavItems : moreNavItems).map((item) =>
+                  "href" in item && item.href ? (
+                    <Link
+                      key={item.label}
+                      href={item.href}
+                      role="menuitem"
+                      className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+                      onClick={() => setOpenSidebarFlyout(null)}
+                    >
+                      <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
+                      <span className="truncate">{item.label}</span>
+                    </Link>
+                  ) : (
+                    <button
+                      key={item.label}
+                      type="button"
+                      role="menuitem"
+                      className="flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+                      onClick={() => setOpenSidebarFlyout(null)}
+                    >
+                      <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
+                      <span className="truncate">{item.label}</span>
+                    </button>
+                  ),
+                )}
               </div>,
               document.body,
             )

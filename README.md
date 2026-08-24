@@ -27,6 +27,7 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Records exact Codex 0.149 Harness usage plus source-attributed MCP/Web Search/image usage, including explicit missing-usage status, through a durable outbox/dead-letter pipeline and idempotent PostgreSQL ledger.
 - Reserves direct, queue-steer, and context-compaction root-job leases under tenant-wide concurrency and projected token/request budgets; Codex multi-agent fan-out is separately capped at four threads per session by default.
 - Actively polls Enterprise authorization for running roots, reauthorizes host-tool calls, and interrupts active work plus clears queued input when access is revoked or the authorizer fails.
+- Provides an authenticated, read-only Commerce Plugin inventory at `/plugins`. Manifests describe application-managed skills, MCP servers, tools, UI, and security scope, while enablement is derived from live Gateway/MCP/Provider evidence. Arbitrary package installation and host execution remain disabled. See [Commerce Plugin Runtime](./docs/architecture/commerce-plugin-runtime.md).
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
 
