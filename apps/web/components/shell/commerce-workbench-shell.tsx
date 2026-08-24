@@ -1339,8 +1339,8 @@ function ConversationMessageView({ message }: { message: ConversationMessage }) 
   return (
     <div
       className={cn(
-        "text-[14px] leading-6 text-[var(--cp-text-soft)]",
-        message.phase === "commentary" && "text-sm text-[var(--cp-text-muted)]",
+        "text-[14px] leading-6 text-[var(--cp-text)]",
+        message.phase === "commentary" && "text-[13px] font-medium leading-5 text-[var(--cp-text)]",
       )}
     >
       <ReactMarkdown

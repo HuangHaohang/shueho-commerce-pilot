@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ConversationMessage } from "./use-agent-thread";
-import { mergeAuthoritativeMessages } from "./message-reconciliation";
+import {
+  findMatchingConversationMessage,
+  mergeAuthoritativeMessages,
+} from "./message-reconciliation";
 
 describe("conversation message reconciliation", () => {
   it("replaces an optimistic user bubble with the authoritative Harness message", () => {
@@ -48,6 +51,48 @@ describe("conversation message reconciliation", () => {
       clientId: "client-2",
     };
 
+    expect(mergeAuthoritativeMessages([first], [second])).toEqual([first, second]);
+  });
+
+  it("reconciles one commentary message across SSE and thread-read ids", () => {
+    const streamed: ConversationMessage = {
+      id: "msg-provider-id",
+      sequence: 20,
+      turnId: "turn-search",
+      role: "assistant",
+      content: "第一次查询没有返回来源 URL。我缩短关键词后重试。",
+      phase: null,
+      status: "streaming",
+    };
+    const authoritative: ConversationMessage = {
+      ...streamed,
+      id: "item-151",
+      sequence: 21,
+      phase: "commentary",
+      status: "completed",
+    };
+
+    expect(mergeAuthoritativeMessages([streamed], [authoritative])).toEqual([authoritative]);
+  });
+
+  it("keeps distinct commentary messages from the same turn", () => {
+    const first: ConversationMessage = {
+      id: "item-1",
+      sequence: 1,
+      turnId: "turn-search",
+      role: "assistant",
+      content: "先检查官方页面。",
+      phase: "commentary",
+      status: "completed",
+    };
+    const second: ConversationMessage = {
+      ...first,
+      id: "item-2",
+      sequence: 2,
+      content: "第一次没有来源，缩短关键词后重试。",
+    };
+
+    expect(findMatchingConversationMessage([first], second)).toBeUndefined();
     expect(mergeAuthoritativeMessages([first], [second])).toEqual([first, second]);
   });
 });

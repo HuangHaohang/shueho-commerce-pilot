@@ -6,7 +6,10 @@ import {
   reconcilePendingInputState,
   type QueuedMessage,
 } from "./pending-input-state";
-import { mergeAuthoritativeMessages } from "./message-reconciliation";
+import {
+  findMatchingConversationMessage,
+  mergeAuthoritativeMessages,
+} from "./message-reconciliation";
 import {
   activateTurnClock,
   shouldExpireActiveTurn,
@@ -1082,11 +1085,24 @@ function upsertAssistantMessage(
   sequence: number,
 ) {
   setter((current) => {
-    const existing = current.find((message) => message.id === id);
+    const incoming: ConversationMessage = {
+      id,
+      sequence,
+      turnId,
+      role: "assistant",
+      content,
+      phase,
+      status,
+    };
+    const existing = findMatchingConversationMessage(current, incoming);
     if (!existing) {
-      return [...current, { id, sequence, turnId, role: "assistant", content, phase, status }];
+      return [...current, incoming];
     }
-    return current.map((message) => (message.id === id ? { ...message, content, phase, status } : message));
+    return current.map((message) =>
+      message.id === existing.id
+        ? { ...message, id, turnId, content, phase, status }
+        : message,
+    );
   });
 }
 

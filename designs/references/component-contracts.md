@@ -189,6 +189,8 @@ type WorkComposerProps = {
 - “正在思考”必须位于当前轮用户消息之后、第一条 Agent commentary/final answer 之前，禁止放在用户消息上方。
 - `connecting` / `running` 状态显示带克制扫光的“正在处理 X 秒”并实时递增；计时起点属于单个 turn，HTTP/SSE 状态切换不得重置，运行中的可见秒数不得回退；只有进入 completed、failed 或 interrupted 终态后，才冻结并显示“已处理 X 秒”。
 - 运行态的 commentary 按事件 sequence 展示；命令、文件和工具事件共用一个固定活动槽位，新的活动原位替换上一条活动文本，禁止向下追加成活动列表。
+- `agentMessage.phase = commentary` 是用户可见的执行说明，不是隐藏 reasoning，也不是最终正文：使用主文本色、略小字号和中等字重自然插在工具调用前后，不使用卡片或“思考过程”标签。`reasoning` item 始终不渲染。`final_answer` 只在 turn 完成阶段作为普通主正文显示。
+- 运行中 SSE 与 `thread/read` 可能为同一 assistant message 提供不同协议 id；前端必须按同 turn、兼容 phase、相同正文或 streaming 前缀原位合并。不得把同一个 commentary 重复渲染，同时不得合并同一 turn 内正文不同的多段 commentary。
 - 活动必须按 `turnId` 隔离；开始新一轮后，上一轮命令不得继续出现在当前执行区。
 - 同一个 App Server item 的 started/completed 状态必须按 item id 原位替换；新的 item 在运行态也替换固定活动槽位，完整 item 历史只进入完成后的 disclosure。
 - 运行中的整条活动文本只使用共享的 `cp-running-shimmer` 连续扫光层；状态文字和命令详情禁止各自动画造成多段、快速或错乱的亮片。完成态活动与 disclosure 不显示动画或成功勾选图标。

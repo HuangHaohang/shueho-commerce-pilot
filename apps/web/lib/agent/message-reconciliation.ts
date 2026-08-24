@@ -6,11 +6,7 @@ export function mergeAuthoritativeMessages(
 ): ConversationMessage[] {
   let next = current;
   for (const message of authoritative) {
-    const existing = next.find(
-      (candidate) =>
-        candidate.id === message.id ||
-        Boolean(message.clientId && candidate.clientId === message.clientId),
-    );
+    const existing = findMatchingConversationMessage(next, message);
     if (!existing) {
       next = [...next, message];
       continue;
@@ -27,11 +23,38 @@ export function mergeAuthoritativeMessages(
                 candidate.content.length > message.content.length
                   ? candidate.content
                   : message.content,
-              status: "streaming",
+              status:
+                candidate.content.length > message.content.length
+                  ? "streaming"
+                  : message.status,
             }
           : { ...candidate, ...message }
         : candidate,
     );
   }
   return next;
+}
+
+export function findMatchingConversationMessage(
+  messages: ConversationMessage[],
+  incoming: ConversationMessage,
+): ConversationMessage | undefined {
+  return messages.find((candidate) => {
+    if (candidate.id === incoming.id) return true;
+    if (incoming.clientId && candidate.clientId === incoming.clientId) return true;
+    if (
+      candidate.role !== "assistant" ||
+      incoming.role !== "assistant" ||
+      candidate.turnId !== incoming.turnId ||
+      (candidate.phase !== incoming.phase && candidate.phase != null && incoming.phase != null)
+    ) {
+      return false;
+    }
+    if (candidate.content === incoming.content) return true;
+    return (
+      candidate.status === "streaming" &&
+      candidate.content.length > 0 &&
+      incoming.content.startsWith(candidate.content)
+    );
+  });
 }
