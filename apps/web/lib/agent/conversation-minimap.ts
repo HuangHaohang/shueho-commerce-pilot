@@ -49,19 +49,10 @@ export function calculateConversationMinimap(
   };
 }
 
-export function findClosestConversationMinimapMarker(
-  markers: ConversationMinimapMarker[],
-  positionPercent: number,
-): ConversationMinimapMarker | null {
-  if (markers.length === 0) {
-    return null;
-  }
-  const target = clamp(positionPercent, 0, 100);
-  return markers.reduce((closest, marker) =>
-    Math.abs(marker.positionPercent - target) < Math.abs(closest.positionPercent - target)
-      ? marker
-      : closest,
-  );
+export function selectConversationMinimapPromptMarkers(
+  markers: ConversationMinimapMarkerInput[],
+): ConversationMinimapMarkerInput[] {
+  return markers.filter((marker) => marker.kind === "user");
 }
 
 export function calculateConversationMinimapMarkerWidth(

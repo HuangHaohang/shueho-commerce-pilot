@@ -72,7 +72,7 @@ import {
 import {
   calculateConversationMinimapMarkerWidth,
   calculateConversationMinimap,
-  findClosestConversationMinimapMarker,
+  selectConversationMinimapPromptMarkers,
   type ConversationMinimapMarker,
   type ConversationMinimapMarkerInput,
   type ConversationMinimapState,
@@ -651,8 +651,8 @@ function ConversationWorkspace({
     }
     if (minimapNeedsMeasurementRef.current || minimapMarkersRef.current.length === 0) {
       const containerRect = node.getBoundingClientRect();
-      minimapMarkersRef.current = [
-        ...node.querySelectorAll<HTMLElement>("[data-conversation-minimap-anchor]"),
+      const measuredMarkers = [
+        ...node.querySelectorAll<HTMLElement>("[data-minimap-prompt]"),
       ]
         .map<ConversationMinimapMarkerInput | null>((element, index) => {
           const preview = normalizeMinimapPreview(
@@ -671,6 +671,7 @@ function ConversationWorkspace({
           };
         })
         .filter((marker): marker is ConversationMinimapMarkerInput => Boolean(marker));
+      minimapMarkersRef.current = selectConversationMinimapPromptMarkers(measuredMarkers);
       minimapNeedsMeasurementRef.current = false;
     }
     setMinimapState(
@@ -1030,6 +1031,7 @@ function ConversationMinimap({
   hoveredMarkerId: string | null;
   onHoveredMarkerChange: (markerId: string | null) => void;
 }) {
+  const [hoveredMarkerTopPercent, setHoveredMarkerTopPercent] = useState(50);
   if (!state.visible) {
     return null;
   }
@@ -1056,13 +1058,37 @@ function ConversationMinimap({
     scrollToPosition(((event.clientY - rect.top) / Math.max(1, rect.height)) * 100);
   }
 
-  function handleTrackPointerMove(event: React.PointerEvent<HTMLDivElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const pointerPosition = ((event.clientY - rect.top) / Math.max(1, rect.height)) * 100;
-    const closestMarker = findClosestConversationMinimapMarker(state.markers, pointerPosition);
-    if (closestMarker?.id !== hoveredMarkerId) {
-      onHoveredMarkerChange(closestMarker?.id ?? null);
+  function handleMarkerStackPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const stackRect = event.currentTarget.getBoundingClientRect();
+    const railRect = event.currentTarget.parentElement?.getBoundingClientRect();
+    const markerPitch = 10;
+    const markerIndex = Math.min(
+      state.markers.length - 1,
+      Math.max(0, Math.round((event.clientY - stackRect.top - 5) / markerPitch)),
+    );
+    const closestMarker = state.markers[markerIndex];
+    if (closestMarker && closestMarker.id !== hoveredMarkerId) {
+      onHoveredMarkerChange(closestMarker.id);
     }
+    if (railRect) {
+      setHoveredMarkerTopPercent(
+        Math.min(
+          92,
+          Math.max(8, ((event.clientY - railRect.top) / Math.max(1, railRect.height)) * 100),
+        ),
+      );
+    }
+  }
+
+  function scrollToMarker(marker: ConversationMinimapMarker) {
+    const node = scrollContainerRef.current;
+    if (!node) {
+      return;
+    }
+    node.scrollTo({
+      top: Math.max(0, marker.offsetTop - node.clientHeight * 0.12),
+      behavior: "smooth",
+    });
   }
 
   function handleThumbPointerDown(event: React.PointerEvent<HTMLButtonElement>) {
@@ -1134,8 +1160,6 @@ function ConversationMinimap({
         aria-valuenow={Math.round(state.scrollPercent)}
         className="pointer-events-auto relative h-full w-8 cursor-pointer rounded-[var(--cp-radius-xs)] outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)]"
         onPointerDown={handleTrackPointerDown}
-        onPointerMove={handleTrackPointerMove}
-        onPointerLeave={() => onHoveredMarkerChange(null)}
         onKeyDown={handleScrollbarKeyDown}
       >
         <span
@@ -1146,41 +1170,63 @@ function ConversationMinimap({
           }}
           aria-hidden="true"
         />
-        {state.markers.map((marker, markerIndex) => (
-          <button
-            key={marker.id}
-            type="button"
-            tabIndex={-1}
-            data-minimap-marker
-            className="absolute left-0 h-3 w-8 -translate-y-1/2 bg-transparent p-0"
-            style={{ top: `${marker.positionPercent}%` }}
-            aria-label={`跳转到${minimapKindLabel(marker.kind)}：${marker.preview}`}
-            onPointerDown={(event) => event.stopPropagation()}
-            onFocus={() => onHoveredMarkerChange(marker.id)}
-            onBlur={() => onHoveredMarkerChange(null)}
-            onClick={() => {
-              const node = scrollContainerRef.current;
-              if (!node) {
-                return;
-              }
-              node.scrollTo({
-                top: Math.max(0, marker.offsetTop - node.clientHeight * 0.12),
-                behavior: "smooth",
-              });
-            }}
-          >
-            <span
-              className={cn(
-                "pointer-events-none absolute left-0 top-1/2 h-px -translate-y-1/2 rounded-full bg-[var(--cp-border-strong)] transition-[width,background-color] duration-150 ease-out motion-reduce:transition-none",
-                hoveredMarkerId === marker.id && "bg-[var(--cp-text)]",
-              )}
-              style={{
-                width: `${calculateConversationMinimapMarkerWidth(markerIndex, hoveredMarkerIndex)}px`,
+        <div
+          data-minimap-marker-stack
+          className="absolute left-0 top-1/2 flex max-h-[50dvh] w-8 -translate-y-1/2 flex-col items-start gap-2 overflow-clip py-1"
+          onPointerDown={(event) => event.stopPropagation()}
+          onPointerMove={handleMarkerStackPointerMove}
+          onPointerLeave={() => onHoveredMarkerChange(null)}
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest("[data-minimap-marker]")) {
+              return;
+            }
+            if (hoveredMarker) {
+              scrollToMarker(hoveredMarker);
+            }
+          }}
+        >
+          {state.markers.map((marker, markerIndex) => (
+            <button
+              key={marker.id}
+              type="button"
+              tabIndex={-1}
+              data-minimap-marker
+              className="relative h-0.5 w-8 shrink-0 bg-transparent p-0"
+              aria-label={`跳转到${minimapKindLabel(marker.kind)}：${marker.preview}`}
+              onFocus={(event) => {
+                onHoveredMarkerChange(marker.id);
+                const railRect = event.currentTarget.parentElement?.parentElement?.getBoundingClientRect();
+                const markerRect = event.currentTarget.getBoundingClientRect();
+                if (railRect) {
+                  setHoveredMarkerTopPercent(
+                    Math.min(
+                      92,
+                      Math.max(
+                        8,
+                        ((markerRect.top + markerRect.height / 2 - railRect.top) /
+                          Math.max(1, railRect.height)) *
+                          100,
+                      ),
+                    ),
+                  );
+                }
               }}
-              aria-hidden="true"
-            />
-          </button>
-        ))}
+              onBlur={() => onHoveredMarkerChange(null)}
+              onClick={() => scrollToMarker(marker)}
+            >
+              <span
+                className={cn(
+                  "pointer-events-none absolute left-0 top-1/2 h-0.5 -translate-y-1/2 rounded-full bg-[var(--cp-border-strong)] transition-[width,background-color] duration-150 ease-out motion-reduce:transition-none",
+                  hoveredMarkerId === marker.id && "bg-[var(--cp-text)]",
+                )}
+                style={{
+                  width: `${calculateConversationMinimapMarkerWidth(markerIndex, hoveredMarkerIndex)}px`,
+                }}
+                aria-hidden="true"
+              />
+            </button>
+          ))}
+        </div>
         <button
           type="button"
           tabIndex={-1}
@@ -1196,7 +1242,7 @@ function ConversationMinimap({
         <div
           className="pointer-events-none absolute left-9 w-[260px] rounded-[8px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-3 py-2.5 shadow-[var(--cp-shadow-popover)]"
           style={{
-            top: `${Math.min(Math.max(hoveredMarker.positionPercent, 8), 92)}%`,
+            top: `${hoveredMarkerTopPercent}%`,
             transform: "translateY(-50%)",
           }}
           role="status"
@@ -1260,6 +1306,7 @@ function ConversationTimelineMessage({ message }: { message: ConversationMessage
   return (
     <div
       data-conversation-minimap-anchor
+      data-minimap-prompt={message.role === "user" ? "" : undefined}
       data-minimap-id={`message-${message.id}`}
       data-minimap-kind={message.role}
       data-minimap-preview={message.content}

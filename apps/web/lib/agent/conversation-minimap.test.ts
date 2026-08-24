@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   calculateConversationMinimap,
   calculateConversationMinimapMarkerWidth,
-  findClosestConversationMinimapMarker,
+  selectConversationMinimapPromptMarkers,
 } from "./conversation-minimap";
 
 const markers = [
@@ -62,11 +62,7 @@ describe("conversation minimap geometry", () => {
     expect(calculateConversationMinimapMarkerWidth(12, 5)).toBe(6);
   });
 
-  it("selects the closest timeline marker for track-level hovering", () => {
-    const state = calculateConversationMinimap(0, 2_000, 500, markers);
-
-    expect(findClosestConversationMinimapMarker(state.markers, 47)?.id).toBe("second");
-    expect(findClosestConversationMinimapMarker(state.markers, 100)?.id).toBe("third");
-    expect(findClosestConversationMinimapMarker([], 50)).toBeNull();
+  it("creates navigation markers only for user prompts", () => {
+    expect(selectConversationMinimapPromptMarkers(markers).map((marker) => marker.id)).toEqual(["first"]);
   });
 });
