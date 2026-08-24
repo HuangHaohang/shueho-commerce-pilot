@@ -3,6 +3,12 @@ import { join, resolve } from "node:path";
 import { cwd, execPath } from "node:process";
 
 import type { GatewayConfig } from "../gateway/config.js";
+import {
+  MANAGED_WORKFLOW_IDS,
+  managedWorkflowSkillDirectory,
+  managedWorkflowSkillPath,
+  renderManagedWorkflowSkill,
+} from "./managed-workflows.js";
 
 export async function ensureAppOwnedCodexConfig(config: GatewayConfig): Promise<string> {
   await mkdir(config.codexHome, { recursive: true, mode: 0o700 });
@@ -15,6 +21,17 @@ export async function ensureAppOwnedCodexConfig(config: GatewayConfig): Promise<
   const commerceWebMcpPath = resolve(cwd(), "dist/src/mcp/commerce-web-server.js");
   await mkdir(managedHooksDirectory, { recursive: true, mode: 0o700 });
   await mkdir(hookAuditDirectory, { recursive: true, mode: 0o700 });
+  for (const workflow of MANAGED_WORKFLOW_IDS) {
+    await mkdir(managedWorkflowSkillDirectory(config.runtimeRoot, workflow), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await writeFileIfChanged(
+      managedWorkflowSkillPath(config.runtimeRoot, workflow),
+      renderManagedWorkflowSkill(workflow),
+      0o600,
+    );
+  }
   await writeFileIfChanged(hookScriptPath, renderManagedHookRunner(), 0o600);
   await writeFileIfChanged(
     hookWindowsScriptPath,

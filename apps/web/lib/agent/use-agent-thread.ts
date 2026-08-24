@@ -58,6 +58,11 @@ export type GeneratedImageItem = {
 
 export type AgentThreadStatus = "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
 
+export type AgentSubmitOptions = {
+  title?: string;
+  workflow?: "commerce-copywriting";
+};
+
 export type AgentThreadSummary = {
   threadId: string;
   title: string;
@@ -652,7 +657,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
 
   const submit = useCallback(
-    async (text: string) => {
+    async (text: string, options?: AgentSubmitOptions) => {
       const message = text.trim();
       if (!message || status === "running" || status === "connecting") {
         return;
@@ -670,6 +675,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setLastTurnId(null);
       const optimisticMessageId = `user-${crypto.randomUUID()}`;
       const clientRequestId = crypto.randomUUID();
+      const requestedTitle = options?.title?.trim().slice(0, 80) || createThreadTitle(message);
       setMessages((current) => [
         ...current,
         {
@@ -683,7 +689,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           status: "completed",
         },
       ]);
-      setThreadTitle((current) => current ?? createThreadTitle(message));
+      setThreadTitle((current) => current ?? requestedTitle);
 
       try {
         let currentThreadId = threadId;
@@ -691,7 +697,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           const response = await fetch("/api/agent/threads", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model, title: createThreadTitle(message) }),
+            body: JSON.stringify({ model, title: requestedTitle }),
           });
           const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
           currentThreadId = readThreadId(payload);
@@ -705,7 +711,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/turns`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, model, effort, clientRequestId }),
+          body: JSON.stringify({ message, model, effort, workflow: options?.workflow, clientRequestId }),
         });
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         if (!response.ok) {
@@ -716,7 +722,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             const createResponse = await fetch("/api/agent/threads", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ model, title: createThreadTitle(message) }),
+              body: JSON.stringify({ model, title: requestedTitle }),
             });
             const createPayload = (await createResponse.json().catch(() => null)) as Record<string, unknown> | null;
             const replacementThreadId = readThreadId(createPayload);
@@ -725,7 +731,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             }
             currentThreadId = replacementThreadId;
             setThreadId(replacementThreadId);
-            setThreadTitle(createThreadTitle(message));
+            setThreadTitle(requestedTitle);
             setActivities([]);
             setImages([]);
             setMessages((current) => current.filter((item) => item.role === "user").slice(-1));
@@ -733,7 +739,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             const retryResponse = await fetch(`/api/agent/threads/${encodeURIComponent(replacementThreadId)}/turns`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ message, model, effort, clientRequestId }),
+              body: JSON.stringify({ message, model, effort, workflow: options?.workflow, clientRequestId }),
             });
             const retryPayload = (await retryResponse.json().catch(() => null)) as Record<string, unknown> | null;
             if (!retryResponse.ok) {

@@ -73,4 +73,5 @@ export type TurnStartInput = {
   message?: string;
   model?: string;
   effort?: string;
+  workflow?: "commerce-copywriting";
 };

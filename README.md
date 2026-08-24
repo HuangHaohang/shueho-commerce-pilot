@@ -28,6 +28,7 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Reserves direct, queue-steer, and context-compaction root-job leases under tenant-wide concurrency and projected token/request budgets; Codex multi-agent fan-out is separately capped at four threads per session by default.
 - Actively polls Enterprise authorization for running roots, reauthorizes host-tool calls, and interrupts active work plus clears queued input when access is revoked or the authorizer fails.
 - Provides an authenticated, read-only Commerce Plugin inventory inside the existing workbench shell, with `/plugins` as a direct entry point. Manifests describe application-managed skills, MCP servers, tools, UI, and security scope, while enablement is derived from live Gateway/MCP/Provider evidence. List controls open same-shell details; arbitrary package installation and host execution remain disabled. See [Commerce Plugin Runtime](./docs/architecture/commerce-plugin-runtime.md).
+- Provides a same-shell e-commerce copywriting workspace with a structured Brief, editable versioned output, real turn interruption, and history restoration. Each job remains a native App Server thread; generation and revisions use `turn/start` with an application-owned `commerce-copywriting` Skill and a Gateway-fixed output schema. See [Commerce Copywriting Workflow](./docs/architecture/commerce-copywriting-workflow.md).
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
 

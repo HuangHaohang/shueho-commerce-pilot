@@ -81,6 +81,25 @@
 - 当前项白底轻阴影，非当前项透明或浅灰。
 - 未登录状态隐藏整个模式切换，只在登录后进入工作台时显示。
 
+## CopywritingWorkspace
+
+职责：
+
+- 在现有工作台壳内完成电商文案 Brief、生成、改写和版本比较，不跳转到另一套页面壳。
+- 左侧为结构化 Brief，右侧为可编辑文档画布；桌面端仅这两个内部区域独立滚动，浏览器根页面不得滚动。
+- Brief 至少包含文案类型、渠道、商品名称、核心卖点、目标人群、表达语气、目标字数、必须包含和禁用词。
+- 生成按钮固定在 Brief 面板底部，不得因为字段较多而滚出可视区。
+- 结果区使用版本切换而不是向下堆叠多个完整文案；标题、正文和 CTA 可本地编辑，合规备注与正文分离。
+- 运行中显示真实“正在生成 x 秒”和停止按钮；完成后才增加版本。调整请求必须进入同一 Codex thread 的新 turn，不覆盖旧版本。
+- 刷新或点击历史文案任务时，使用服务端 thread history 恢复版本，并从首个结构化 Brief 恢复左侧字段。
+
+Harness 契约：
+
+- 每个文案任务对应一个 Codex thread；首次生成和每次调整各对应一个 `turn/start`。
+- 文案规则通过应用托管 `commerce-copywriting` Skill 注入；Gateway 只接受固定 workflow id，并自行解析 Skill 路径和 `outputSchema`。
+- 浏览器不得提交任意 Skill 路径、developer instructions、output schema、tool definition、cwd 或权限策略。
+- 输出 Schema 固定为 `title`、`body`、`callToAction`、`complianceNotes`。商品资料读取和保存草稿必须使用另行注册、带租户授权的应用工具；Hook 不承载文案业务逻辑。
+
 ## WorkComposer
 
 职责：

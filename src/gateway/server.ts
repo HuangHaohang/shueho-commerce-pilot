@@ -4,6 +4,7 @@ import { randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 
 import { CodexAppServerClient } from "../codex/app-server-client.js";
+import { buildManagedWorkflowTurn, isManagedWorkflowId } from "../codex/managed-workflows.js";
 import type { AppServerEvent, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
 import { ensureAppOwnedCodexConfig } from "../codex/runtime-config.js";
 import { CommerceProviderClient, CommerceProviderError, type ImageGenerationInput } from "../provider/commerce-provider-client.js";
@@ -429,6 +430,11 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Expected a message between 1 and 50000 characters." });
         return;
       }
+      if (body.workflow !== undefined && !isManagedWorkflowId(body.workflow)) {
+        sendJson(res, 400, { error: "Unknown managed workflow." });
+        return;
+      }
+      const workflow = isManagedWorkflowId(body.workflow) ? body.workflow : null;
       const threadId = decodeURIComponent(turnMatch[1] ?? "");
       if (!isSafeAgentId(threadId)) {
         sendJson(res, 400, { error: "Invalid thread id." });
@@ -454,6 +460,13 @@ const server = createServer(async (req, res) => {
         await ensureThreadLoaded(threadId, body.model);
         const activeTurnId = await readHarnessActiveTurnId(threadId);
         if (activeTurnId) {
+          if (workflow) {
+            sendJson(res, 409, {
+              error: "Managed workflow turns cannot be queued behind an active turn.",
+              code: "MANAGED_WORKFLOW_ACTIVE_TURN",
+            });
+            return;
+          }
           activeTurnsByThread.set(threadId, activeTurnId);
           const queuedResult = await serializeSteerTransition(threadId, () =>
             addQueuedSubmissionWithCapacity(threadId, clientUserMessageId, message),
@@ -472,13 +485,17 @@ const server = createServer(async (req, res) => {
         }
         const requestedModel = body.model ?? threadScopes.get(threadId)?.model ?? config.defaultModel ?? null;
         pendingTurnModels.set(threadId, requestedModel);
+        const managedWorkflowTurn = workflow
+          ? buildManagedWorkflowTurn(config.runtimeRoot, workflow, message)
+          : null;
         const result = await codex
           .request("turn/start", {
             threadId,
             clientUserMessageId,
-            input: [{ type: "text", text: message, text_elements: [] }],
+            input: managedWorkflowTurn?.input ?? [{ type: "text", text: message, text_elements: [] }],
             model: body.model,
             effort: body.effort,
+            outputSchema: managedWorkflowTurn?.outputSchema,
           })
           .finally(() => {
             if (pendingTurnModels.get(threadId) === requestedModel) pendingTurnModels.delete(threadId);

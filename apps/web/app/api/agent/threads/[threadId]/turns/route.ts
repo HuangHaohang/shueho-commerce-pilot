@@ -10,6 +10,7 @@ import {
 import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
 
 const effortValues = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
+const workflowValues = new Set(["commerce-copywriting"]);
 
 export async function POST(request: Request, context: { params: Promise<{ threadId: string }> }) {
   const { threadId } = await context.params;
@@ -25,6 +26,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     model?: unknown;
     effort?: unknown;
     clientRequestId?: unknown;
+    workflow?: unknown;
   } | null;
   if (!body || typeof body.message !== "string" || !body.message.trim() || body.message.length > 50_000) {
     return NextResponse.json({ error: "请输入有效内容。" }, { status: 400 });
@@ -32,8 +34,12 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   if (typeof body.model !== "string" || body.model.length > 128) {
     return NextResponse.json({ error: "请选择有效模型。" }, { status: 400 });
   }
+  if (body.workflow !== undefined && (typeof body.workflow !== "string" || !workflowValues.has(body.workflow))) {
+    return NextResponse.json({ error: "工作流标识无效。" }, { status: 400 });
+  }
 
   const effort = typeof body.effort === "string" && effortValues.has(body.effort) ? body.effort : undefined;
+  const workflow = typeof body.workflow === "string" && workflowValues.has(body.workflow) ? body.workflow : undefined;
   const clientRequestId =
     typeof body.clientRequestId === "string" && /^[0-9a-f-]{36}$/i.test(body.clientRequestId)
       ? body.clientRequestId
@@ -64,6 +70,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
         message: body.message.trim(),
         model: body.model,
         effort,
+        workflow,
         clientRequestId,
       }),
       cache: "no-store",

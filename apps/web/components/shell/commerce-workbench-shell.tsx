@@ -59,9 +59,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
+import { CopywritingWorkspace } from "@/components/creative/copywriting-workspace";
+import { PluginDirectory } from "@/components/plugins/plugin-directory";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { PluginDirectory } from "@/components/plugins/plugin-directory";
 import {
   useAgentThread,
   type AgentActivity,
@@ -84,10 +85,15 @@ import {
   type WebSource,
 } from "@/lib/agent/web-sources";
 import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
+import {
+  buildCopywritingAdjustmentPrompt,
+  buildCopywritingPrompt,
+  type CopywritingBrief,
+} from "@/lib/copywriting/brief";
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
-type WorkbenchView = "workbench" | "plugins";
+type WorkbenchView = "workbench" | "plugins" | "copywriting";
 type AuthMode = "login" | "register";
 type AuthIdentifierType = "email" | "phone";
 
@@ -298,7 +304,7 @@ export function CommerceWorkbenchShell({
   }, [agentThread.resetThread, authUser?.id, queryClient]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
+    if (!isAuthenticated || activeView !== "workbench") {
       autoRestoreAttemptedRef.current = false;
       return;
     }
@@ -308,9 +314,19 @@ export function CommerceWorkbenchShell({
     autoRestoreAttemptedRef.current = true;
     const latestThread = threadsQuery.data?.threads[0];
     if (!agentThread.threadId && latestThread) {
+      if (isCopywritingThread(latestThread)) {
+        setActiveView("copywriting");
+      }
       void agentThread.loadThread(latestThread);
     }
-  }, [agentThread.loadThread, agentThread.threadId, isAuthenticated, threadsQuery.data, threadsQuery.isSuccess]);
+  }, [
+    activeView,
+    agentThread.loadThread,
+    agentThread.threadId,
+    isAuthenticated,
+    threadsQuery.data,
+    threadsQuery.isSuccess,
+  ]);
 
   useEffect(() => {
     if (agentThread.threadId) {
@@ -374,8 +390,35 @@ export function CommerceWorkbenchShell({
       return;
     }
     setDraft("");
-    setActiveView("workbench");
+    setActiveView(isCopywritingThread(thread) ? "copywriting" : "workbench");
     void agentThread.loadThread(thread);
+  }
+
+  function openCopywriting() {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return;
+    }
+    if (navigationLocked || activeView === "copywriting") {
+      return;
+    }
+    setDraft("");
+    setSubmittedDraft(null);
+    agentThread.resetThread();
+    setActiveView("copywriting");
+  }
+
+  async function generateCopywritingDraft(brief: CopywritingBrief) {
+    await agentThread.submit(buildCopywritingPrompt(brief), {
+      title: `文案生成 · ${brief.productName.trim()}`,
+      workflow: "commerce-copywriting",
+    });
+  }
+
+  async function adjustCopywritingDraft(instruction: string) {
+    await agentThread.submit(buildCopywritingAdjustmentPrompt(instruction), {
+      workflow: "commerce-copywriting",
+    });
   }
 
   return (
@@ -389,6 +432,7 @@ export function CommerceWorkbenchShell({
         navigationLocked={navigationLocked}
         onNewTask={startNewTask}
         onOpenThread={openStoredThread}
+        onOpenCopywriting={openCopywriting}
         onOpenPlugins={() => setActiveView("plugins")}
         onOpenAuth={() => openAuthDialog("login")}
         onLogout={logout}
@@ -399,6 +443,20 @@ export function CommerceWorkbenchShell({
 
         {activeView === "plugins" ? (
           <PluginDirectory />
+        ) : activeView === "copywriting" ? (
+          <CopywritingWorkspace
+            messages={agentThread.messages}
+            status={agentThread.status}
+            durationMs={agentThread.durationMs}
+            startedAt={agentThread.startedAt}
+            error={agentThread.error}
+            modelLabel={`${formatModelName(selectedModel)} · ${
+              reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
+            }`}
+            onGenerate={generateCopywritingDraft}
+            onAdjust={adjustCopywritingDraft}
+            onInterrupt={agentThread.interrupt}
+          />
         ) : (
         <>
         <div className="pointer-events-none sticky top-0 z-20 hidden h-[var(--cp-topbar-height)] items-center justify-center bg-[rgba(255,255,255,0.92)] md:flex">
@@ -509,6 +567,10 @@ export function CommerceWorkbenchShell({
       ) : null}
     </div>
   );
+}
+
+function isCopywritingThread(thread: AgentThreadSummary): boolean {
+  return thread.title.startsWith("文案生成 ·");
 }
 
 function ComplianceFooter() {
@@ -1911,6 +1973,7 @@ function Sidebar({
   navigationLocked,
   onNewTask,
   onOpenThread,
+  onOpenCopywriting,
   onOpenPlugins,
   onOpenAuth,
   onLogout,
@@ -1923,6 +1986,7 @@ function Sidebar({
   navigationLocked: boolean;
   onNewTask: () => void;
   onOpenThread: (thread: AgentThreadSummary) => void;
+  onOpenCopywriting: () => void;
   onOpenPlugins: () => void;
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
@@ -2033,7 +2097,8 @@ function Sidebar({
               className={cn(
                 "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
                 isNewTask && activeView === "workbench" && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-                creativeOpen && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                (creativeOpen || (isCreativeSpace && activeView === "copywriting")) &&
+                  "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                 navigationLocked && isNewTask && "cursor-not-allowed opacity-50",
               )}
               disabled={navigationLocked && isNewTask}
@@ -2085,11 +2150,14 @@ function Sidebar({
                       className={cn(
                         "flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
                         item.label === "插件" && activeView === "plugins" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                        item.label === "文案生成" && activeView === "copywriting" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                       )}
                       onClick={() => {
                         setOpenSidebarFlyout(null);
                         if (item.label === "插件") {
                           onOpenPlugins();
+                        } else if (item.label === "文案生成") {
+                          onOpenCopywriting();
                         }
                       }}
                     >
