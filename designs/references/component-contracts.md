@@ -219,6 +219,7 @@ type WorkComposerProps = {
 - Work 模式可以显示右侧输出/来源面板；面板不得遮挡主内容和底部 composer。
 - 生成图片通过登录保护的站内图片路由渲染，不暴露服务器任意文件路径。图片必须按 `sequence + turnId` 渲染在生成它的对话轮次中，不得把历史图片作为全局列表追加到当前 turn 底部。对话中的图片缩略图不显示模型名或独立说明栏；点击缩略图打开无额外卡片文案的全屏预览，支持背景点击、`Escape` 和关闭图标退出，并在关闭后恢复触发按钮焦点。
 - Web Search 来源必须来自 Harness tool item 的结构化 `sources`（MCP `result.structuredContent.sources` 或原生 `web_search_call.action.sources`），不得从最终正文正则猜 URL。最终正文保留贴近具体结论的可点击引用；右侧“来源”面板自动汇总当前线程最近的结构化来源、按规范化 URL 去重并移除 `utm_*` 跟踪参数。来源为空时显示空状态，不提供无后端语义的“添加来源”按钮。
+- 来源面板默认只展示最近 3 条，超出部分使用一个“查看其余 N 个来源” disclosure；展开内容限制在面板内部滚动，并提供“收起来源”。来源集合因新搜索发生变化时自动恢复折叠状态。折叠不得删除、重新排序或改变正文中的就地引用。
 - 停止按钮只有在真实 `activeTurnId` 可用时才可点击；点击必须经过 BFF 与 Gateway 调用 App Server `turn/interrupt`，并等待 `turn/completed` 的 `interrupted` 状态，禁止只在前端切换为停止态。
 - active turn 期间 Enter 或“加入任务队列”按钮必须调用 App Server `thread/queue/add`；Shift+Enter 继续换行。composer 上方普通队列只能渲染 `thread/queue/list` 返回的数据，并通过 `thread/queue/changed` 刷新。队列使用一个统一圆角边框容器，内部为连续、紧凑、无独立边框的 `28px` 行，不得把每条消息做成单独卡片；每行提供真实“调整方向”、垃圾桶删除、三点更多菜单；“关闭排队”删除当前普通队列。
 - “编辑消息”禁止在队列条内部渲染输入框。它把原文本放回 composer，自动聚焦并把光标移至末尾，同时通过 `thread/queue/delete` 移除该条排队消息；用户再次提交时才重新执行 `thread/queue/add`。删除失败时恢复编辑前草稿并重新读取 queue，避免同一内容同时存在于 queue 和草稿。

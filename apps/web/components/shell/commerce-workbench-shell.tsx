@@ -79,6 +79,7 @@ import {
 } from "@/lib/agent/conversation-minimap";
 import {
   collectRecentWebSources,
+  selectVisibleWebSources,
   type WebSource,
 } from "@/lib/agent/web-sources";
 import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
@@ -1779,6 +1780,15 @@ function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
 }
 
 function WorkOutputPanel({ images, sources }: { images: GeneratedImageItem[]; sources: WebSource[] }) {
+  const [sourcesExpanded, setSourcesExpanded] = useState(false);
+  const sourceSignature = sources.map((source) => source.url).join("\n");
+  const visibleSources = selectVisibleWebSources(sources, sourcesExpanded);
+  const hiddenSourceCount = Math.max(0, sources.length - visibleSources.length);
+
+  useEffect(() => {
+    setSourcesExpanded(false);
+  }, [sourceSignature]);
+
   return (
     <aside className="absolute right-6 top-2 hidden w-[300px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-5 shadow-[var(--cp-shadow-soft)] 2xl:block">
       <div className="text-sm text-[var(--cp-text-muted)]">输出内容</div>
@@ -1798,29 +1808,52 @@ function WorkOutputPanel({ images, sources }: { images: GeneratedImageItem[]; so
         </button>
       )}
       <div className="my-4 h-px bg-[var(--cp-border-subtle)]" />
-      <div className="text-sm text-[var(--cp-text-muted)]">来源</div>
+      <div className="flex items-center justify-between gap-3 text-sm text-[var(--cp-text-muted)]">
+        <span>来源</span>
+        {sources.length > 0 ? <span className="text-xs text-[var(--cp-text-faint)]">{sources.length}</span> : null}
+      </div>
       {sources.length > 0 ? (
-        <div className="mt-3 space-y-1">
-          {sources.map((source) => (
-            <a
-              key={source.url}
-              href={source.url}
-              target="_blank"
-              rel="noreferrer"
-              className="flex min-h-9 items-center gap-2 rounded-[var(--cp-radius-item)] px-2 py-1.5 text-sm text-[var(--cp-text-soft)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+        <>
+          <div
+            id="work-output-sources"
+            className={cn("mt-3 space-y-1", sourcesExpanded && "max-h-[288px] overflow-y-auto pr-1")}
+          >
+            {visibleSources.map((source) => (
+              <a
+                key={source.url}
+                href={source.url}
+                target="_blank"
+                rel="noreferrer"
+                className="flex min-h-9 items-center gap-2 rounded-[var(--cp-radius-item)] px-2 py-1.5 text-sm text-[var(--cp-text-soft)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+              >
+                <ExternalLink className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
+                <span className="min-w-0">
+                  <span className="block truncate">{source.title || sourceHostname(source.url)}</span>
+                  {source.title ? (
+                    <span className="block truncate text-[11px] text-[var(--cp-text-faint)]">
+                      {sourceHostname(source.url)}
+                    </span>
+                  ) : null}
+                </span>
+              </a>
+            ))}
+          </div>
+          {sources.length > 3 ? (
+            <button
+              type="button"
+              className="flex h-8 w-full items-center justify-between rounded-[var(--cp-radius-item)] px-2 text-xs text-[var(--cp-text-muted)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+              aria-expanded={sourcesExpanded}
+              aria-controls="work-output-sources"
+              onClick={() => setSourcesExpanded((current) => !current)}
             >
-              <ExternalLink className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
-              <span className="min-w-0">
-                <span className="block truncate">{source.title || sourceHostname(source.url)}</span>
-                {source.title ? (
-                  <span className="block truncate text-[11px] text-[var(--cp-text-faint)]">
-                    {sourceHostname(source.url)}
-                  </span>
-                ) : null}
-              </span>
-            </a>
-          ))}
-        </div>
+              <span>{sourcesExpanded ? "收起来源" : `查看其余 ${hiddenSourceCount} 个来源`}</span>
+              <ChevronDown
+                className={cn("size-3.5 transition-transform", sourcesExpanded && "rotate-180")}
+                strokeWidth={1.8}
+              />
+            </button>
+          ) : null}
+        </>
       ) : (
         <div className="mt-3 text-sm text-[var(--cp-text-faint)]">暂无来源</div>
       )}

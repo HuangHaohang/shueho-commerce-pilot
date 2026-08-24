@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectRecentWebSources,
   readWebSourcesFromToolItem,
+  selectVisibleWebSources,
 } from "./web-sources";
 
 describe("web search sources", () => {
@@ -50,5 +51,19 @@ describe("web search sources", () => {
         result: { structuredContent: { sources: [{ url: "file:///etc/passwd", title: "unsafe" }] } },
       }),
     ).toEqual([]);
+  });
+
+  it("shows only the first three sources until the panel is expanded", () => {
+    const sources = Array.from({ length: 5 }, (_, index) => ({
+      url: `https://example.com/${index + 1}`,
+      title: `Source ${index + 1}`,
+    }));
+
+    expect(selectVisibleWebSources(sources, false).map((source) => source.title)).toEqual([
+      "Source 1",
+      "Source 2",
+      "Source 3",
+    ]);
+    expect(selectVisibleWebSources(sources, true)).toEqual(sources);
   });
 });

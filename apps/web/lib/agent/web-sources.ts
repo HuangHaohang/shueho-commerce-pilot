@@ -29,6 +29,14 @@ export function collectRecentWebSources(
   return [...collected.values()];
 }
 
+export function selectVisibleWebSources(
+  sources: WebSource[],
+  expanded: boolean,
+  collapsedLimit = 3,
+): WebSource[] {
+  return expanded ? sources : sources.slice(0, Math.max(0, collapsedLimit));
+}
+
 function normalizeWebSources(value: unknown): WebSource[] {
   if (!Array.isArray(value)) return [];
   const sources: WebSource[] = [];
