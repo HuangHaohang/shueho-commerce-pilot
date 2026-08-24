@@ -57,6 +57,7 @@
 - 弹出菜单使用 `--cp-radius-popover`、轻边框和 `--cp-shadow-popover`，并提供 `aria-expanded`、`aria-haspopup` 与 menu roles。
 - 点击菜单外、按 `Escape` 或选择菜单项时关闭弹出菜单。
 - 登录用户的“最近”列表来自服务端 thread 索引并按更新时间倒序显示；选中项映射到真实 Codex thread id。
+- Account footer 中的“企业管理”必须由受认证的 Enterprise context 权限结果控制，默认隐藏。无 tenant/workspace、context 请求失败、空角色，或仅有 Agent 运行权限时不得渲染；只有具备企业后台可读或可管理权限时才显示。前端隐藏不是授权边界，`/enterprise/admin` 及其 API 仍必须独立执行服务端权限检查。
 - “新任务”必须清除当前客户端 thread/SSE 状态并返回空白 composer，但不得删除历史记录；活动 turn 期间暂时禁用，避免遗失运行状态。
 - 点击历史记录必须经过用户所有权检查并用 App Server `thread/read` 恢复 turns；刷新页面自动恢复最近 thread，不得只依赖浏览器内存。
 - 用户可以让多个不同 thread 并行运行；侧栏中 `running` thread 必须在标题右侧显示小型旋转图标。离开运行中的 thread 只取消当前页面 SSE 订阅，不得调用 interrupt。

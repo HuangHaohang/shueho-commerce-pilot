@@ -75,6 +75,7 @@ import {
   type ConversationMinimapMarkerInput,
   type ConversationMinimapState,
 } from "@/lib/agent/conversation-minimap";
+import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
@@ -110,6 +111,10 @@ type ProviderModelsResponse = {
 
 type AgentThreadsResponse = {
   threads: AgentThreadSummary[];
+};
+
+type EnterpriseNavigationContextResponse = {
+  permissions: string[];
 };
 
 type GatewayHealthResponse = {
@@ -192,6 +197,21 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
   });
   const authUser = sessionQuery.data?.user ?? null;
   const isAuthenticated = Boolean(authUser);
+
+  const enterpriseNavigationQuery = useQuery({
+    queryKey: ["enterprise-navigation-access", authUser?.id],
+    queryFn: getEnterpriseNavigationContext,
+    enabled: isAuthenticated,
+    retry: false,
+    staleTime: 0,
+    gcTime: 0,
+    refetchOnMount: "always",
+  });
+  const canOpenEnterpriseAdmin =
+    isAuthenticated &&
+    enterpriseNavigationQuery.isSuccess &&
+    !enterpriseNavigationQuery.isFetching &&
+    canAccessEnterpriseAdmin(enterpriseNavigationQuery.data.permissions);
 
   const modelsQuery = useQuery({
     queryKey: ["provider-models"],
@@ -344,6 +364,7 @@ export function CommerceWorkbenchShell({ allowPublicRegistration }: { allowPubli
     <div className="flex h-dvh overflow-hidden bg-[var(--cp-bg)] text-[var(--cp-text)]">
       <Sidebar
         user={authUser}
+        canOpenEnterpriseAdmin={canOpenEnterpriseAdmin}
         threads={threadsQuery.data?.threads ?? []}
         activeThreadId={agentThread.threadId}
         navigationLocked={navigationLocked}
@@ -1768,6 +1789,7 @@ function formatCompactDuration(durationMs: number): string {
 
 function Sidebar({
   user,
+  canOpenEnterpriseAdmin,
   threads,
   activeThreadId,
   navigationLocked,
@@ -1777,6 +1799,7 @@ function Sidebar({
   onLogout,
 }: {
   user: AuthUser | null;
+  canOpenEnterpriseAdmin: boolean;
   threads: AgentThreadSummary[];
   activeThreadId: string | null;
   navigationLocked: boolean;
@@ -1986,7 +2009,11 @@ function Sidebar({
 
       <div className="px-3 pb-3">
         {user ? (
-          <AuthenticatedSidebarFooter user={user} onLogout={onLogout} />
+          <AuthenticatedSidebarFooter
+            user={user}
+            canOpenEnterpriseAdmin={canOpenEnterpriseAdmin}
+            onLogout={onLogout}
+          />
         ) : (
           <UnauthenticatedSidebarFooter onOpenAuth={onOpenAuth} />
         )}
@@ -1995,18 +2022,28 @@ function Sidebar({
   );
 }
 
-function AuthenticatedSidebarFooter({ user, onLogout }: { user: AuthUser; onLogout: () => Promise<void> }) {
+function AuthenticatedSidebarFooter({
+  user,
+  canOpenEnterpriseAdmin,
+  onLogout,
+}: {
+  user: AuthUser;
+  canOpenEnterpriseAdmin: boolean;
+  onLogout: () => Promise<void>;
+}) {
   const initial = user.name.trim().slice(0, 1).toUpperCase() || "用";
 
   return (
     <div className="border-t border-[var(--cp-border-subtle)] pt-2">
-      <Link
-        href="/enterprise/admin"
-        className="mb-1 flex h-[var(--cp-sidebar-item-height)] items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-sm text-[var(--cp-text-soft)] transition-colors hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-      >
-        <Building2 className="size-[var(--cp-sidebar-icon-size)]" strokeWidth={1.8} />
-        <span className="truncate">企业管理</span>
-      </Link>
+      {canOpenEnterpriseAdmin ? (
+        <Link
+          href="/enterprise/admin"
+          className="mb-1 flex h-[var(--cp-sidebar-item-height)] items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-sm text-[var(--cp-text-soft)] transition-colors hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+        >
+          <Building2 className="size-[var(--cp-sidebar-icon-size)]" strokeWidth={1.8} />
+          <span className="truncate">企业管理</span>
+        </Link>
+      ) : null}
       <div className="flex h-[52px] items-center gap-1 rounded-[var(--cp-radius-item)] px-2 hover:bg-[var(--cp-surface-hover)]">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--cp-surface-hover)] text-sm font-medium text-[var(--cp-text)]">
           {initial}
@@ -3014,6 +3051,19 @@ async function getAgentThreads(): Promise<AgentThreadsResponse> {
     throw new Error("Agent thread history endpoint failed.");
   }
   return (await response.json()) as AgentThreadsResponse;
+}
+
+async function getEnterpriseNavigationContext(): Promise<EnterpriseNavigationContextResponse> {
+  const response = await fetch("/api/enterprise/context", { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error("Enterprise navigation access is unavailable.");
+  }
+  const payload = (await response.json()) as Partial<EnterpriseNavigationContextResponse>;
+  return {
+    permissions: Array.isArray(payload.permissions)
+      ? payload.permissions.filter((permission): permission is string => typeof permission === "string")
+      : [],
+  };
 }
 
 function getRuntimeStatus(data: GatewayHealthResponse | undefined, loading: boolean): RuntimeStatus {
