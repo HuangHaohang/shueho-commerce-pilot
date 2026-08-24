@@ -51,6 +51,7 @@
 交互：
 
 - 菜单项 `36px` 高。
+- 品牌头、五个一级导航项和账户区必须 `shrink-0`，任务数量增加时不得压缩高度；只有“最近任务分类”区域使用 `min-h-0 overflow-y-auto overscroll-contain`。侧栏根节点和一级导航区不得出现滚动条。
 - hover 使用 `--cp-surface-hover`。
 - active 不使用亮色背景。
 - 图标和文字间距 `10px - 12px`。

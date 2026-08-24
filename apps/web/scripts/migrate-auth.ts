@@ -139,6 +139,10 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260824_013_task_recipe_metadata",
       path: resolve(process.cwd(), "migrations/013_task_recipe_metadata.sql"),
     },
+    {
+      version: "20260824_014_task_categories",
+      path: resolve(process.cwd(), "migrations/014_task_categories.sql"),
+    },
   ];
 
   for (const migration of migrations) {

@@ -19,6 +19,7 @@ import {
   readWebSourcesFromToolItem,
   type WebSource,
 } from "./web-sources";
+import type { TaskCategory } from "./task-category";
 
 export type { QueuedMessage } from "./pending-input-state";
 
@@ -96,6 +97,7 @@ export type AgentThreadSummary = {
   turnStartedAt: string | null;
   durationMs: number | null;
   recipeId: "copywriting" | null;
+  category: TaskCategory;
 };
 
 type StoredThreadResponse = {
@@ -107,6 +109,7 @@ type StoredThreadResponse = {
     durationMs: number | null;
     startedAt: string | null;
     recipeId: "copywriting" | null;
+    category: TaskCategory;
   };
   messages: ConversationMessage[];
   activities: AgentActivity[];

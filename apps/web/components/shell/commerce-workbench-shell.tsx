@@ -12,6 +12,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
+  ChartNoAxesCombined,
   ChevronDown,
   ChevronRight,
   CircleAlert,
@@ -24,6 +25,7 @@ import {
   FileText,
   FilePlus2,
   HelpCircle,
+  Headphones,
   ImageIcon,
   Library,
   ListRestart,
@@ -33,6 +35,7 @@ import {
   LogOut,
   Mail,
   Menu,
+  MessageCircle,
   Mic,
   Palette,
   PanelLeft,
@@ -86,6 +89,7 @@ import {
   type WebSource,
 } from "@/lib/agent/web-sources";
 import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
+import { resolveTaskCategory, type TaskCategory } from "@/lib/agent/task-category";
 import {
   buildCopywritingAdjustmentPrompt,
   buildCopywritingRecipeExecutionPrompt,
@@ -175,6 +179,19 @@ const creativeNavItems = [
   { label: "脚本生成", icon: ScrollText },
   { label: "图片生成", icon: ImageIcon },
   { label: "视频生成", icon: Video },
+];
+
+const taskGroupDefinitions: Array<{
+  category: TaskCategory;
+  label: string;
+  icon: typeof Palette;
+}> = [
+  { category: "creative", label: "创作空间", icon: Palette },
+  { category: "research", label: "市场调研", icon: Telescope },
+  { category: "operations", label: "店铺运营", icon: Store },
+  { category: "support", label: "客服与售后", icon: Headphones },
+  { category: "analytics", label: "数据与报表", icon: ChartNoAxesCombined },
+  { category: "general", label: "通用对话", icon: MessageCircle },
 ];
 
 type SidebarFlyoutId = "creative" | "more";
@@ -2159,7 +2176,7 @@ function Sidebar({
 
   return (
     <aside className="hidden w-[var(--cp-sidebar-width)] shrink-0 flex-col border-r border-[var(--cp-border)] bg-[var(--cp-sidebar)] md:flex">
-      <div className="flex h-[56px] items-center justify-between px-4">
+      <div className="flex h-[56px] shrink-0 items-center justify-between px-4">
         <div className="min-w-0 text-[18px] font-semibold leading-none text-[var(--cp-text)]">Commerce Pilot</div>
         <div className="flex items-center gap-1">
           <IconTooltip label="搜索">
@@ -2175,7 +2192,7 @@ function Sidebar({
         </div>
       </div>
 
-      <nav className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto px-2">
+      <nav className="shrink-0 space-y-1 px-2" aria-label="主要导航">
         {primaryNavItems.map((item) => {
           const isNewTask = item.label === "新任务";
           const isCreativeSpace = item.label === "创作空间";
@@ -2186,7 +2203,7 @@ function Sidebar({
               ref={isCreativeSpace ? creativeButtonRef : undefined}
               type="button"
               className={cn(
-                "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                "flex h-[var(--cp-sidebar-item-height)] w-full shrink-0 items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
                 isNewTask && activeView === "workbench" && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                 (creativeOpen || (isCreativeSpace && activeView === "copywriting")) &&
                   "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
@@ -2204,12 +2221,12 @@ function Sidebar({
           );
         })}
 
-        <div>
+        <div className="shrink-0">
           <button
             ref={moreButtonRef}
             type="button"
             className={cn(
-              "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+              "flex h-[var(--cp-sidebar-item-height)] w-full shrink-0 items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
               (openSidebarFlyout === "more" || activeView === "plugins" || activeView === "skills") &&
                 "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
             )}
@@ -2223,8 +2240,9 @@ function Sidebar({
           </button>
 
         </div>
+      </nav>
 
-        {openSidebarFlyout
+      {openSidebarFlyout
           ? createPortal(
               <div
                 ref={sidebarFlyoutRef}
@@ -2265,39 +2283,19 @@ function Sidebar({
             )
           : null}
 
+      <nav className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2" aria-label="最近任务">
         {threads.length ? (
-          <div className="mt-5 px-1">
-            <div className="mb-1 px-2 text-xs font-medium text-[var(--cp-text-faint)]">最近</div>
-            <div className="space-y-1">
-              {threads.map((thread) => (
-                <button
-                  key={thread.threadId}
-                  type="button"
-                  data-thread-id={thread.threadId}
-                  data-thread-status={thread.status}
-                  className={cn(
-                    "flex h-[var(--cp-sidebar-item-height)] w-full items-center rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-                    activeView === "workbench" && thread.threadId === activeThreadId && "bg-[var(--cp-surface-hover)]",
-                    navigationLocked && thread.threadId !== activeThreadId && "cursor-not-allowed opacity-50",
-                  )}
-                  disabled={navigationLocked && thread.threadId !== activeThreadId}
-                  onClick={() => onOpenThread(thread)}
-                >
-                  <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                  {thread.status === "running" ? (
-                    <Loader2
-                      data-thread-spinner
-                      className="ml-2 size-3.5 shrink-0 animate-spin text-[var(--cp-text-muted)]"
-                    />
-                  ) : null}
-                </button>
-              ))}
-            </div>
-          </div>
+          <SidebarThreadTree
+            threads={threads}
+            activeView={activeView}
+            activeThreadId={activeThreadId}
+            navigationLocked={navigationLocked}
+            onOpenThread={onOpenThread}
+          />
         ) : null}
       </nav>
 
-      <div className="px-3 pb-3">
+      <div className="shrink-0 px-3 pb-3">
         {user ? (
           <AuthenticatedSidebarFooter
             user={user}
@@ -2309,6 +2307,110 @@ function Sidebar({
         )}
       </div>
     </aside>
+  );
+}
+
+function SidebarThreadTree({
+  threads,
+  activeView,
+  activeThreadId,
+  navigationLocked,
+  onOpenThread,
+}: {
+  threads: AgentThreadSummary[];
+  activeView: WorkbenchView;
+  activeThreadId: string | null;
+  navigationLocked: boolean;
+  onOpenThread: (thread: AgentThreadSummary) => void;
+}) {
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<TaskCategory>>(() => new Set());
+  const groupedThreads = useMemo(() => {
+    const groups = new Map<TaskCategory, AgentThreadSummary[]>();
+    for (const definition of taskGroupDefinitions) groups.set(definition.category, []);
+    for (const thread of threads) {
+      const category = resolveTaskCategory(thread);
+      groups.get(category)?.push(thread);
+    }
+    return groups;
+  }, [threads]);
+
+  useEffect(() => {
+    const activeThread = threads.find((thread) => thread.threadId === activeThreadId);
+    if (!activeThread) return;
+    const activeCategory = resolveTaskCategory(activeThread);
+    setCollapsedGroups((current) => {
+      if (!current.has(activeCategory)) return current;
+      const next = new Set(current);
+      next.delete(activeCategory);
+      return next;
+    });
+  }, [activeThreadId, threads]);
+
+  return (
+    <div className="mt-5 px-1" aria-label="最近任务分类">
+      <div className="mb-1 px-2 text-xs font-medium text-[var(--cp-text-faint)]">最近</div>
+      <div className="space-y-1">
+        {taskGroupDefinitions.map((definition) => {
+          const items = groupedThreads.get(definition.category) ?? [];
+          if (!items.length) return null;
+          const collapsed = collapsedGroups.has(definition.category);
+          const Icon = definition.icon;
+          return (
+            <div key={definition.category} data-task-category={definition.category}>
+              <button
+                type="button"
+                className="flex h-8 w-full items-center gap-2 rounded-[var(--cp-radius-item)] px-2 text-left text-xs font-medium text-[var(--cp-text-muted)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+                aria-expanded={!collapsed}
+                onClick={() =>
+                  setCollapsedGroups((current) => {
+                    const next = new Set(current);
+                    if (next.has(definition.category)) next.delete(definition.category);
+                    else next.add(definition.category);
+                    return next;
+                  })
+                }
+              >
+                {collapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                <Icon className="size-3.5" strokeWidth={1.8} />
+                <span className="min-w-0 flex-1 truncate">{definition.label}</span>
+                <span className="text-[11px] font-normal text-[var(--cp-text-faint)]">{items.length}</span>
+              </button>
+              {!collapsed ? (
+                <div className="ml-5 space-y-0.5 border-l border-[var(--cp-border-subtle)] pl-1.5">
+                  {items.map((thread) => {
+                    const active =
+                      thread.threadId === activeThreadId &&
+                      (activeView === "workbench" || activeView === "copywriting");
+                    return (
+                      <button
+                        key={thread.threadId}
+                        type="button"
+                        data-thread-id={thread.threadId}
+                        data-thread-status={thread.status}
+                        className={cn(
+                          "flex h-[var(--cp-sidebar-item-height)] w-full items-center rounded-[var(--cp-radius-item)] px-2.5 text-left text-[13px] text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                          active && "bg-[var(--cp-surface-hover)]",
+                          navigationLocked && thread.threadId !== activeThreadId && "cursor-not-allowed opacity-50",
+                        )}
+                        disabled={navigationLocked && thread.threadId !== activeThreadId}
+                        onClick={() => onOpenThread(thread)}
+                      >
+                        <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+                        {thread.status === "running" ? (
+                          <Loader2 data-thread-spinner className="ml-2 size-3.5 shrink-0 animate-spin text-[var(--cp-text-muted)]" />
+                        ) : thread.status === "failed" ? (
+                          <CircleAlert className="ml-2 size-3.5 shrink-0 text-[var(--cp-danger)]" strokeWidth={1.8} />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

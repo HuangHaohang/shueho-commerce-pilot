@@ -456,7 +456,11 @@ const server = createServer(async (req, res) => {
           }),
         );
       }
-      sendJson(res, 200, { title: generated.title, model: generated.model });
+      sendJson(res, 200, {
+        title: generated.title,
+        model: generated.model,
+        category: generated.category,
+      });
       return;
     }
 

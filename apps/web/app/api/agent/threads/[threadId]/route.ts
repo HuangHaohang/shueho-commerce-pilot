@@ -156,6 +156,7 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
           ? new Date(lastTurn.startedAt * 1000).toISOString()
           : null,
       recipeId: record?.recipeId ?? null,
+      category: record?.category ?? "general",
     },
     messages,
     activities,

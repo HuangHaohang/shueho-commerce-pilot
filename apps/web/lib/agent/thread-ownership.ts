@@ -1,5 +1,6 @@
 import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context";
 import type { EnterpriseScope } from "@/lib/enterprise/types";
+import type { TaskCategory } from "@/lib/agent/task-category";
 
 export type AgentThreadRecord = {
   threadId: string;
@@ -13,6 +14,7 @@ export type AgentThreadRecord = {
   titleModel: string | null;
   titleGeneratedAt: string | null;
   recipeId: "copywriting" | null;
+  category: TaskCategory;
 };
 
 type AgentThreadRow = {
@@ -27,6 +29,7 @@ type AgentThreadRow = {
   title_model: string | null;
   title_generated_at: Date | null;
   recipe_id: "copywriting" | null;
+  category: TaskCategory;
 };
 
 export async function registerAgentThreadOwner(
@@ -34,13 +37,14 @@ export async function registerAgentThreadOwner(
   scope: EnterpriseScope,
   title: string,
   recipeId: "copywriting" | null = null,
+  category: TaskCategory = recipeId === "copywriting" ? "creative" : "general",
 ): Promise<void> {
   await withEnterpriseDatabaseContext(scope, async (client) => {
     const result = await client.query<{ created_by_user_id: string }>(
       `
         INSERT INTO commerce_agent_thread
-          (thread_id, user_id, created_by_user_id, tenant_id, workspace_id, title, recipe_id, updated_at, status)
-        VALUES ($1, $2, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, 'idle')
+          (thread_id, user_id, created_by_user_id, tenant_id, workspace_id, title, recipe_id, category, updated_at, status)
+        VALUES ($1, $2, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, 'idle')
         ON CONFLICT (thread_id) DO UPDATE
         SET title = CASE
               WHEN commerce_agent_thread.tenant_id = EXCLUDED.tenant_id
@@ -57,10 +61,15 @@ export async function registerAgentThreadOwner(
                AND commerce_agent_thread.workspace_id = EXCLUDED.workspace_id
                AND commerce_agent_thread.created_by_user_id = EXCLUDED.created_by_user_id
               THEN COALESCE(EXCLUDED.recipe_id, commerce_agent_thread.recipe_id)
-              ELSE commerce_agent_thread.recipe_id END
+              ELSE commerce_agent_thread.recipe_id END,
+            category = CASE
+              WHEN commerce_agent_thread.tenant_id = EXCLUDED.tenant_id
+               AND commerce_agent_thread.workspace_id = EXCLUDED.workspace_id
+               AND commerce_agent_thread.created_by_user_id = EXCLUDED.created_by_user_id
+              THEN EXCLUDED.category ELSE commerce_agent_thread.category END
         RETURNING created_by_user_id
       `,
-      [threadId, scope.userId, scope.tenantId, scope.workspaceId, title, recipeId],
+      [threadId, scope.userId, scope.tenantId, scope.workspaceId, title, recipeId, category],
     );
     if (result.rows[0]?.created_by_user_id !== scope.userId) {
       throw new Error("Agent thread is already bound to another enterprise principal.");
@@ -74,7 +83,7 @@ export async function listAgentThreadsForUser(scope: EnterpriseScope, limit = 50
       `
         SELECT thread_id, title, created_at, updated_at, status,
                active_turn_id, turn_started_at, duration_ms,
-               title_model, title_generated_at, recipe_id
+               title_model, title_generated_at, recipe_id, category
         FROM commerce_agent_thread
         WHERE tenant_id = $1 AND workspace_id = $2 AND created_by_user_id = $3
         ORDER BY updated_at DESC
@@ -95,7 +104,7 @@ export async function getAgentThreadForUser(
       `
         SELECT thread_id, title, created_at, updated_at, status,
                active_turn_id, turn_started_at, duration_ms,
-               title_model, title_generated_at, recipe_id
+               title_model, title_generated_at, recipe_id, category
         FROM commerce_agent_thread
         WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4
         LIMIT 1
@@ -128,20 +137,54 @@ export async function updateAgentThreadTitle(
   );
 }
 
-export async function updateAgentThreadGeneratedTitle(
+export async function generateAgentThreadTitleOnce(
   threadId: string,
   scope: EnterpriseScope,
-  title: string,
-  model: string,
-): Promise<void> {
-  await updateOwnedThread(
-    threadId,
-    scope,
-    `UPDATE commerce_agent_thread
-     SET title = $5, title_model = $6, title_generated_at = CURRENT_TIMESTAMP,
-         updated_at = CURRENT_TIMESTAMP`,
-    [title, model],
-  );
+  generator: (record: AgentThreadRecord) => Promise<{
+    title: string;
+    model: string;
+    category: TaskCategory;
+  }>,
+): Promise<{ title: string; model: string; category: TaskCategory; generated: boolean }> {
+  return withEnterpriseDatabaseContext(scope, async (client) => {
+    await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+      `commerce-thread-title:${scope.tenantId}:${scope.workspaceId}:${threadId}`,
+    ]);
+    const result = await client.query<AgentThreadRow>(
+      `
+        SELECT thread_id, title, created_at, updated_at, status,
+               active_turn_id, turn_started_at, duration_ms,
+               title_model, title_generated_at, recipe_id, category
+        FROM commerce_agent_thread
+        WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4
+        LIMIT 1
+      `,
+      [threadId, scope.tenantId, scope.workspaceId, scope.userId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("Agent thread is unavailable for title generation.");
+    const record = toAgentThreadRecord(row);
+    if (record.titleGeneratedAt && record.titleModel) {
+      return {
+        title: record.title,
+        model: record.titleModel,
+        category: record.category,
+        generated: false,
+      };
+    }
+    const generated = await generator(record);
+    const update = await client.query(
+      `
+        UPDATE commerce_agent_thread
+        SET title = $5, title_model = $6, category = $7,
+            title_generated_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4
+      `,
+      [threadId, scope.tenantId, scope.workspaceId, scope.userId, generated.title, generated.model, generated.category],
+    );
+    if (update.rowCount !== 1) throw new Error("Agent thread ownership changed during title generation.");
+    return { ...generated, generated: true };
+  });
 }
 
 export async function markAgentThreadRunning(
@@ -255,5 +298,6 @@ function toAgentThreadRecord(row: AgentThreadRow): AgentThreadRecord {
     titleModel: row.title_model,
     titleGeneratedAt: row.title_generated_at?.toISOString() ?? null,
     recipeId: row.recipe_id,
+    category: row.category,
   };
 }

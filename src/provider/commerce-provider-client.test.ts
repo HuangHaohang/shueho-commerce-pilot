@@ -22,7 +22,12 @@ test("generates structured outcome titles with the configured Spark model", asyn
       output: [
         {
           type: "message",
-          content: [{ type: "output_text", text: JSON.stringify({ title: "轻量通勤包小红书上新" }) }],
+          content: [
+            {
+              type: "output_text",
+              text: JSON.stringify({ title: "轻量通勤包小红书上新", category: "creative" }),
+            },
+          ],
         },
       ],
       usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28 },
@@ -49,6 +54,7 @@ test("generates structured outcome titles with the configured Spark model", asyn
     });
 
     assert.equal(generated.title, "轻量通勤包小红书上新");
+    assert.equal(generated.category, "creative");
     assert.equal(generated.model, "gpt-5.3-codex-spark");
     const titleRequest = requests.find((request) => request.url.endsWith("/responses"));
     assert.ok(titleRequest);

@@ -45,6 +45,7 @@ export type GeneratedThreadTitle = {
   responseId: string | null;
   model: string;
   title: string;
+  category: "creative" | "research" | "operations" | "support" | "analytics" | "general";
   usage: unknown;
 };
 
@@ -162,6 +163,7 @@ export class CommerceProviderClient {
                     "Generate one concise Chinese task title from the user's goal and the completed result.",
                     "The title must describe the business object and outcome, not the conversation mechanics.",
                     "Use 8-24 Chinese characters when possible. Do not use prefixes such as 任务、对话、文案生成、帮我、请帮我.",
+                    "Classify the completed task as creative, research, operations, support, analytics, or general.",
                     "Do not add quotation marks, punctuation at the end, emoji, model names, or technical terms.",
                   ].join(" "),
                 },
@@ -186,8 +188,14 @@ export class CommerceProviderClient {
               strict: true,
               schema: {
                 type: "object",
-                properties: { title: { type: "string" } },
-                required: ["title"],
+                properties: {
+                  title: { type: "string" },
+                  category: {
+                    type: "string",
+                    enum: ["creative", "research", "operations", "support", "analytics", "general"],
+                  },
+                },
+                required: ["title", "category"],
                 additionalProperties: false,
               },
             },
@@ -200,12 +208,13 @@ export class CommerceProviderClient {
     const payload = (await response.json()) as unknown;
     if (!isRecord(payload)) throw new CommerceProviderError("Title provider returned an invalid response.");
     const outputText = readResponseOutputText(payload.output);
-    const title = normalizeGeneratedTitle(outputText);
-    if (!title) throw new CommerceProviderError("Title provider returned no usable title.");
+    const generatedTitle = parseGeneratedThreadTitle(outputText);
+    if (!generatedTitle) throw new CommerceProviderError("Title provider returned no usable title.");
     return {
       responseId: typeof payload.id === "string" ? payload.id : null,
       model: input.model,
-      title,
+      title: generatedTitle.title,
+      category: generatedTitle.category,
       usage: payload.usage ?? null,
     };
   }
@@ -488,13 +497,25 @@ function readResponseOutputText(value: unknown): string {
   return parts.join("\n").trim();
 }
 
-function normalizeGeneratedTitle(value: string): string {
-  let title = value.trim();
+function parseGeneratedThreadTitle(value: string): Pick<GeneratedThreadTitle, "title" | "category"> | null {
+  let title = "";
+  let category: GeneratedThreadTitle["category"] | null = null;
   try {
-    const parsed = JSON.parse(title) as unknown;
+    const parsed = JSON.parse(value.trim()) as unknown;
     if (isRecord(parsed) && typeof parsed.title === "string") title = parsed.title;
+    if (
+      isRecord(parsed) &&
+      (parsed.category === "creative" ||
+        parsed.category === "research" ||
+        parsed.category === "operations" ||
+        parsed.category === "support" ||
+        parsed.category === "analytics" ||
+        parsed.category === "general")
+    ) {
+      category = parsed.category;
+    }
   } catch {
-    // Compatibility with providers that return the schema content as plain text.
+    return null;
   }
   title = title
     .replace(/^```(?:json)?\s*/i, "")
@@ -505,7 +526,8 @@ function normalizeGeneratedTitle(value: string): string {
     .replace(/\s+/g, " ")
     .trim();
   const characters = Array.from(title);
-  return characters.length > 32 ? `${characters.slice(0, 32).join("")}…` : title;
+  const normalizedTitle = characters.length > 32 ? `${characters.slice(0, 32).join("")}…` : title;
+  return normalizedTitle && category ? { title: normalizedTitle, category } : null;
 }
 
 function isHttpUrl(value: string): boolean {
