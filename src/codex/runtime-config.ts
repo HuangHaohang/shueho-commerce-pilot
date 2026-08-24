@@ -1,4 +1,4 @@
-import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { cwd, execPath } from "node:process";
 
@@ -21,6 +21,10 @@ export async function ensureAppOwnedCodexConfig(config: GatewayConfig): Promise<
   const commerceWebMcpPath = resolve(cwd(), "dist/src/mcp/commerce-web-server.js");
   await mkdir(managedHooksDirectory, { recursive: true, mode: 0o700 });
   await mkdir(hookAuditDirectory, { recursive: true, mode: 0o700 });
+  await rm(join(config.runtimeRoot, ".agents", "skills", "commerce-copywriting-intake"), {
+    recursive: true,
+    force: true,
+  });
   for (const workflow of MANAGED_WORKFLOW_IDS) {
     await mkdir(managedWorkflowSkillDirectory(config.runtimeRoot, workflow), {
       recursive: true,
@@ -127,6 +131,9 @@ function renderConfig(
     "multi_agent = true",
     "remote_plugin = false",
     "skill_mcp_dependency_install = false",
+    "",
+    "[skills.bundled]",
+    "enabled = true",
     "",
     "[apps._default]",
     "enabled = false",

@@ -17,11 +17,8 @@ export function managedWorkflowSkillPath(runtimeRoot: string, workflow: ManagedW
 }
 
 export function renderManagedWorkflowSkill(workflow: ManagedWorkflowId): string {
-  if (workflow !== "commerce-copywriting") {
-    throw new Error(`Unsupported managed workflow: ${workflow}`);
-  }
-
-  return `---
+  if (workflow === "commerce-copywriting") {
+    return `---
 name: commerce-copywriting
 description: Generate and revise grounded Chinese e-commerce copy from a structured product brief. Use for product titles, selling-point copy, campaign copy, social commerce posts, and product-detail copy.
 ---
@@ -54,6 +51,9 @@ Return only the object required by the turn output schema:
 - callToAction: a separate CTA; use an empty string when the brief does not need one.
 - complianceNotes: short review notes for missing facts or risky claims; otherwise an empty array.
 `;
+  }
+
+  throw new Error(`Unsupported managed workflow: ${workflow}`);
 }
 
 export function buildManagedWorkflowTurn(
@@ -64,36 +64,36 @@ export function buildManagedWorkflowTurn(
   input: Array<Record<string, unknown>>;
   outputSchema: Record<string, unknown>;
 } {
-  if (workflow !== "commerce-copywriting") {
-    throw new Error(`Unsupported managed workflow: ${workflow}`);
+  if (workflow === "commerce-copywriting") {
+    return {
+      input: [
+        {
+          type: "text",
+          text: `$commerce-copywriting\n${message}`,
+          text_elements: [],
+        },
+        {
+          type: "skill",
+          name: workflow,
+          path: managedWorkflowSkillPath(runtimeRoot, workflow),
+        },
+      ],
+      outputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          body: { type: "string" },
+          callToAction: { type: "string" },
+          complianceNotes: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+        required: ["title", "body", "callToAction", "complianceNotes"],
+        additionalProperties: false,
+      },
+    };
   }
 
-  return {
-    input: [
-      {
-        type: "text",
-        text: `$commerce-copywriting\n${message}`,
-        text_elements: [],
-      },
-      {
-        type: "skill",
-        name: workflow,
-        path: managedWorkflowSkillPath(runtimeRoot, workflow),
-      },
-    ],
-    outputSchema: {
-      type: "object",
-      properties: {
-        title: { type: "string" },
-        body: { type: "string" },
-        callToAction: { type: "string" },
-        complianceNotes: {
-          type: "array",
-          items: { type: "string" },
-        },
-      },
-      required: ["title", "body", "callToAction", "complianceNotes"],
-      additionalProperties: false,
-    },
-  };
+  throw new Error(`Unsupported managed workflow: ${workflow}`);
 }

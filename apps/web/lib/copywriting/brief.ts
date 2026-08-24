@@ -53,6 +53,17 @@ export function buildCopywritingAdjustmentPrompt(instruction: string): string {
   ].join("\n");
 }
 
+export function buildCopywritingRecipeExecutionPrompt(goal: string, answerSummary: string): string {
+  return [
+    "请直接完成用户需要的电商文案交付，不要输出计划或继续追问。",
+    "",
+    `用户目标：${goal.trim()}`,
+    `已确认信息：${answerSummary.trim() || "由 Agent 根据目标做专业判断"}`,
+    "",
+    "只使用可以确认的事实；缺失信息不要补造，并在合规备注中指出。",
+  ].join("\n");
+}
+
 export function parseCopywritingBriefPrompt(content: string): CopywritingBrief | null {
   const fields = new Map<string, string>();
   const knownLabels = new Set([
@@ -138,6 +149,27 @@ export function parseCopywritingDraft(content: string): CopywritingDraft {
     callToAction: "",
     complianceNotes: [],
   };
+}
+
+export function tryParseStructuredCopywritingDraft(content: string): CopywritingDraft | null {
+  const normalized = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/, "");
+  try {
+    const parsed = JSON.parse(normalized) as Record<string, unknown>;
+    if (typeof parsed.body !== "string") return null;
+    return {
+      title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : "未命名文案",
+      body: parsed.body,
+      callToAction: typeof parsed.callToAction === "string" ? parsed.callToAction : "",
+      complianceNotes: Array.isArray(parsed.complianceNotes)
+        ? parsed.complianceNotes.filter((note): note is string => typeof note === "string")
+        : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 function normalizeOptionalBriefField(value: string | undefined): string {

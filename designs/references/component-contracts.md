@@ -43,8 +43,9 @@
 - `MarketResearch` 或等价市场调研入口。
 - `CreativeSpace` 或等价创作空间入口。
 - `KnowledgeBase`。
-- `More`，内部收纳 `Scheduled` 和 `Plugins`，不得把这两项同时放在一级导航。
+- `More`，内部收纳 `Scheduled`、`Plugins` 和 `Skills`，不得把这些入口同时放在一级导航。
 - `More > Plugins` 必须在现有工作台壳内打开插件目录；桌面侧栏、最近任务与账号区保持稳定，只替换主内容区。`/plugins` 仅作为可直达入口，并复用同一工作台壳，不得另造独立页面框架。目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；列表项加号用于进入同壳详情视图，不代表安装成功。第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
+- `More > Skills` 与插件入口分离，技能目录必须来自 App Server `skills/list`，不得从插件 manifest 推导。`skill-creator` 作为 Codex 系统技能全局可见；浏览器不得获得技能宿主路径，也不得直接写入任意 Skill 目录。
 - Account/workspace footer。
 
 交互：
@@ -85,18 +86,20 @@
 
 职责：
 
-- 在现有工作台壳内完成电商文案 Brief、生成、改写和版本比较，不跳转到另一套页面壳。
-- 左侧为结构化 Brief，右侧为可编辑文档画布；桌面端仅这两个内部区域独立滚动，浏览器根页面不得滚动。
-- Brief 至少包含文案类型、渠道、商品名称、核心卖点、目标人群、表达语气、目标字数、必须包含和禁用词。
-- 生成按钮固定在 Brief 面板底部，不得因为字段较多而滚出可视区。
+- 文案生成是统一电商 Agent 的 Task Recipe，不是独立表单应用，也不跳转到另一套页面壳。
+- 首屏只提供自然语言目标输入和少量任务示例；专业字段不得作为普通用户的必填首屏。
+- Recipe 根据目标即时判断缺失的高影响决策，并复用 Codex `request_user_input` 的问题、选项、自由补充和逐题进度交互。
+- 每题提供明确选项和“让我决定”；用户回答最后一题后直接启动执行，不展示计划文本。
+- 用户已经在目标中明确渠道或表达方向时，对应问题必须跳过。
 - 结果区使用版本切换而不是向下堆叠多个完整文案；标题、正文和 CTA 可本地编辑，合规备注与正文分离。
 - 运行中显示真实“正在生成 x 秒”和停止按钮；完成后才增加版本。调整请求必须进入同一 Codex thread 的新 turn，不覆盖旧版本。
-- 刷新或点击历史文案任务时，使用服务端 thread history 恢复版本，并从首个结构化 Brief 恢复左侧字段。
+- 刷新或点击历史文案任务时，使用服务端 thread history 恢复任务目标和版本。
 
 Harness 契约：
 
-- 每个文案任务对应一个 Codex thread；首次生成和每次调整各对应一个 `turn/start`。
+- 每个文案任务对应一个 Codex thread；Recipe 问答是产品层决策收集，回答完成后的生成和每次调整各对应一个 `turn/start`。
 - 文案规则通过应用托管 `commerce-copywriting` Skill 注入；Gateway 只接受固定 workflow id，并自行解析 Skill 路径和 `outputSchema`。
+- Gateway 支持 App Server 原生 `item/tool/requestUserInput` server request，并将其作为运行中动态问题转发给拥有该 thread 的用户；固定 Recipe 问题不必先消耗一个模型 turn。
 - 浏览器不得提交任意 Skill 路径、developer instructions、output schema、tool definition、cwd 或权限策略。
 - 输出 Schema 固定为 `title`、`body`、`callToAction`、`complianceNotes`。商品资料读取和保存草稿必须使用另行注册、带租户授权的应用工具；Hook 不承载文案业务逻辑。
 

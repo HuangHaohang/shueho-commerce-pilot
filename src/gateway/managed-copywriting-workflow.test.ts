@@ -18,6 +18,7 @@ test("maps the copywriting workflow to an application-owned skill and fixed sche
     name: "commerce-copywriting",
     path: managedWorkflowSkillPath(runtimeRoot, "commerce-copywriting"),
   });
+  assert.ok(turn.outputSchema);
   assert.equal(turn.outputSchema.additionalProperties, false);
   assert.match(String(turn.input[0]?.text), /^\$commerce-copywriting\n/);
 });

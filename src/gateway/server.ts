@@ -24,6 +24,12 @@ import {
 } from "./pending-steer-state.js";
 import { PendingSteerStore } from "./pending-steer-store.js";
 import {
+  normalizeRequestUserInputAnswers,
+  readPendingRequestUserInput,
+  serializePendingRequestUserInput,
+  type PendingRequestUserInput,
+} from "./request-user-input.js";
+import {
   AgentEventOutbox,
   type AgentOutboxEvent,
   type RuntimeScope,
@@ -81,6 +87,7 @@ const agentEventDeliveryEnabled = Boolean(config.agentEventSinkUrl && config.int
 
 const provider = new CommerceProviderClient(config.provider);
 const generatedImages = new GeneratedImageStore(config.codexHome);
+const pendingRequestUserInputs = new Map<string, PendingRequestUserInput>();
 const codexEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   CODEX_HOME: config.codexHome,
@@ -163,6 +170,7 @@ codex.on("event", (event: AppServerEvent) => {
     pendingTurnModels.clear();
     turnModels.clear();
     threadOperations.clear();
+    pendingRequestUserInputs.clear();
     managedMcpReadyPromise = null;
     managedMcpReadyThreadIds.clear();
     managedMcpThreadReadyPromises.clear();
@@ -183,6 +191,12 @@ codex.on("event", (event: AppServerEvent) => {
     compactionStates.clear();
   }
   if (event.type === "notification") {
+    if (event.method === "serverRequest/resolved" && isRecord(event.params)) {
+      const requestId = event.params.requestId;
+      if (typeof requestId === "string" || typeof requestId === "number") {
+        pendingRequestUserInputs.delete(String(requestId));
+      }
+    }
     handleRuntimeNotification(event);
   }
   broadcastEvent(event);
@@ -196,6 +210,18 @@ codex.on("event", (event: AppServerEvent) => {
         message: error instanceof Error ? error.message : "Commerce host tool failed.",
       });
     });
+    return;
+  }
+  if (event.method === "item/tool/requestUserInput" || event.method === "tool/requestUserInput") {
+    const pending = readPendingRequestUserInput(event);
+    if (!pending) {
+      codex.rejectServerRequest(event.id, {
+        code: -32602,
+        message: "Invalid request_user_input payload.",
+      });
+      return;
+    }
+    pendingRequestUserInputs.set(pending.requestId, pending);
     return;
   }
   codex.rejectServerRequest(event.id, {
@@ -329,6 +355,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && url.pathname === "/api/skills") {
+      const result = await codex.request("skills/list", {
+        cwds: [config.runtimeRoot],
+        forceReload: true,
+      });
+      sendJson(res, 200, readBrowserSkillInventory(result));
+      return;
+    }
+
     if (req.method === "POST" && url.pathname === "/api/threads") {
       await ensureCommerceWebMcpReady();
       const body = await readJsonBody<ThreadStartInput>(req);
@@ -381,6 +416,51 @@ const server = createServer(async (req, res) => {
       const result = await readThreadWithStartupRetry(threadId, true);
       const generatedImageArtifacts = await generatedImages.listForThread(threadId);
       sendJson(res, 200, { result, generatedImages: generatedImageArtifacts });
+      return;
+    }
+
+    const pendingUserInputMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/user-input$/);
+    if (req.method === "GET" && pendingUserInputMatch) {
+      const threadId = decodeURIComponent(pendingUserInputMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      sendJson(res, 200, {
+        requests: Array.from(pendingRequestUserInputs.values())
+          .filter((request) => request.threadId === threadId)
+          .map(serializePendingRequestUserInput),
+      });
+      return;
+    }
+
+    const userInputResponseMatch = matchPath(
+      url.pathname,
+      /^\/api\/threads\/([^/]+)\/user-input\/([^/]+)$/,
+    );
+    if (req.method === "POST" && userInputResponseMatch) {
+      const threadId = decodeURIComponent(userInputResponseMatch[1] ?? "");
+      const requestId = decodeURIComponent(userInputResponseMatch[2] ?? "");
+      if (!isSafeAgentId(threadId) || !requestId || requestId.length > 128) {
+        sendJson(res, 400, { error: "Invalid user-input request." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      const pending = pendingRequestUserInputs.get(requestId);
+      if (!pending || pending.threadId !== threadId) {
+        sendJson(res, 404, { error: "Pending user-input request not found." });
+        return;
+      }
+      const body = await readJsonBody<{ answers?: unknown }>(req);
+      const answers = normalizeRequestUserInputAnswers(body.answers, pending.questions);
+      if (!answers) {
+        sendJson(res, 400, { error: "Invalid user-input answers." });
+        return;
+      }
+      pendingRequestUserInputs.delete(requestId);
+      codex.respondToServerRequest(pending.id, { answers });
+      sendJson(res, 200, { accepted: true, requestId });
       return;
     }
 
@@ -2214,7 +2294,11 @@ function openSse(res: ServerResponse, threadId?: string): void {
 }
 
 function broadcastEvent(event: AppServerEvent): void {
-  if (event.type !== "notification" || !browserEventMethods.has(event.method)) {
+  const browserNotification = event.type === "notification" && browserEventMethods.has(event.method);
+  const browserUserInputRequest =
+    event.type === "server_request" &&
+    (event.method === "item/tool/requestUserInput" || event.method === "tool/requestUserInput");
+  if (!browserNotification && !browserUserInputRequest) {
     return;
   }
   const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
@@ -2538,6 +2622,62 @@ function createRuntimeDeveloperInstructions(): string {
     "Use that MCP Web Search tool whenever the user explicitly asks to search the web or when current external information is required. Do not look for a dynamic tool named `commerce_web.search`. Cite returned source URLs and never claim Web Search is unavailable while the MCP tool is present.",
     "If one search call fails or times out, retry once with a shorter and more specific query before reporting the provider failure. Do not tell the user to enable, install, or register Web Search when the tool is already present.",
   ].join(" ");
+}
+
+function readBrowserSkillInventory(value: unknown): {
+  skills: Array<Record<string, unknown>>;
+  errors: string[];
+} {
+  if (!isRecord(value) || !Array.isArray(value.data)) return { skills: [], errors: ["Invalid skills/list response."] };
+  const entry = value.data.find((item) => isRecord(item) && item.cwd === config.runtimeRoot);
+  if (!isRecord(entry)) return { skills: [], errors: ["Runtime skill catalog was not returned."] };
+  const errors = Array.isArray(entry.errors)
+    ? entry.errors.filter((error): error is string => typeof error === "string").slice(0, 20)
+    : [];
+  const skills = Array.isArray(entry.skills)
+    ? entry.skills
+        .filter(isRecord)
+        .map((skill) => {
+          const skillInterface = isRecord(skill.interface) ? skill.interface : {};
+          const dependencies = isRecord(skill.dependencies) && Array.isArray(skill.dependencies.tools)
+            ? skill.dependencies.tools.length
+            : 0;
+          const name = typeof skill.name === "string" ? skill.name : "";
+          return {
+            name,
+            description: typeof skill.description === "string" ? skill.description : "",
+            enabled: skill.enabled !== false,
+            scope: typeof skill.scope === "string" ? skill.scope : "unknown",
+            displayName:
+              name === "skill-creator"
+                ? "创建技能"
+                : typeof skillInterface.displayName === "string"
+                  ? skillInterface.displayName
+                  : formatSkillDisplayName(name),
+            shortDescription:
+              name === "skill-creator"
+                ? "创建或更新可复用的 Agent 技能"
+                : typeof skillInterface.shortDescription === "string"
+                ? skillInterface.shortDescription
+                : typeof skill.description === "string"
+                  ? skill.description
+                  : "",
+            dependencyCount: dependencies,
+            creator: name === "skill-creator",
+            applicationManaged: name.startsWith("commerce-"),
+          };
+        })
+        .filter((skill) => skill.name)
+    : [];
+  return { skills, errors };
+}
+
+function formatSkillDisplayName(name: string): string {
+  return name
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function readImageQuality(value: unknown): ImageGenerationInput["quality"] {

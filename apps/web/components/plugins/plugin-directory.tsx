@@ -143,23 +143,7 @@ export function PluginDirectory() {
 function PluginSectionSwitch() {
   return (
     <div className="hidden h-[var(--cp-topbar-height)] shrink-0 items-center justify-center border-b border-transparent md:flex">
-      <div className="inline-flex rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] p-0.5" aria-label="插件目录类型">
-        <button
-          type="button"
-          className="h-9 min-w-[76px] rounded-[var(--cp-radius-segment)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-4 text-sm font-medium text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]"
-          aria-current="page"
-        >
-          插件
-        </button>
-        <button
-          type="button"
-          disabled
-          className="h-9 min-w-[76px] cursor-not-allowed rounded-[var(--cp-radius-segment)] px-4 text-sm text-[var(--cp-text-faint)]"
-          title="独立技能目录尚未开放"
-        >
-          技能
-        </button>
-      </div>
+      <span className="text-sm font-medium">插件</span>
     </div>
   );
 }

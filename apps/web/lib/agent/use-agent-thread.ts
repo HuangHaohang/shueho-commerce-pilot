@@ -58,6 +58,30 @@ export type GeneratedImageItem = {
 
 export type AgentThreadStatus = "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
 
+export type RequestUserInputQuestionOption = {
+  label: string;
+  description: string;
+};
+
+export type RequestUserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: RequestUserInputQuestionOption[];
+};
+
+export type PendingRequestUserInput = {
+  requestId: string;
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  questions: RequestUserInputQuestion[];
+  isBlocking: boolean;
+  receivedAt: string;
+};
+
 export type AgentSubmitOptions = {
   title?: string;
   workflow?: "commerce-copywriting";
@@ -118,6 +142,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const [pendingSteers, setPendingSteers] = useState<QueuedMessage[]>([]);
   const [queueSubmitting, setQueueSubmitting] = useState(false);
   const [queueOperationId, setQueueOperationId] = useState<string | null>(null);
+  const [pendingUserInput, setPendingUserInput] = useState<PendingRequestUserInput | null>(null);
+  const [answeringUserInput, setAnsweringUserInput] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const sequenceRef = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
@@ -169,6 +195,22 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     }
   }, []);
 
+  const refreshPendingUserInput = useCallback(async (id: string): Promise<void> => {
+    try {
+      const response = await fetch(`/api/agent/threads/${encodeURIComponent(id)}/user-input`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as { requests?: unknown } | null;
+      if (!response.ok || !payload || !Array.isArray(payload.requests)) return;
+      const pending = payload.requests
+        .map(readPendingRequestUserInputPayload)
+        .find((request): request is PendingRequestUserInput => Boolean(request));
+      setPendingUserInput(pending ?? null);
+    } catch {
+      // The SSE server request remains authoritative; reconnect reconciliation retries this read.
+    }
+  }, []);
+
   const activateTurn = useCallback((turnId: string, observedAt = Date.now()) => {
     const nextClock = activateTurnClock(
       { turnId: activeTurnIdRef.current, startedAt: startedAtRef.current },
@@ -194,6 +236,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setActiveTurnId(null);
     setCompacting(false);
     setInterrupting(false);
+    setPendingUserInput(null);
+    setAnsweringUserInput(false);
     setDurationMs(startedAtRef.current ? Date.now() - startedAtRef.current : null);
     setStatus("failed");
     setError(message);
@@ -210,9 +254,21 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
 
   const handleGatewayEvent = useCallback((event: MessageEvent<string>) => {
     const gatewayEvent = parseObject(event.data);
-    if (!gatewayEvent || gatewayEvent.type !== "notification") {
+    if (!gatewayEvent) {
       return;
     }
+    if (
+      gatewayEvent.type === "server_request" &&
+      (gatewayEvent.method === "item/tool/requestUserInput" || gatewayEvent.method === "tool/requestUserInput")
+    ) {
+      const pending = readPendingRequestUserInputEvent(gatewayEvent);
+      if (pending) {
+        setPendingUserInput(pending);
+        setStatus("running");
+      }
+      return;
+    }
+    if (gatewayEvent.type !== "notification") return;
     const method = typeof gatewayEvent.method === "string" ? gatewayEvent.method : "";
     const params = isRecord(gatewayEvent.params) ? gatewayEvent.params : {};
 
@@ -394,6 +450,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setActiveTurnId(null);
       setCompacting(false);
       setPendingSteers([]);
+      setPendingUserInput(null);
+      setAnsweringUserInput(false);
       setInterrupting(false);
       setDurationMs(
         typeof turn.durationMs === "number"
@@ -432,6 +490,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         eventSourceRef.current = source;
         let opened = false;
         source.addEventListener("notification", handleGatewayEvent as EventListener);
+        source.addEventListener("server_request", handleGatewayEvent as EventListener);
         source.onopen = () => {
           opened = true;
           resolve();
@@ -493,6 +552,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         }
 
         if (payload.thread.status === "running") {
+          void refreshPendingUserInput(threadId);
           if (payload.thread.lastTurnId) {
             const authoritativeStartedAt = payload.thread.startedAt
               ? new Date(payload.thread.startedAt).getTime()
@@ -552,7 +612,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activateTurn, refreshQueue, status, threadId]);
+  }, [activateTurn, refreshPendingUserInput, refreshQueue, status, threadId]);
 
   const resetThread = useCallback(() => {
     eventSourceRef.current?.close();
@@ -582,6 +642,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setPendingSteers([]);
     setQueueSubmitting(false);
     setQueueOperationId(null);
+    setPendingUserInput(null);
+    setAnsweringUserInput(false);
   }, []);
 
   const loadThread = useCallback(
@@ -642,6 +704,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setQueuedMessages([]);
         setPendingSteers([]);
         await refreshQueue(payload.thread.id);
+        await refreshPendingUserInput(payload.thread.id);
         if (payload.thread.status === "running") {
           await connectEventStream(payload.thread.id);
         }
@@ -653,7 +716,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setLoadingHistory(false);
       }
     },
-    [connectEventStream, refreshQueue, resetThread, runtimeHealth?.instanceId],
+    [connectEventStream, refreshPendingUserInput, refreshQueue, resetThread, runtimeHealth?.instanceId],
   );
 
   const submit = useCallback(
@@ -1004,6 +1067,38 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     }
   }, [activeTurnId, failActiveTurn, interrupting, threadId]);
 
+  const respondToUserInput = useCallback(
+    async (answers: Record<string, { answers: string[] }>): Promise<boolean> => {
+      if (!threadId || !pendingUserInput || answeringUserInput) return false;
+      setAnsweringUserInput(true);
+      setError(null);
+      try {
+        const response = await fetch(
+          `/api/agent/threads/${encodeURIComponent(threadId)}/user-input/${encodeURIComponent(
+            pendingUserInput.requestId,
+          )}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ answers }),
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok) {
+          throw new Error(readError(payload) || "无法提交答案。");
+        }
+        setPendingUserInput(null);
+        return true;
+      } catch (responseError) {
+        setError(responseError instanceof Error ? responseError.message : "无法提交答案。");
+        return false;
+      } finally {
+        setAnsweringUserInput(false);
+      }
+    },
+    [answeringUserInput, pendingUserInput, threadId],
+  );
+
   useEffect(() => {
     if (
       status === "running" &&
@@ -1070,6 +1165,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     pendingSteers,
     queueSubmitting,
     queueOperationId,
+    pendingUserInput,
+    answeringUserInput,
     currentTurnId: activeTurnId ?? lastTurnId,
     durationMs,
     startedAt,
@@ -1081,6 +1178,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     steerQueuedMessage,
     clearQueuedMessages,
     interrupt,
+    respondToUserInput,
     resetThread,
     loadThread,
   };
@@ -1342,6 +1440,61 @@ function readTurnId(payload: Record<string, unknown> | null): string | null {
 
 function readError(payload: Record<string, unknown> | null): string | null {
   return payload && typeof payload.error === "string" ? payload.error : null;
+}
+
+function readPendingRequestUserInputEvent(event: Record<string, unknown>): PendingRequestUserInput | null {
+  if (!isRecord(event.params) || (typeof event.id !== "string" && typeof event.id !== "number")) {
+    return null;
+  }
+  return readPendingRequestUserInputPayload({ ...event.params, requestId: String(event.id) });
+}
+
+function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserInput | null {
+  if (!isRecord(value)) return null;
+  const requestId = typeof value.requestId === "string" ? value.requestId : "";
+  const threadId = typeof value.threadId === "string" ? value.threadId : "";
+  const turnId = typeof value.turnId === "string" ? value.turnId : "";
+  const itemId = typeof value.itemId === "string" ? value.itemId : "";
+  if (!requestId || !threadId || !turnId || !itemId || !Array.isArray(value.questions)) return null;
+  const questions = value.questions
+    .map((question): RequestUserInputQuestion | null => {
+      if (
+        !isRecord(question) ||
+        typeof question.id !== "string" ||
+        typeof question.header !== "string" ||
+        typeof question.question !== "string" ||
+        !Array.isArray(question.options)
+      ) {
+        return null;
+      }
+      const options = question.options
+        .map((option): RequestUserInputQuestionOption | null =>
+          isRecord(option) && typeof option.label === "string" && typeof option.description === "string"
+            ? { label: option.label, description: option.description }
+            : null,
+        )
+        .filter((option): option is RequestUserInputQuestionOption => Boolean(option));
+      if (!options.length) return null;
+      return {
+        id: question.id,
+        header: question.header,
+        question: question.question,
+        isOther: question.isOther !== false,
+        isSecret: question.isSecret === true,
+        options,
+      };
+    })
+    .filter((question): question is RequestUserInputQuestion => Boolean(question));
+  if (!questions.length || questions.length > 3) return null;
+  return {
+    requestId,
+    threadId,
+    turnId,
+    itemId,
+    questions,
+    isBlocking: value.isBlocking !== false,
+    receivedAt: typeof value.receivedAt === "string" ? value.receivedAt : new Date().toISOString(),
+  };
 }
 
 function parseObject(value: string): Record<string, unknown> | null {

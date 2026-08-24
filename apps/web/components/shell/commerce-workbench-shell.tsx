@@ -61,6 +61,7 @@ import { createPortal } from "react-dom";
 
 import { CopywritingWorkspace } from "@/components/creative/copywriting-workspace";
 import { PluginDirectory } from "@/components/plugins/plugin-directory";
+import { SkillsDirectory } from "@/components/skills/skills-directory";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -87,13 +88,12 @@ import {
 import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
 import {
   buildCopywritingAdjustmentPrompt,
-  buildCopywritingPrompt,
-  type CopywritingBrief,
+  buildCopywritingRecipeExecutionPrompt,
 } from "@/lib/copywriting/brief";
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
-type WorkbenchView = "workbench" | "plugins" | "copywriting";
+type WorkbenchView = "workbench" | "plugins" | "skills" | "copywriting";
 type AuthMode = "login" | "register";
 type AuthIdentifierType = "email" | "phone";
 
@@ -167,6 +167,7 @@ const primaryNavItems = [
 const moreNavItems = [
   { label: "已安排", icon: Clock3, active: false, href: null },
   { label: "插件", icon: Plug, active: false, href: null },
+  { label: "技能", icon: Sparkles, active: false, href: null },
 ];
 
 const creativeNavItems = [
@@ -381,6 +382,7 @@ export function CommerceWorkbenchShell({
     setDraft("");
     setSubmittedDraft(null);
     setActiveView("workbench");
+    autoRestoreAttemptedRef.current = true;
     agentThread.resetThread();
     void threadsQuery.refetch();
   }
@@ -408,9 +410,9 @@ export function CommerceWorkbenchShell({
     setActiveView("copywriting");
   }
 
-  async function generateCopywritingDraft(brief: CopywritingBrief) {
-    await agentThread.submit(buildCopywritingPrompt(brief), {
-      title: `文案生成 · ${brief.productName.trim()}`,
+  async function executeCopywritingRecipe(goal: string, answerSummary: string) {
+    await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal, answerSummary), {
+      title: `文案任务 · ${goal.trim().slice(0, 28)}`,
       workflow: "commerce-copywriting",
     });
   }
@@ -434,6 +436,7 @@ export function CommerceWorkbenchShell({
         onOpenThread={openStoredThread}
         onOpenCopywriting={openCopywriting}
         onOpenPlugins={() => setActiveView("plugins")}
+        onOpenSkills={() => setActiveView("skills")}
         onOpenAuth={() => openAuthDialog("login")}
         onLogout={logout}
       />
@@ -443,6 +446,8 @@ export function CommerceWorkbenchShell({
 
         {activeView === "plugins" ? (
           <PluginDirectory />
+        ) : activeView === "skills" ? (
+          <SkillsDirectory />
         ) : activeView === "copywriting" ? (
           <CopywritingWorkspace
             messages={agentThread.messages}
@@ -450,10 +455,13 @@ export function CommerceWorkbenchShell({
             durationMs={agentThread.durationMs}
             startedAt={agentThread.startedAt}
             error={agentThread.error}
+            pendingUserInput={agentThread.pendingUserInput}
+            answeringUserInput={agentThread.answeringUserInput}
             modelLabel={`${formatModelName(selectedModel)} · ${
               reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
             }`}
-            onGenerate={generateCopywritingDraft}
+            onAnswerUserInput={agentThread.respondToUserInput}
+            onExecute={executeCopywritingRecipe}
             onAdjust={adjustCopywritingDraft}
             onInterrupt={agentThread.interrupt}
           />
@@ -570,7 +578,7 @@ export function CommerceWorkbenchShell({
 }
 
 function isCopywritingThread(thread: AgentThreadSummary): boolean {
-  return thread.title.startsWith("文案生成 ·");
+  return thread.title.startsWith("文案生成 ·") || thread.title.startsWith("文案任务 ·");
 }
 
 function ComplianceFooter() {
@@ -1975,6 +1983,7 @@ function Sidebar({
   onOpenThread,
   onOpenCopywriting,
   onOpenPlugins,
+  onOpenSkills,
   onOpenAuth,
   onLogout,
 }: {
@@ -1988,6 +1997,7 @@ function Sidebar({
   onOpenThread: (thread: AgentThreadSummary) => void;
   onOpenCopywriting: () => void;
   onOpenPlugins: () => void;
+  onOpenSkills: () => void;
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
 }) {
@@ -2119,7 +2129,8 @@ function Sidebar({
             type="button"
             className={cn(
               "flex h-[var(--cp-sidebar-item-height)] w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-              (openSidebarFlyout === "more" || activeView === "plugins") && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+              (openSidebarFlyout === "more" || activeView === "plugins" || activeView === "skills") &&
+                "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
             )}
             aria-expanded={openSidebarFlyout === "more"}
             aria-haspopup="menu"
@@ -2150,12 +2161,15 @@ function Sidebar({
                       className={cn(
                         "flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
                         item.label === "插件" && activeView === "plugins" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+                        item.label === "技能" && activeView === "skills" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                         item.label === "文案生成" && activeView === "copywriting" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
                       )}
                       onClick={() => {
                         setOpenSidebarFlyout(null);
                         if (item.label === "插件") {
                           onOpenPlugins();
+                        } else if (item.label === "技能") {
+                          onOpenSkills();
                         } else if (item.label === "文案生成") {
                           onOpenCopywriting();
                         }
