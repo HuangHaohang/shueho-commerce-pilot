@@ -165,7 +165,7 @@ export function EnterpriseAdminDashboard() {
     <div className="flex min-h-dvh bg-[var(--cp-bg)] text-[var(--cp-text)] md:h-dvh md:overflow-hidden">
       <EnterpriseAdminSidebar tenantName={contextQuery.data?.tenant.name} />
 
-      <main className="min-w-0 flex-1 md:h-dvh md:overflow-y-auto">
+      <main className="min-w-0 flex-1 md:h-dvh md:overscroll-contain md:overflow-y-auto">
         <EnterpriseAdminMobileHeader />
         <div className="mx-auto w-full max-w-[var(--cp-content-max)] px-4 pb-20 pt-8 md:px-8 md:pb-24 md:pt-12">
           {contextQuery.isLoading ? <EnterpriseAdminSkeleton /> : null}

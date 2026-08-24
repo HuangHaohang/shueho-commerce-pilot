@@ -284,7 +284,7 @@ function WorkspaceSection({
         <form className="mt-8 border-t border-[var(--cp-border-subtle)] pt-6" onSubmit={createWorkspace} noValidate>
           <p className="m-0 text-sm font-medium">创建工作区</p>
           <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-            <label>
+            <label className="relative block">
               <span className="sr-only">工作区名称</span>
               <input
                 value={name}
@@ -294,7 +294,7 @@ function WorkspaceSection({
                 maxLength={80}
               />
             </label>
-            <label>
+            <label className="relative block">
               <span className="sr-only">工作区标识</span>
               <input
                 value={slug}
