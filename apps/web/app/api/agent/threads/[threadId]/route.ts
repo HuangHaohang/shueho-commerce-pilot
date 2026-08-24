@@ -7,6 +7,7 @@ import {
   updateAgentThreadTitle,
   updateAgentThreadStatus,
 } from "@/lib/agent/thread-ownership";
+import { readWebSourcesFromToolItem } from "@/lib/agent/web-sources";
 import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
 
 export async function GET(request: Request, routeContext: { params: Promise<{ threadId: string }> }) {
@@ -190,12 +191,24 @@ function normalizeActivity(
   if (item.type === "dynamicToolCall") {
     const namespace = typeof item.namespace === "string" ? item.namespace : "";
     const tool = typeof item.tool === "string" ? item.tool : "工具";
-    return { id, sequence, turnId, kind: namespace === "commerce_image" ? "image" : namespace === "commerce_web" ? "search" : "tool", label: namespace === "commerce_web" ? "完成了搜索" : "调用了工具", detail: namespace ? `${namespace}.${tool}` : tool, durationMs, status };
+    const sources = namespace === "commerce_web" ? readWebSourcesFromToolItem(item) : [];
+    return {
+      id,
+      sequence,
+      turnId,
+      kind: namespace === "commerce_image" ? "image" : namespace === "commerce_web" ? "search" : "tool",
+      label: namespace === "commerce_web" ? "完成了搜索" : "调用了工具",
+      detail: namespace ? `${namespace}.${tool}` : tool,
+      durationMs,
+      ...(sources.length > 0 ? { sources } : {}),
+      status,
+    };
   }
   if (item.type === "mcpToolCall") {
     const server = typeof item.server === "string" ? item.server : "";
     const tool = typeof item.tool === "string" ? item.tool : "";
     const isWebSearch = server === "commerce_web" && tool === "search";
+    const sources = isWebSearch ? readWebSourcesFromToolItem(item) : [];
     return {
       id,
       sequence,
@@ -204,11 +217,22 @@ function normalizeActivity(
       label: isWebSearch ? "完成了搜索" : "调用了连接器",
       detail: isWebSearch ? "commerce_web.search" : tool,
       durationMs,
+      ...(sources.length > 0 ? { sources } : {}),
       status,
     };
   }
   if (item.type === "webSearch") {
-    return { id, sequence, turnId, kind: "search", label: "完成了搜索", durationMs, status };
+    const sources = readWebSourcesFromToolItem(item);
+    return {
+      id,
+      sequence,
+      turnId,
+      kind: "search",
+      label: "完成了搜索",
+      durationMs,
+      ...(sources.length > 0 ? { sources } : {}),
+      status,
+    };
   }
   if (item.type === "contextCompaction") {
     return { id, sequence, turnId, kind: "compact", label: "已整理上下文", durationMs, status };

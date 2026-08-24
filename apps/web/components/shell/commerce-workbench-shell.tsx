@@ -77,6 +77,10 @@ import {
   type ConversationMinimapMarkerInput,
   type ConversationMinimapState,
 } from "@/lib/agent/conversation-minimap";
+import {
+  collectRecentWebSources,
+  type WebSource,
+} from "@/lib/agent/web-sources";
 import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
 import { cn } from "@/lib/utils";
 
@@ -632,6 +636,7 @@ function ConversationWorkspace({
   const currentActivities = currentTurnId
     ? activities.filter((activity) => activity.turnId === currentTurnId)
     : [];
+  const webSources = useMemo(() => collectRecentWebSources(activities), [activities]);
   const latestCurrentActivity = currentActivities.reduce<AgentActivity | null>(
     (latest, activity) => (!latest || activity.sequence > latest.sequence ? activity : latest),
     null,
@@ -856,7 +861,7 @@ function ConversationWorkspace({
         </div>
       </div>
 
-      <WorkOutputPanel images={images} />
+      <WorkOutputPanel images={images} sources={webSources} />
 
       <div className="relative shrink-0 bg-[var(--cp-bg)] px-4 pb-3 pt-2 md:px-8">
         {showScrollToBottom ? (
@@ -1773,7 +1778,7 @@ function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
   );
 }
 
-function WorkOutputPanel({ images }: { images: GeneratedImageItem[] }) {
+function WorkOutputPanel({ images, sources }: { images: GeneratedImageItem[]; sources: WebSource[] }) {
   return (
     <aside className="absolute right-6 top-2 hidden w-[300px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-5 shadow-[var(--cp-shadow-soft)] 2xl:block">
       <div className="text-sm text-[var(--cp-text-muted)]">输出内容</div>
@@ -1794,12 +1799,41 @@ function WorkOutputPanel({ images }: { images: GeneratedImageItem[] }) {
       )}
       <div className="my-4 h-px bg-[var(--cp-border-subtle)]" />
       <div className="text-sm text-[var(--cp-text-muted)]">来源</div>
-      <button type="button" className="mt-3 flex items-center gap-2 text-sm text-[var(--cp-text-faint)]">
-        <Plus className="size-4" />
-        添加来源
-      </button>
+      {sources.length > 0 ? (
+        <div className="mt-3 space-y-1">
+          {sources.map((source) => (
+            <a
+              key={source.url}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              className="flex min-h-9 items-center gap-2 rounded-[var(--cp-radius-item)] px-2 py-1.5 text-sm text-[var(--cp-text-soft)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+            >
+              <ExternalLink className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
+              <span className="min-w-0">
+                <span className="block truncate">{source.title || sourceHostname(source.url)}</span>
+                {source.title ? (
+                  <span className="block truncate text-[11px] text-[var(--cp-text-faint)]">
+                    {sourceHostname(source.url)}
+                  </span>
+                ) : null}
+              </span>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 text-sm text-[var(--cp-text-faint)]">暂无来源</div>
+      )}
     </aside>
   );
+}
+
+function sourceHostname(value: string): string {
+  try {
+    return new URL(value).hostname.replace(/^www\./, "");
+  } catch {
+    return value;
+  }
 }
 
 function formatDuration(durationMs: number): string {

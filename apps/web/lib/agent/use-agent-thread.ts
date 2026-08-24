@@ -15,6 +15,10 @@ import {
   shouldExpireActiveTurn,
   shouldIgnoreTerminalSnapshotWhileConnecting,
 } from "./turn-lifecycle";
+import {
+  readWebSourcesFromToolItem,
+  type WebSource,
+} from "./web-sources";
 
 export type { QueuedMessage } from "./pending-input-state";
 
@@ -39,6 +43,7 @@ export type AgentActivity = {
   label: string;
   detail?: string;
   durationMs?: number | null;
+  sources?: WebSource[];
   status: "running" | "completed" | "failed";
 };
 
@@ -1225,6 +1230,7 @@ function activityFromItem(
   if (item.type === "dynamicToolCall") {
     const namespace = typeof item.namespace === "string" ? item.namespace : "";
     const tool = typeof item.tool === "string" ? item.tool : "工具";
+    const sources = namespace === "commerce_web" ? readWebSourcesFromToolItem(item) : [];
     return {
       id: item.id as string,
       sequence,
@@ -1244,6 +1250,7 @@ function activityFromItem(
               : "正在调用工具",
       detail: namespace ? `${namespace}.${tool}` : tool,
       durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+      ...(sources.length > 0 ? { sources } : {}),
       status,
     };
   }
@@ -1251,6 +1258,7 @@ function activityFromItem(
     const server = typeof item.server === "string" ? item.server : "";
     const tool = typeof item.tool === "string" ? item.tool : "";
     const isWebSearch = server === "commerce_web" && tool === "search";
+    const sources = isWebSearch ? readWebSourcesFromToolItem(item) : [];
     return {
       id: item.id as string,
       sequence,
@@ -1265,6 +1273,7 @@ function activityFromItem(
           : "正在调用连接器",
       detail: isWebSearch ? "commerce_web.search" : tool,
       durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+      ...(sources.length > 0 ? { sources } : {}),
       status,
     };
   }
@@ -1297,7 +1306,18 @@ function activityFromItem(
     };
   }
   if (item.type === "webSearch") {
-    return { id: item.id as string, sequence, turnId, kind: "search", label: completed ? "搜索完成" : "正在搜索", detail: String(item.query ?? ""), durationMs: typeof item.durationMs === "number" ? item.durationMs : null, status };
+    const sources = readWebSourcesFromToolItem(item);
+    return {
+      id: item.id as string,
+      sequence,
+      turnId,
+      kind: "search",
+      label: completed ? "搜索完成" : "正在搜索",
+      detail: String(item.query ?? ""),
+      durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+      ...(sources.length > 0 ? { sources } : {}),
+      status,
+    };
   }
   return null;
 }
