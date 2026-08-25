@@ -12,7 +12,8 @@ This repository is designed for humans collaborating with coding agents. Before 
 2. [CONTRIBUTING.md](./CONTRIBUTING.md) - setup, branch, migration, test, commit, and PR workflow;
 3. [Architecture Overview](./docs/architecture/overview.md) - technology stack and service boundaries;
 4. [AI-Assisted Collaboration](./docs/development/ai-collaboration.md) - shared vibe-coding and handoff rules;
-5. [Documentation Map](./docs/README.md) - feature-specific architecture and deployment documents.
+5. [Coding Agent Bootstrap Prompt](./docs/development/agent-bootstrap-prompt.md) - a copyable prompt for a teammate's coding agent;
+6. [Documentation Map](./docs/README.md) - feature-specific architecture and deployment documents.
 
 **Do not replace Codex App Server with a self-built agent loop or another orchestration framework.** Codex Harness owns threads, Turns, streaming items, tools, Skills, approvals, interruption, queueing, recovery, compaction, and multi-agent behavior.
 

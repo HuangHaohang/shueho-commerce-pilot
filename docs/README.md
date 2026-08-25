@@ -24,6 +24,7 @@ Read documents in this order when joining the project or starting an AI-assisted
 ## Development And Operations
 
 - [`development/ai-collaboration.md`](development/ai-collaboration.md) - shared vibe-coding workflow for humans and coding agents.
+- [`development/agent-bootstrap-prompt.md`](development/agent-bootstrap-prompt.md) - copyable prompt that tells a coding agent how to clone, read rules, branch, implement, verify, and hand off.
 - [`deployment/runtime.md`](deployment/runtime.md) - production runtime, secrets, volumes, workers, callbacks, and deployment gates.
 - [`config/custom-model-provider.md`](config/custom-model-provider.md) - custom Responses-compatible provider configuration.
 - [`../designs/DESIGN.md`](../designs/DESIGN.md) - frontend visual system and UX rules.
