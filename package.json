@@ -24,7 +24,7 @@
     "security:runtime": "npm run build && node dist/scripts/verify-runtime-security.js",
     "backfill:image-artifacts": "npm run build && node dist/scripts/backfill-generated-image-metadata.js",
     "start": "node dist/src/gateway/server.js",
-    "db:up": "docker compose up -d postgres",
+    "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down",
     "auth:migrate": "npm --workspace @shueho-commerce-pilot/web run auth:migrate",
     "enterprise:bootstrap": "npm --workspace @shueho-commerce-pilot/web run enterprise:bootstrap --",
