@@ -26,6 +26,7 @@ const requiredLines = [
   "apps = false",
   "code_mode.enabled = false",
   "hooks = true",
+  "default_mode_request_user_input = true",
   "multi_agent = true",
   "remote_plugin = false",
   "skill_mcp_dependency_install = false",
@@ -82,6 +83,12 @@ if (!managedHookSource.includes("Commerce Pilot runtime allowlist")) {
 if (!managedHookSource.includes('"web_search"')) {
   throw new Error("Managed Hook runner does not allow the native Codex Web Search tool.");
 }
+if (!managedHookSource.includes('"commerce_skill.publish"')) {
+  throw new Error("Managed Hook runner does not allow the approval-gated Commerce Skill publisher.");
+}
+if (!managedHookSource.includes('"request_user_input"')) {
+  throw new Error("Managed Hook runner does not allow Harness user questions in Default mode.");
+}
 if (!managedHookSource.includes("Object.keys(output).length > 0")) {
   throw new Error("Managed Hook runner must keep successful observe-only Hook stdout empty.");
 }
@@ -118,6 +125,8 @@ console.log(
       arbitraryProcessNetwork: false,
       hostedWebSearch: true,
       managedMcpWebSearch: true,
+      managedSkillPublisher: true,
+      defaultModeRequestUserInput: true,
       nativeProviderWebSearch: true,
       multiAgent: true,
       localPathImageReader: false,
@@ -128,7 +137,7 @@ console.log(
       compactionTimeoutMs: config.compactionTimeoutMs,
       developmentHookTrust: "app-owned-bypass",
       productionHookTrust: "requirements-managed-only",
-      checkedControls: requiredLines.length,
+      checkedControls: requiredLines.length + 2,
     },
     null,
     2,

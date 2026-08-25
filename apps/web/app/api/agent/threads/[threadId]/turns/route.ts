@@ -11,6 +11,8 @@ import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
 
 const effortValues = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const workflowValues = new Set(["commerce-copywriting"]);
+const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const attachmentIdPattern = /^[0-9a-f-]{36}$/i;
 
 export async function POST(request: Request, context: { params: Promise<{ threadId: string }> }) {
   const { threadId } = await context.params;
@@ -27,9 +29,15 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     effort?: unknown;
     clientRequestId?: unknown;
     workflow?: unknown;
+    skillName?: unknown;
+    attachmentIds?: unknown;
   } | null;
-  if (!body || typeof body.message !== "string" || !body.message.trim() || body.message.length > 50_000) {
-    return NextResponse.json({ error: "请输入有效内容。" }, { status: 400 });
+  const attachmentIds = readAttachmentIds(body?.attachmentIds);
+  if (!attachmentIds) {
+    return NextResponse.json({ error: "附件标识无效。" }, { status: 400 });
+  }
+  if (!body || typeof body.message !== "string" || (!body.message.trim() && !attachmentIds.length) || body.message.length > 50_000) {
+    return NextResponse.json({ error: "请输入内容或添加附件。" }, { status: 400 });
   }
   if (typeof body.model !== "string" || body.model.length > 128) {
     return NextResponse.json({ error: "请选择有效模型。" }, { status: 400 });
@@ -37,9 +45,16 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   if (body.workflow !== undefined && (typeof body.workflow !== "string" || !workflowValues.has(body.workflow))) {
     return NextResponse.json({ error: "工作流标识无效。" }, { status: 400 });
   }
+  if (body.skillName !== undefined && (typeof body.skillName !== "string" || !skillNamePattern.test(body.skillName))) {
+    return NextResponse.json({ error: "技能标识无效。" }, { status: 400 });
+  }
 
   const effort = typeof body.effort === "string" && effortValues.has(body.effort) ? body.effort : undefined;
   const workflow = typeof body.workflow === "string" && workflowValues.has(body.workflow) ? body.workflow : undefined;
+  const skillName = typeof body.skillName === "string" && skillNamePattern.test(body.skillName) ? body.skillName : undefined;
+  if (workflow && skillName) {
+    return NextResponse.json({ error: "工作流与显式技能不能同时选择。" }, { status: 400 });
+  }
   const clientRequestId =
     typeof body.clientRequestId === "string" && /^[0-9a-f-]{36}$/i.test(body.clientRequestId)
       ? body.clientRequestId
@@ -71,6 +86,8 @@ export async function POST(request: Request, context: { params: Promise<{ thread
         model: body.model,
         effort,
         workflow,
+        skillName,
+        attachmentIds,
         clientRequestId,
       }),
       cache: "no-store",
@@ -121,6 +138,13 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     // over-admit concurrent work; terminal readback or expiry releases it.
     return NextResponse.json({ error: "无法启动 Agent 任务。" }, { status: 503 });
   }
+}
+
+function readAttachmentIds(value: unknown): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 8) return null;
+  const ids = value.filter((item): item is string => typeof item === "string" && attachmentIdPattern.test(item));
+  return ids.length === value.length && new Set(ids).size === ids.length ? ids : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

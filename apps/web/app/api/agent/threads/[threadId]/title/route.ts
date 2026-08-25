@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
 import { generateAgentThreadTitleOnce } from "@/lib/agent/thread-ownership";
-import { isTaskCategory, type TaskCategory } from "@/lib/agent/task-category";
+import { isTaskCategory, resolveTaskCategory } from "@/lib/agent/task-category";
 import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
 
 export async function POST(request: Request, context: { params: Promise<{ threadId: string }> }) {
@@ -30,7 +30,11 @@ export async function POST(request: Request, context: { params: Promise<{ thread
       const model = typeof payload.model === "string" ? payload.model : "";
       const generatedCategory = isTaskCategory(payload.category) ? payload.category : null;
       if (!title || !model || !generatedCategory) throw new Error("标题生成服务没有返回有效标题。");
-      const category: TaskCategory = record.recipeId === "copywriting" ? "creative" : generatedCategory;
+      const category = resolveTaskCategory({
+        category: generatedCategory,
+        recipeId: record.recipeId,
+        title,
+      });
       return { title, model, category };
     });
     return NextResponse.json(

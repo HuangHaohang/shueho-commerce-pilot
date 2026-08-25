@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      NODE_ENV: test
+      CODEX_HOME: .runtime/codex-ci
+      COMMERCE_PROVIDER_API_KEY: ci-placeholder-provider-key
+      BETTER_AUTH_URL: http://127.0.0.1:3000
+      BETTER_AUTH_SECRET: ci-placeholder-secret-at-least-32-characters
+      AUTH_TRUSTED_ORIGINS: http://127.0.0.1:3000
+      DATABASE_URL: postgresql://commerce_pilot_app:commerce_pilot_app_dev@127.0.0.1:55432/commerce_pilot
+      MIGRATION_DATABASE_URL: postgresql://commerce_pilot:commerce_pilot_dev@127.0.0.1:55432/commerce_pilot
+      COMMERCE_ENFORCE_DATABASE_RLS: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.18.0
+          cache: npm
+
+      - run: npm ci
+      - run: npm run db:up
+      - run: npm run auth:migrate
+      - run: npm run enterprise:verify-isolation
+      - run: npm run check
+      - run: npm run web:check
+      - run: npm run test:gateway
+      - run: npm run web:test
+      - run: npm run security:runtime
+      - run: npm run web:build
+
+      - name: Stop database
+        if: always()
+        run: npm run db:down

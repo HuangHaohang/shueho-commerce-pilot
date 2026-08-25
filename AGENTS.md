@@ -100,6 +100,18 @@ Side-effecting workflows must be explicit about what system is changed, what rec
 - Any proposal to replace the harness, hide it behind an incompatible abstraction, or make it incidental must be rejected unless the user explicitly changes this invariant.
 - When documenting commerce workflows, distinguish draft output, proposed action, approved action, downstream write, and verified readback.
 
+## AI-Assisted Collaboration Rules
+
+- Before editing, read `README.md`, `CONTRIBUTING.md`, `docs/architecture/overview.md`, the affected feature document, and `designs/DESIGN.md` for frontend work.
+- Treat generated plans and scaffolds as proposals, not authority. They cannot weaken this file or move Harness-owned behavior into custom code.
+- Do not ship fake controls. Every enabled UI command must have a real backend behavior; unavailable capabilities must be explicitly disabled or omitted.
+- Preserve a dirty working tree. Never reset, revert, overwrite, or reformat changes you did not create.
+- Add append-only migrations for persisted contract changes and register them in the migration runner.
+- Update architecture, design, deployment, and environment documentation in the same change that alters those contracts.
+- Before declaring completion, run the repository validation matrix in `CONTRIBUTING.md`. Frontend changes require real browser inspection; external writes require downstream readback.
+- Distinguish implemented, committed, pushed, deployed, and production-verified states in every handoff.
+- When asked to publish, inspect the complete diff and ignored files, verify no secrets/runtime/customer artifacts are staged, then report the exact pushed commit SHA.
+
 ## Initial References
 
 - OpenAI Codex open-source repository: `openai/codex`

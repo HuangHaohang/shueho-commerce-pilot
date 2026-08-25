@@ -1,9 +1,17 @@
 import "dotenv/config";
 
 import { randomUUID, timingSafeEqual } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { join } from "node:path";
 
 import { CodexAppServerClient } from "../codex/app-server-client.js";
+import {
+  buildExplicitSkillTurn,
+  CODEX_SKILL_NAME_PATTERN,
+  readVisibleExplicitSkillMessage,
+  resolveExplicitSkillFromCatalog,
+} from "../codex/explicit-skill.js";
 import { buildManagedWorkflowTurn, isManagedWorkflowId } from "../codex/managed-workflows.js";
 import type { AppServerEvent, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
 import { ensureAppOwnedCodexConfig } from "../codex/runtime-config.js";
@@ -16,6 +24,11 @@ import {
   type ThreadContextUsage,
 } from "./compaction-policy.js";
 import { GeneratedImageStore } from "./generated-image-store.js";
+import {
+  ManagedSkillStore,
+  validateManagedSkillDraft,
+  type ManagedSkillDraft,
+} from "./managed-skill-store.js";
 import { readManagedMcpStatus, type ManagedMcpStatus } from "./managed-mcp-status.js";
 import {
   PendingSteerRegistry,
@@ -24,6 +37,7 @@ import {
 } from "./pending-steer-state.js";
 import { PendingSteerStore } from "./pending-steer-store.js";
 import {
+  formatRequestUserInputAnswerMessage,
   normalizeRequestUserInputAnswers,
   readPendingRequestUserInput,
   serializePendingRequestUserInput,
@@ -33,6 +47,7 @@ import {
   AgentEventOutbox,
   type AgentOutboxEvent,
   type RuntimeScope,
+  type SkillPublishedEvent,
   type TurnCompletedEvent,
   type UsageCompletedEvent,
 } from "./agent-event-outbox.js";
@@ -41,6 +56,17 @@ import {
   isAgentEventPipelineWritable,
 } from "./agent-event-pipeline-health.js";
 import { AgentOutboxProcessLock } from "./agent-outbox-process-lock.js";
+import {
+  sanitizeBrowserAppServerEvent,
+  stripAttachmentContextBlocks,
+} from "./browser-event-sanitizer.js";
+import {
+  MAX_THREAD_ATTACHMENT_BYTES,
+  MAX_THREAD_ATTACHMENTS_PER_TURN,
+  MAX_THREAD_ATTACHMENT_TOTAL_BYTES,
+  ThreadArtifactStore,
+  type ThreadArtifact,
+} from "./thread-artifact-store.js";
 
 type CompactionTrigger = "automatic" | "manual" | "harness";
 
@@ -73,6 +99,12 @@ type ManagedMcpRuntimeState = ManagedMcpStatus & {
   error: string | null;
 };
 
+type PendingSkillPublishApproval = {
+  requestId: string;
+  draft: ManagedSkillDraft;
+  scope: RuntimeScope;
+};
+
 class GatewayRequestError extends Error {
   constructor(message: string, readonly statusCode: number) {
     super(message);
@@ -87,7 +119,10 @@ const agentEventDeliveryEnabled = Boolean(config.agentEventSinkUrl && config.int
 
 const provider = new CommerceProviderClient(config.provider);
 const generatedImages = new GeneratedImageStore(config.codexHome);
+const threadArtifacts = new ThreadArtifactStore(config.codexHome);
+const managedSkills = new ManagedSkillStore(config.runtimeRoot);
 const pendingRequestUserInputs = new Map<string, PendingRequestUserInput>();
+const pendingSkillPublishApprovals = new Map<string, PendingSkillPublishApproval>();
 const codexEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   CODEX_HOME: config.codexHome,
@@ -151,10 +186,12 @@ const browserEventMethods = new Set([
   "item/agentMessage/delta",
   "commerce/imageGeneration/started",
   "commerce/imageGeneration/completed",
+  "commerce/skillPublish/completed",
   "commerce/contextCompaction/started",
   "commerce/contextCompaction/failed",
   "commerce/authorization/revoked",
   "thread/queue/changed",
+  "thread/deleted",
   "error",
 ]);
 const MAX_JSON_BODY_BYTES = 64 * 1024;
@@ -171,6 +208,7 @@ codex.on("event", (event: AppServerEvent) => {
     turnModels.clear();
     threadOperations.clear();
     pendingRequestUserInputs.clear();
+    pendingSkillPublishApprovals.clear();
     managedMcpReadyPromise = null;
     managedMcpReadyThreadIds.clear();
     managedMcpThreadReadyPromises.clear();
@@ -194,7 +232,12 @@ codex.on("event", (event: AppServerEvent) => {
     if (event.method === "serverRequest/resolved" && isRecord(event.params)) {
       const requestId = event.params.requestId;
       if (typeof requestId === "string" || typeof requestId === "number") {
-        pendingRequestUserInputs.delete(String(requestId));
+        const resolvedId = String(requestId);
+        for (const [pendingId, pending] of pendingRequestUserInputs) {
+          if (String(pending.id) !== resolvedId) continue;
+          pendingRequestUserInputs.delete(pendingId);
+          pendingSkillPublishApprovals.delete(pendingId);
+        }
       }
     }
     handleRuntimeNotification(event);
@@ -404,6 +447,17 @@ const server = createServer(async (req, res) => {
     }
 
     const threadReadMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)$/);
+    if (req.method === "DELETE" && threadReadMatch) {
+      const threadId = decodeURIComponent(threadReadMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      const result = await permanentlyDeleteThreadTree(threadId);
+      sendJson(res, 200, result);
+      return;
+    }
     if (req.method === "GET" && threadReadMatch) {
       const threadId = decodeURIComponent(threadReadMatch[1] ?? "");
       if (!isSafeAgentId(threadId)) {
@@ -416,7 +470,95 @@ const server = createServer(async (req, res) => {
       await ensureThreadLoaded(threadId);
       const result = await readThreadWithStartupRetry(threadId, true);
       const generatedImageArtifacts = await generatedImages.listForThread(threadId);
-      sendJson(res, 200, { result, generatedImages: generatedImageArtifacts });
+      const attachments = await threadArtifacts.listForThread(threadId);
+      sendJson(res, 200, { result, generatedImages: generatedImageArtifacts, attachments });
+      return;
+    }
+
+    const threadAttachmentsMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/attachments$/);
+    if (req.method === "POST" && threadAttachmentsMatch) {
+      const threadId = decodeURIComponent(threadAttachmentsMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      const scope = threadScopes.get(threadId);
+      if (!scope) throw new GatewayRequestError("Attachment upload requires an enterprise scope.", 400);
+      const clientRequestId = readSingleHeader(req, "x-commerce-client-request-id") ?? "";
+      const encodedFilename = readSingleHeader(req, "x-commerce-filename") ?? "";
+      const originalName = decodeHeaderComponent(encodedFilename, "attachment filename");
+      const existing = (await threadArtifacts.listForThread(threadId))
+        .filter((artifact) => artifact.clientRequestId === clientRequestId);
+      if (existing.length >= MAX_THREAD_ATTACHMENTS_PER_TURN) {
+        throw new GatewayRequestError("Too many attachments for one turn.", 413);
+      }
+      const bytes = await readRawBody(req, MAX_THREAD_ATTACHMENT_BYTES);
+      const existingBytes = existing.reduce((total, artifact) => total + artifact.size, 0);
+      if (existingBytes + bytes.byteLength > MAX_THREAD_ATTACHMENT_TOTAL_BYTES) {
+        throw new GatewayRequestError("Attachment total exceeds the turn limit.", 413);
+      }
+      const artifact = await threadArtifacts.save({
+        threadId,
+        scope,
+        clientRequestId,
+        originalName,
+        declaredMimeType: readSingleHeader(req, "content-type") ?? "",
+        bytes,
+      });
+      sendJson(res, 201, { artifact });
+      return;
+    }
+
+    const threadAttachmentContentMatch = matchPath(
+      url.pathname,
+      /^\/api\/threads\/([^/]+)\/attachments\/([^/]+)\/content$/,
+    );
+    if (req.method === "GET" && threadAttachmentContentMatch) {
+      const threadId = decodeURIComponent(threadAttachmentContentMatch[1] ?? "");
+      const artifactId = decodeURIComponent(threadAttachmentContentMatch[2] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      const scope = threadScopes.get(threadId);
+      if (!scope) throw new GatewayRequestError("Attachment read requires an enterprise scope.", 400);
+      const artifact = await threadArtifacts.get(threadId, artifactId);
+      if (!artifact) {
+        sendJson(res, 404, { error: "Attachment not found." });
+        return;
+      }
+      threadArtifacts.assertReadableByScope(artifact, scope);
+      const content = await threadArtifacts.readContent(artifact);
+      res.writeHead(200, {
+        "Content-Type": artifact.mimeType,
+        "Content-Length": content.byteLength,
+        "Content-Disposition": `${artifact.kind === "image" ? "inline" : "attachment"}; filename*=UTF-8''${encodeURIComponent(artifact.originalName)}`,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+      });
+      res.end(content);
+      return;
+    }
+
+    const threadAttachmentMatch = matchPath(
+      url.pathname,
+      /^\/api\/threads\/([^/]+)\/attachments\/([^/]+)$/,
+    );
+    if (req.method === "DELETE" && threadAttachmentMatch) {
+      const threadId = decodeURIComponent(threadAttachmentMatch[1] ?? "");
+      const artifactId = decodeURIComponent(threadAttachmentMatch[2] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      const scope = threadScopes.get(threadId);
+      if (!scope) throw new GatewayRequestError("Attachment removal requires an enterprise scope.", 400);
+      const clientRequestId = readSingleHeader(req, "x-commerce-client-request-id") ?? "";
+      const removed = await threadArtifacts.removePending(threadId, artifactId, scope, clientRequestId);
+      sendJson(res, 200, { removed });
       return;
     }
 
@@ -503,9 +645,27 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid user-input answers." });
         return;
       }
+      const answerMessage = formatRequestUserInputAnswerMessage(pending.questions, answers);
+      const answerPersisted = answerMessage
+        ? await injectUserInputAnswer(threadId, answerMessage)
+        : false;
+      const skillApproval = pendingSkillPublishApprovals.get(requestId);
+      if (skillApproval) {
+        await resolveSkillPublishApproval(pending, skillApproval, answers);
+        pendingRequestUserInputs.delete(requestId);
+        pendingSkillPublishApprovals.delete(requestId);
+        sendJson(res, 200, {
+          accepted: true,
+          requestId,
+          published: answers.publish_skill?.answers[0] === "发布",
+          answerMessage,
+          answerPersisted,
+        });
+        return;
+      }
       pendingRequestUserInputs.delete(requestId);
       codex.respondToServerRequest(pending.id, { answers });
-      sendJson(res, 200, { accepted: true, requestId });
+      sendJson(res, 200, { accepted: true, requestId, answerMessage, answerPersisted });
       return;
     }
 
@@ -551,8 +711,9 @@ const server = createServer(async (req, res) => {
       }
       const body = await readJsonBody<Omit<TurnStartInput, "threadId"> & { clientRequestId?: string }>(req);
       const message = typeof body.message === "string" ? body.message.trim() : "";
-      if (!message || message.length > 50_000) {
-        sendJson(res, 400, { error: "Expected a message between 1 and 50000 characters." });
+      const attachmentIds = readAttachmentIds(body.attachmentIds);
+      if ((!message && attachmentIds.length === 0) || message.length > 50_000) {
+        sendJson(res, 400, { error: "Expected a message or at least one attachment." });
         return;
       }
       if (body.workflow !== undefined && !isManagedWorkflowId(body.workflow)) {
@@ -560,6 +721,15 @@ const server = createServer(async (req, res) => {
         return;
       }
       const workflow = isManagedWorkflowId(body.workflow) ? body.workflow : null;
+      const skillName = typeof body.skillName === "string" ? body.skillName.trim() : "";
+      if (body.skillName !== undefined && !CODEX_SKILL_NAME_PATTERN.test(skillName)) {
+        sendJson(res, 400, { error: "Invalid Skill name." });
+        return;
+      }
+      if (workflow && skillName) {
+        sendJson(res, 400, { error: "A managed workflow and an explicit Skill cannot be combined." });
+        return;
+      }
       const threadId = decodeURIComponent(turnMatch[1] ?? "");
       if (!isSafeAgentId(threadId)) {
         sendJson(res, 400, { error: "Invalid thread id." });
@@ -585,10 +755,14 @@ const server = createServer(async (req, res) => {
         await ensureThreadLoaded(threadId, body.model);
         const activeTurnId = await readHarnessActiveTurnId(threadId);
         if (activeTurnId) {
-          if (workflow) {
+          if (workflow || skillName || attachmentIds.length) {
             sendJson(res, 409, {
-              error: "Managed workflow turns cannot be queued behind an active turn.",
-              code: "MANAGED_WORKFLOW_ACTIVE_TURN",
+              error: "Skill and attachment turns cannot be queued behind an active turn.",
+              code: workflow
+                ? "MANAGED_WORKFLOW_ACTIVE_TURN"
+                : skillName
+                  ? "EXPLICIT_SKILL_ACTIVE_TURN"
+                  : "ATTACHMENT_ACTIVE_TURN",
             });
             return;
           }
@@ -610,14 +784,39 @@ const server = createServer(async (req, res) => {
         }
         const requestedModel = body.model ?? threadScopes.get(threadId)?.model ?? config.defaultModel ?? null;
         pendingTurnModels.set(threadId, requestedModel);
+        const scope = threadScopes.get(threadId);
+        if (attachmentIds.length && !scope) {
+          throw new GatewayRequestError("Attachment turns require an enterprise scope.", 400);
+        }
+        const attachments = attachmentIds.length
+          ? await readBoundTurnAttachments(threadId, attachmentIds, scope as RuntimeScope, clientUserMessageId)
+          : [];
+        const turnMessage = formatTurnMessageWithAttachments(message, attachments);
         const managedWorkflowTurn = workflow
-          ? buildManagedWorkflowTurn(config.runtimeRoot, workflow, message)
+          ? buildManagedWorkflowTurn(config.runtimeRoot, workflow, turnMessage)
           : null;
+        const explicitSkillTurn = skillName
+          ? buildExplicitSkillTurn(
+              await resolveExplicitSkill(skillName),
+              turnMessage,
+            )
+          : null;
+        const attachmentInputs = attachments.length
+          ? await threadArtifacts.buildTurnInputs(
+              threadId,
+              attachmentIds,
+              scope as RuntimeScope,
+              clientUserMessageId,
+            )
+          : [];
+        const baseInput = managedWorkflowTurn?.input ??
+          explicitSkillTurn?.input ??
+          [{ type: "text", text: turnMessage, text_elements: [] }];
         const result = await codex
           .request("turn/start", {
             threadId,
             clientUserMessageId,
-            input: managedWorkflowTurn?.input ?? [{ type: "text", text: message, text_elements: [] }],
+            input: [...baseInput, ...attachmentInputs],
             model: body.model,
             effort: body.effort,
             outputSchema: managedWorkflowTurn?.outputSchema,
@@ -627,6 +826,7 @@ const server = createServer(async (req, res) => {
           });
         const startedTurnId = readResultTurnId(result);
         if (startedTurnId) {
+          if (attachmentIds.length) await threadArtifacts.bindToTurn(threadId, attachmentIds, startedTurnId);
           bindTurnModel(threadId, startedTurnId, requestedModel);
           updateThreadRuntimeModel(threadId, requestedModel);
           activeTurnsByThread.set(threadId, startedTurnId);
@@ -796,6 +996,7 @@ const server = createServer(async (req, res) => {
         "GET /api/codex/events",
         "POST /api/threads",
         "GET /api/threads/:threadId",
+        "DELETE /api/threads/:threadId",
         "POST /api/threads/:threadId/compact",
         "POST /api/threads/:threadId/turns",
         "GET /api/threads/:threadId/queue",
@@ -1176,12 +1377,14 @@ function readThreadTitleContext(result: unknown): {
     const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
     for (const item of items) {
       if (item.type === "userMessage" && !userText && Array.isArray(item.content)) {
-        userText = item.content
-          .filter(isRecord)
-          .filter((content) => content.type === "text" && typeof content.text === "string")
-          .map((content) => content.text as string)
-          .join("\n")
-          .trim();
+        userText = stripAttachmentContextBlocks(readVisibleExplicitSkillMessage(
+          item.content
+            .filter(isRecord)
+            .filter((content) => content.type === "text" && typeof content.text === "string")
+            .map((content) => content.text as string)
+            .join("\n")
+            .trim(),
+        ));
       }
       if (
         item.type === "agentMessage" &&
@@ -1646,6 +1849,123 @@ function isNoActiveInterruptError(error: unknown): boolean {
   return error instanceof Error && /no active turn to interrupt/i.test(error.message);
 }
 
+async function permanentlyDeleteThreadTree(threadId: string): Promise<{
+  deleted: true;
+  threadIds: string[];
+  generatedImagesDeleted: number;
+  generatedImageMetadataDeleted: number;
+  artifactDirectoriesDeleted: number;
+}> {
+  return threadOperations.run(threadId, async () => {
+    const scope = threadScopes.get(threadId);
+    if (!scope) throw new Error("Thread deletion requires a bound enterprise scope.");
+    if (!(await readRuntimeAuthorization(scope))) {
+      throw new Error("Enterprise authorization was revoked before thread deletion.");
+    }
+    const threadIds = await listThreadTreeIds(threadId);
+    await interruptThreadTree(threadIds, scope.rootThreadId);
+    await codex.request("thread/delete", { threadId }, 60_000);
+    const imageDeletion = await generatedImages.deleteForThreads(threadIds);
+    let artifactDirectoriesDeleted = 0;
+    for (const deletedThreadId of threadIds) {
+      const artifactDirectory = join(config.codexHome, "thread_artifacts", deletedThreadId);
+      try {
+        await rm(artifactDirectory, { recursive: true, force: false });
+        artifactDirectoriesDeleted += 1;
+      } catch (error) {
+        if (!isNodeNotFoundError(error)) throw error;
+      }
+    }
+    await clearDeletedThreadRuntimeState(threadIds);
+    return {
+      deleted: true,
+      threadIds,
+      generatedImagesDeleted: imageDeletion.files,
+      generatedImageMetadataDeleted: imageDeletion.metadata,
+      artifactDirectoriesDeleted,
+    };
+  });
+}
+
+async function listThreadTreeIds(rootThreadId: string): Promise<string[]> {
+  const ids = new Set([rootThreadId]);
+  for (const archived of [false, true]) {
+    let cursor: string | null = null;
+    do {
+      const result = await codex.request(
+        "thread/list",
+        {
+          cursor,
+          limit: 100,
+          archived,
+          ancestorThreadId: rootThreadId,
+        },
+        30_000,
+      );
+      if (!isRecord(result)) throw new Error("App Server returned an invalid thread tree.");
+      const data = Array.isArray(result.data) ? result.data.filter(isRecord) : [];
+      for (const thread of data) {
+        if (typeof thread.id === "string" && isSafeAgentId(thread.id)) ids.add(thread.id);
+      }
+      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+    } while (cursor);
+  }
+  return [...ids];
+}
+
+async function interruptThreadTree(threadIds: string[], rootThreadId: string): Promise<void> {
+  const targets = [...activeTurnsByThread.entries()].filter(([candidate]) => {
+    const candidateScope = threadScopes.get(candidate);
+    return threadIds.includes(candidate) || candidateScope?.rootThreadId === rootThreadId;
+  });
+  await Promise.all(
+    targets.map(async ([candidateThreadId, turnId]) => {
+      const completion = waitForTurnCompletion(candidateThreadId, turnId, 12_000).catch(() => null);
+      await codex
+        .request("turn/interrupt", { threadId: candidateThreadId, turnId }, 10_000)
+        .catch((error) => {
+          if (!isNoActiveInterruptError(error) && !isNoLongerActiveTurnError(error)) throw error;
+        });
+      await completion;
+    }),
+  );
+}
+
+async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void> {
+  let pendingSteersChanged = false;
+  for (const deletedThreadId of threadIds) {
+    const activeTurnId = activeTurnsByThread.get(deletedThreadId);
+    if (activeTurnId) clearTurnTimeout(activeTurnId);
+    activeTurnsByThread.delete(deletedThreadId);
+    loadedThreadIds.delete(deletedThreadId);
+    turnStartReservations.delete(deletedThreadId);
+    latestContextUsage.delete(deletedThreadId);
+    pendingTurnModels.delete(deletedThreadId);
+    threadScopes.delete(deletedThreadId);
+    managedMcpReadyThreadIds.delete(deletedThreadId);
+    managedMcpThreadReadyPromises.delete(deletedThreadId);
+    const compaction = compactionStates.get(deletedThreadId);
+    if (compaction?.timeout) clearTimeout(compaction.timeout);
+    compactionStates.delete(deletedThreadId);
+    for (const pending of readPendingSteers(deletedThreadId)) {
+      pendingSteersChanged = pendingSteers.delete(pending.clientUserMessageId) || pendingSteersChanged;
+    }
+    for (const [requestId, pending] of pendingRequestUserInputs) {
+      if (pending.threadId !== deletedThreadId) continue;
+      pendingRequestUserInputs.delete(requestId);
+      pendingSkillPublishApprovals.delete(requestId);
+    }
+    for (const key of turnModels.keys()) {
+      if (key.startsWith(`${deletedThreadId}:`)) turnModels.delete(key);
+    }
+  }
+  if (pendingSteersChanged) await persistPendingSteers();
+}
+
+function isNodeNotFoundError(error: unknown): boolean {
+  return isRecord(error) && error.code === "ENOENT";
+}
+
 async function ensureThreadLoaded(threadId: string, model?: string): Promise<void> {
   await ensureCommerceWebMcpReady();
   if (loadedThreadIds.has(threadId)) {
@@ -1974,6 +2294,29 @@ function createProviderUsageEvent(input: {
     responseId: input.responseId,
     providerId: config.provider.id,
     usage,
+    occurredAt: input.occurredAt,
+  };
+}
+
+function createSkillPublishedEvent(input: {
+  scope: RuntimeScope;
+  threadId: string;
+  turnId: string;
+  skillName: string;
+  operation: "created" | "updated" | "unchanged";
+  contentHash: string;
+  occurredAt: string;
+}): SkillPublishedEvent {
+  return {
+    kind: "skill.published",
+    eventId: `skill:${input.scope.tenantId}:${input.scope.workspaceId}:${input.skillName}:${input.contentHash}`,
+    ...input.scope,
+    model: input.scope.model,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    skillName: input.skillName,
+    operation: input.operation,
+    contentHash: input.contentHash,
     occurredAt: input.occurredAt,
   };
 }
@@ -2383,7 +2726,8 @@ function broadcastEvent(event: AppServerEvent): void {
   if (!browserNotification && !browserUserInputRequest) {
     return;
   }
-  const payload = `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
+  const browserEvent = sanitizeBrowserAppServerEvent(event);
+  const payload = `event: ${browserEvent.type}\ndata: ${JSON.stringify(browserEvent)}\n\n`;
   const threadId = getEventThreadId(event);
   for (const [client, filter] of sseClients) {
     if (filter.threadId && filter.threadId !== threadId) {
@@ -2436,6 +2780,23 @@ async function readJsonBody<T>(req: IncomingMessage): Promise<T> {
   } catch {
     throw new GatewayRequestError("Request body must be valid JSON.", 400);
   }
+}
+
+async function readRawBody(req: IncomingMessage, maximumBytes: number): Promise<Buffer> {
+  const contentLength = Number.parseInt(req.headers["content-length"] || "0", 10);
+  if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
+    throw new GatewayRequestError("Attachment is too large.", 413);
+  }
+  const chunks: Buffer[] = [];
+  let receivedBytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    receivedBytes += buffer.byteLength;
+    if (receivedBytes > maximumBytes) throw new GatewayRequestError("Attachment is too large.", 413);
+    chunks.push(buffer);
+  }
+  if (!chunks.length) throw new GatewayRequestError("Attachment body is empty.", 400);
+  return Buffer.concat(chunks);
 }
 
 function matchPath(pathname: string, pattern: RegExp): RegExpMatchArray | null {
@@ -2553,6 +2914,52 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
     });
     return;
   }
+  if (namespace === "commerce_skill" && tool === "publish") {
+    const draft = validateManagedSkillDraft(isRecord(event.params.arguments) ? event.params.arguments : {});
+    const requestId = `skill_${callId}`;
+    if (pendingRequestUserInputs.has(requestId)) {
+      throw new Error("This Skill publish request is already waiting for approval.");
+    }
+    const pending: PendingRequestUserInput = {
+      id: event.id,
+      requestId,
+      threadId,
+      turnId,
+      itemId: callId,
+      questions: [
+        {
+          id: "publish_skill",
+          header: "发布技能",
+          question: `将“${draft.displayName}”发布到当前 Commerce Pilot 技能目录？`,
+          isOther: false,
+          isSecret: false,
+          options: [
+            {
+              label: "发布",
+              description: "通过应用校验后创建或更新这个纯指令技能，并立即加入 Agent 技能目录。",
+            },
+            {
+              label: "取消",
+              description: "不写入任何技能文件，当前工具调用会安全结束。",
+            },
+          ],
+        },
+      ],
+      isBlocking: true,
+      receivedAt: new Date().toISOString(),
+      action: "skill.publish",
+    };
+    pendingRequestUserInputs.set(requestId, pending);
+    pendingSkillPublishApprovals.set(requestId, { requestId, draft, scope });
+    broadcastEvent({
+      type: "server_request",
+      id: requestId,
+      method: "tool/requestUserInput",
+      params: serializePendingRequestUserInput(pending),
+      at: pending.receivedAt,
+    });
+    return;
+  }
   if (namespace !== "commerce_image" || tool !== "generate") {
     throw new Error(`Host tool ${namespace ?? "unknown"}.${tool || "unknown"} is not registered.`);
   }
@@ -2642,6 +3049,116 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
   });
 }
 
+async function resolveSkillPublishApproval(
+  pending: PendingRequestUserInput,
+  approval: PendingSkillPublishApproval,
+  answers: Record<string, { answers: string[] }>,
+): Promise<void> {
+  const selection = answers.publish_skill?.answers[0];
+  if (selection !== "发布") {
+    codex.respondToServerRequest(pending.id, {
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({
+            status: "cancelled",
+            instruction: "The user cancelled Skill publication. Do not claim that the Skill was created.",
+          }),
+        },
+      ],
+    });
+    return;
+  }
+  const activeScope = threadScopes.get(pending.threadId);
+  if (!activeScope || runtimeRootKey(activeScope) !== runtimeRootKey(approval.scope) || activeScope.userId !== approval.scope.userId) {
+    throw new Error("Skill publish approval no longer belongs to the active Commerce Pilot principal.");
+  }
+  if (!isEventPipelineWritable() || !(await readRuntimeAuthorization(activeScope))) {
+    throw new Error("Commerce Pilot authorization changed before Skill publication.");
+  }
+  const published = await managedSkills.publish(approval.draft, activeScope);
+  const inventory = await codex.request(
+    "skills/list",
+    { cwds: [config.runtimeRoot], forceReload: true },
+    30_000,
+  );
+  if (!skillCatalogContains(inventory, published.name)) {
+    throw new Error("App Server did not discover the published Skill during readback.");
+  }
+  await enqueueAgentEvent(
+    createSkillPublishedEvent({
+      scope: activeScope,
+      threadId: pending.threadId,
+      turnId: pending.turnId,
+      skillName: published.name,
+      operation: published.operation,
+      contentHash: published.contentHash,
+      occurredAt: new Date().toISOString(),
+    }),
+  );
+  codex.respondToServerRequest(pending.id, {
+    success: true,
+    contentItems: [
+      {
+        type: "inputText",
+        text: JSON.stringify({
+          status: "completed",
+          name: published.name,
+          displayName: published.displayName,
+          operation: published.operation,
+          instruction: "The Skill was validated, published, and discovered by App Server. Report this readback to the user.",
+        }),
+      },
+    ],
+  });
+  broadcastEvent({
+    type: "notification",
+    method: "commerce/skillPublish/completed",
+    params: {
+      threadId: pending.threadId,
+      turnId: pending.turnId,
+      callId: pending.itemId,
+      name: published.name,
+      displayName: published.displayName,
+      operation: published.operation,
+    },
+    at: new Date().toISOString(),
+  });
+}
+
+async function injectUserInputAnswer(threadId: string, answerMessage: string): Promise<boolean> {
+  try {
+    await codex.request(
+      "thread/inject_items",
+      {
+        threadId,
+        items: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: answerMessage }],
+          },
+        ],
+      },
+      10_000,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function skillCatalogContains(value: unknown, name: string): boolean {
+  if (!isRecord(value) || !Array.isArray(value.data)) return false;
+  const entry = value.data.find((item) => isRecord(item) && item.cwd === config.runtimeRoot);
+  return Boolean(
+    isRecord(entry) &&
+      Array.isArray(entry.skills) &&
+      entry.skills.some((skill) => isRecord(skill) && skill.name === name && skill.enabled !== false),
+  );
+}
+
 function createCommerceImageToolSpec(): Record<string, unknown> {
   return {
     type: "namespace",
@@ -2678,8 +3195,52 @@ function createCommerceImageToolSpec(): Record<string, unknown> {
   };
 }
 
+function createCommerceSkillToolSpec(): Record<string, unknown> {
+  return {
+    type: "namespace",
+    name: "commerce_skill",
+    description: "Create or update an instruction-only Commerce Pilot Skill through application validation and explicit user approval.",
+    tools: [
+      {
+        type: "function",
+        name: "publish",
+        description: "Publish a validated instruction-only Skill. This call pauses for explicit user approval and never accepts a filesystem path or executable scripts.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: {
+              type: "string",
+              pattern: "^commerce-[a-z0-9]+(?:-[a-z0-9]+)*$",
+              description: "Stable unreserved commerce-* skill slug.",
+            },
+            displayName: {
+              type: "string",
+              description: "Short user-facing Chinese or English skill name.",
+            },
+            description: {
+              type: "string",
+              description: "Precise trigger scope including when the Skill should and should not run.",
+            },
+            shortDescription: {
+              type: "string",
+              description: "Concise directory description.",
+            },
+            instructions: {
+              type: "string",
+              description: "Complete instruction-only Markdown body without YAML frontmatter, paths, scripts, or secrets.",
+            },
+          },
+          required: ["name", "displayName", "description", "shortDescription", "instructions"],
+        },
+      },
+    ],
+  };
+}
+
 function createCommerceDynamicToolSpecs(): Record<string, unknown>[] {
-  return [createCommerceImageToolSpec()];
+  return [createCommerceImageToolSpec(), createCommerceSkillToolSpec()];
 }
 
 function createRuntimeRequestConfig(): Record<string, unknown> {
@@ -2699,6 +3260,10 @@ function createRuntimeDeveloperInstructions(): string {
     "Use it when the user asks to generate an image. Do not claim image generation is unavailable while this tool is present.",
     "A completed tool result contains the authoritative publicUrl. Do not retry a completed generation because it omits inline image bytes.",
     "Use quality=low only for explicit drafts or probes; otherwise use quality=auto.",
+    "Commerce Pilot provides the host tool `commerce_skill.publish` for creating or updating instruction-only Skills through an application-owned validator and explicit user approval.",
+    "When the user asks to create or update a Skill, use the bundled `skill-creator` Skill, gather the required purpose and trigger boundaries with request_user_input when needed, then call commerce_skill.publish with the complete draft.",
+    "Never claim that this environment can only produce a SKILL.md draft while commerce_skill.publish is present. Never request a host path, shell access, scripts, secrets, or filesystem permission for Skill creation.",
+    "The publish tool is authoritative: only report success after its result confirms that App Server discovered the Skill.",
     "Commerce Pilot provides MCP server `commerce_web` with tool `search` for live web research through the configured provider; its model-facing identifier may appear as `mcp__commerce_web__search`.",
     "The current tool catalog is authoritative over older conversation messages that claimed Web Search was missing.",
     "Use that MCP Web Search tool whenever the user explicitly asks to search the web or when current external information is required. Do not look for a dynamic tool named `commerce_web.search`. Cite returned source URLs and never claim Web Search is unavailable while the MCP tool is present.",
@@ -2752,6 +3317,67 @@ function readBrowserSkillInventory(value: unknown): {
         .filter((skill) => skill.name)
     : [];
   return { skills, errors };
+}
+
+async function resolveExplicitSkill(skillName: string) {
+  const inventory = await codex.request(
+    "skills/list",
+    { cwds: [config.runtimeRoot], forceReload: true },
+    30_000,
+  );
+  const skill = resolveExplicitSkillFromCatalog(inventory, config.runtimeRoot, skillName);
+  if (!skill) {
+    throw new GatewayRequestError("The selected Skill is unavailable or disabled.", 409);
+  }
+  return skill;
+}
+
+function readAttachmentIds(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_THREAD_ATTACHMENTS_PER_TURN) {
+    throw new GatewayRequestError("Invalid attachment id list.", 400);
+  }
+  const ids = value.filter((item): item is string => typeof item === "string" && isUuid(item));
+  if (ids.length !== value.length || new Set(ids).size !== ids.length) {
+    throw new GatewayRequestError("Invalid or duplicate attachment id.", 400);
+  }
+  return ids;
+}
+
+async function readBoundTurnAttachments(
+  threadId: string,
+  attachmentIds: string[],
+  scope: RuntimeScope,
+  clientRequestId: string,
+): Promise<ThreadArtifact[]> {
+  const attachments: ThreadArtifact[] = [];
+  for (const attachmentId of attachmentIds) {
+    const artifact = await threadArtifacts.get(threadId, attachmentId);
+    if (!artifact || artifact.clientRequestId !== clientRequestId) {
+      throw new GatewayRequestError("Attachment is unavailable for this request.", 409);
+    }
+    try {
+      threadArtifacts.assertReadableByScope(artifact, scope);
+    } catch {
+      throw new GatewayRequestError("Attachment ownership does not match this thread.", 404);
+    }
+    attachments.push(artifact);
+  }
+  return attachments;
+}
+
+function formatTurnMessageWithAttachments(message: string, attachments: ThreadArtifact[]): string {
+  if (!attachments.length) return message;
+  const names = attachments.map((attachment) => attachment.originalName.replace(/[\]\n\r]/g, " "));
+  return [`[附件：${names.join("、")}]`, message].filter(Boolean).join("\n");
+}
+
+function decodeHeaderComponent(value: string, label: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    throw new GatewayRequestError(`Invalid ${label}.`, 400);
+  }
 }
 
 function formatSkillDisplayName(name: string): string {

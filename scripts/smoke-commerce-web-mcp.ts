@@ -26,77 +26,87 @@ try {
 const gatewayBaseUrl = process.env.COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8787";
 const gatewayToken = process.env.COMMERCE_GATEWAY_INTERNAL_TOKEN;
 const model = process.env.CODEX_DEFAULT_MODEL ?? "gpt-5.6-sol";
+const smokeTenantId = process.env.COMMERCE_SMOKE_TENANT_ID ?? "00000000-0000-4000-8000-000000000101";
+const smokeWorkspaceId = process.env.COMMERCE_SMOKE_WORKSPACE_ID ?? "00000000-0000-4000-8000-000000000102";
+const smokeUserId = process.env.COMMERCE_SMOKE_USER_ID ?? "commerce-web-smoke";
 const health = await gatewayJson("/health");
 assert.equal(readPath(health, ["managedMcp", "state"]), "ready", "Gateway MCP readiness is not ready.");
 const managedTools = readArrayPath(health, ["managedMcp", "tools"]);
 assert.ok(managedTools.includes("search"), "Gateway App Server did not discover commerce_web.search.");
 
-const created = await gatewayJson("/api/threads", {
-  method: "POST",
-  body: JSON.stringify({ model, title: "commerce-web-harness-smoke" }),
-});
-const threadId = readPath(created, ["result", "thread", "id"]);
-assert.ok(threadId, "Gateway did not return a thread id.");
+let threadId: string | null = null;
+try {
+  const created = await gatewayJson("/api/threads", {
+    method: "POST",
+    body: JSON.stringify({ model, title: "commerce-web-harness-smoke" }),
+  });
+  threadId = readPath(created, ["result", "thread", "id"]);
+  assert.ok(threadId, "Gateway did not return a thread id.");
 
-const started = await gatewayJson(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
-  method: "POST",
-  body: JSON.stringify({
-    message:
-      "必须调用 commerce_web MCP 的 search 工具搜索 OpenAI Codex MCP 官方配置文档，并返回至少一个来源 URL。不要仅凭记忆回答。",
-    model,
-    effort: "medium",
-  }),
-});
-const turnId = readPath(started, ["result", "turn", "id"]);
-assert.ok(turnId, "Gateway did not return a turn id.");
+  const started = await gatewayJson(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
+    method: "POST",
+    body: JSON.stringify({
+      message:
+        "必须调用 commerce_web MCP 的 search 工具搜索 OpenAI Codex MCP 官方配置文档，并返回至少一个来源 URL。不要仅凭记忆回答。",
+      model,
+      effort: "medium",
+    }),
+  });
+  const turnId = readPath(started, ["result", "turn", "id"]);
+  assert.ok(turnId, "Gateway did not return a turn id.");
 
-const deadline = Date.now() + 210_000;
-let turn: Record<string, unknown> | null = null;
-while (Date.now() < deadline) {
-  const history = await gatewayJson(`/api/threads/${encodeURIComponent(threadId)}`);
-  turn =
-    readArrayPath(history, ["result", "thread", "turns"])
-      .filter(isRecord)
-      .find((candidate) => candidate.id === turnId) ?? null;
-  if (turn && turn.status !== "inProgress" && turn.status !== "running") {
-    break;
+  const deadline = Date.now() + 210_000;
+  let turn: Record<string, unknown> | null = null;
+  while (Date.now() < deadline) {
+    const history = await gatewayJson(`/api/threads/${encodeURIComponent(threadId)}`);
+    turn =
+      readArrayPath(history, ["result", "thread", "turns"])
+        .filter(isRecord)
+        .find((candidate) => candidate.id === turnId) ?? null;
+    if (turn && turn.status !== "inProgress" && turn.status !== "running") {
+      break;
+    }
+    await delay(1_000);
   }
-  await delay(1_000);
+
+  assert.ok(turn, "Harness Web Search turn was not found.");
+  assert.equal(turn.status, "completed", "Harness Web Search turn did not complete.");
+  const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+  const mcpCalls = items.filter((item) => item.type === "mcpToolCall");
+  assert.ok(
+    mcpCalls.some(
+      (item) => item.server === "commerce_web" && item.tool === "search" && item.status === "completed",
+    ),
+    "Harness never completed commerce_web.search.",
+  );
+  const finalText =
+    items
+      .filter((item) => item.type === "agentMessage" && typeof item.text === "string")
+      .map((item) => item.text as string)
+      .at(-1) ?? "";
+  assert.match(finalText, /https?:\/\//, "Harness Web Search final answer contains no source URL.");
+  assert.doesNotMatch(finalText, /(没有|无|未).{0,8}(Web Search|网页搜索|搜索工具)/i);
+
+  console.log(
+    JSON.stringify(
+      {
+        ok: true,
+        tool: "commerce_web.search",
+        gatewayMcpState: readPath(health, ["managedMcp", "state"]),
+        threadId,
+        turnId,
+        callStatuses: mcpCalls.map((item) => item.status),
+        hasSource: true,
+      },
+      null,
+      2,
+    ),
+  );
+} finally {
+  if (threadId) {
+    await gatewayJson(`/api/threads/${encodeURIComponent(threadId)}`, { method: "DELETE" }).catch(() => undefined);
+  }
 }
-
-assert.ok(turn, "Harness Web Search turn was not found.");
-assert.equal(turn.status, "completed", "Harness Web Search turn did not complete.");
-const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
-const mcpCalls = items.filter((item) => item.type === "mcpToolCall");
-assert.ok(
-  mcpCalls.some(
-    (item) => item.server === "commerce_web" && item.tool === "search" && item.status === "completed",
-  ),
-  "Harness never completed commerce_web.search.",
-);
-const finalText =
-  items
-    .filter((item) => item.type === "agentMessage" && typeof item.text === "string")
-    .map((item) => item.text as string)
-    .at(-1) ?? "";
-assert.match(finalText, /https?:\/\//, "Harness Web Search final answer contains no source URL.");
-assert.doesNotMatch(finalText, /(没有|无|未).{0,8}(Web Search|网页搜索|搜索工具)/i);
-
-console.log(
-  JSON.stringify(
-    {
-      ok: true,
-      tool: "commerce_web.search",
-      gatewayMcpState: readPath(health, ["managedMcp", "state"]),
-      threadId,
-      turnId,
-      callStatuses: mcpCalls.map((item) => item.status),
-      hasSource: true,
-    },
-    null,
-    2,
-  ),
-);
 
 async function gatewayJson(path: string, init?: RequestInit): Promise<Record<string, unknown>> {
   const headers = new Headers(init?.headers);
@@ -106,6 +116,9 @@ async function gatewayJson(path: string, init?: RequestInit): Promise<Record<str
   if (gatewayToken) {
     headers.set("X-Commerce-Gateway-Token", gatewayToken);
   }
+  headers.set("X-Commerce-Tenant-Id", smokeTenantId);
+  headers.set("X-Commerce-Workspace-Id", smokeWorkspaceId);
+  headers.set("X-Commerce-User-Id", smokeUserId);
   const response = await fetch(new URL(path, gatewayBaseUrl), {
     ...init,
     headers,

@@ -20,6 +20,14 @@ test("maps the copywriting workflow to an application-owned skill and fixed sche
   });
   assert.ok(turn.outputSchema);
   assert.equal(turn.outputSchema.additionalProperties, false);
+  assert.deepEqual(turn.outputSchema.required, [
+    "responseType",
+    "title",
+    "body",
+    "callToAction",
+    "complianceNotes",
+    "message",
+  ]);
   assert.match(String(turn.input[0]?.text), /^\$commerce-copywriting\n/);
 });
 

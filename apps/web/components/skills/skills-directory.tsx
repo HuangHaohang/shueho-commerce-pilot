@@ -11,46 +11,26 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 
+import { getSkills, sortSkillInventory, type SkillInventoryItem } from "@/lib/agent/skills";
 import { cn } from "@/lib/utils";
 
-type SkillInventoryItem = {
-  name: string;
-  description: string;
-  enabled: boolean;
-  scope: string;
-  displayName: string;
-  shortDescription: string;
-  dependencyCount: number;
-  creator: boolean;
-  applicationManaged: boolean;
-};
-
-type SkillInventoryResponse = {
-  skills: SkillInventoryItem[];
-  errors: string[];
-};
-
-export function SkillsDirectory() {
+export function SkillsDirectory({ onUseSkill }: { onUseSkill: (skill: SkillInventoryItem) => void }) {
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const skillsQuery = useQuery({
     queryKey: ["codex-skills"],
     queryFn: getSkills,
     retry: 1,
-    staleTime: 10_000,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
   const skills = useMemo(
-    () =>
-      [...(skillsQuery.data?.skills ?? [])].sort((left, right) => {
-        if (left.creator !== right.creator) return left.creator ? -1 : 1;
-        if (left.applicationManaged !== right.applicationManaged) return left.applicationManaged ? -1 : 1;
-        return left.displayName.localeCompare(right.displayName, "zh-CN");
-      }),
+    () => sortSkillInventory(skillsQuery.data?.skills ?? []),
     [skillsQuery.data?.skills],
   );
   const selected = skills.find((skill) => skill.name === selectedName) ?? null;
 
   if (selected) {
-    return <SkillDetail skill={selected} onBack={() => setSelectedName(null)} />;
+    return <SkillDetail skill={selected} onBack={() => setSelectedName(null)} onUse={() => onUseSkill(selected)} />;
   }
 
   return (
@@ -121,7 +101,7 @@ export function SkillsDirectory() {
   );
 }
 
-function SkillDetail({ skill, onBack }: { skill: SkillInventoryItem; onBack: () => void }) {
+function SkillDetail({ skill, onBack, onUse }: { skill: SkillInventoryItem; onBack: () => void; onUse: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--cp-bg)] pt-14 md:pt-0">
       <div className="hidden h-[var(--cp-topbar-height)] shrink-0 items-center px-6 md:flex">
@@ -144,12 +124,20 @@ function SkillDetail({ skill, onBack }: { skill: SkillInventoryItem; onBack: () 
             <ArrowLeft className="size-4" strokeWidth={1.8} />
             技能
           </button>
-          <header className="flex items-start gap-4">
+          <header className="flex flex-col items-start gap-4 sm:flex-row">
             <SkillIcon skill={skill} large />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <h1 className="m-0 text-[28px] font-semibold leading-tight">{skill.displayName}</h1>
               <p className="mb-0 mt-2 text-sm leading-6 text-[var(--cp-text-muted)]">{skill.description}</p>
             </div>
+            <button
+              type="button"
+              className="inline-flex h-10 shrink-0 items-center justify-center rounded-full bg-[var(--cp-text)] px-5 text-sm font-medium text-[var(--cp-text-inverse)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!skill.enabled}
+              onClick={onUse}
+            >
+              立即使用
+            </button>
           </header>
           <dl className="mb-0 mt-10 border-y border-[var(--cp-border)]">
             <SkillInfo label="标识" value={skill.name} />
@@ -215,15 +203,6 @@ function SkillsSkeleton() {
       ))}
     </div>
   );
-}
-
-async function getSkills(): Promise<SkillInventoryResponse> {
-  const response = await fetch("/api/skills", { cache: "no-store" });
-  const payload = (await response.json().catch(() => null)) as SkillInventoryResponse | { error?: string } | null;
-  if (!response.ok || !payload || !("skills" in payload)) {
-    throw new Error(payload && "error" in payload ? payload.error : "Skills unavailable.");
-  }
-  return payload;
 }
 
 function scopeLabel(scope: string): string {

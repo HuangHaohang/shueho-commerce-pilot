@@ -37,6 +37,16 @@ export type CommercePluginInventoryItem = {
   lockedReason: string;
 };
 
+export type PluginInventoryResponse = {
+  plugins: CommercePluginInventoryItem[];
+  policy: {
+    installMode: "application-managed";
+    arbitraryPackages: false;
+    hostExecution: false;
+    runtimeFoundation: "codex-app-server";
+  };
+};
+
 export type PluginRuntimeSignals = {
   gatewayReady: boolean;
   providerConfigured: boolean;
@@ -153,4 +163,13 @@ export function filterCommercePlugins(
 
     return searchableText.includes(normalizedQuery);
   });
+}
+
+export async function getPluginInventory(): Promise<PluginInventoryResponse> {
+  const response = await fetch("/api/plugins", { cache: "no-store" });
+  const payload = (await response.json().catch(() => null)) as PluginInventoryResponse | { error?: string } | null;
+  if (!response.ok || !payload || !("plugins" in payload)) {
+    throw new Error(payload && "error" in payload ? payload.error : "Plugin inventory unavailable.");
+  }
+  return payload;
 }

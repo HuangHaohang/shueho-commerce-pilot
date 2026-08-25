@@ -73,6 +73,43 @@ try {
        VALUES ($1, $2, $2, $3, $4, 'RLS verification')`,
       [`thread-${suffix}`, userA, tenantA, workspaceA1],
     );
+    await scoped.query(
+      `INSERT INTO commerce_agent_user_input_answer
+        (tenant_id, workspace_id, user_id, thread_id, turn_id, request_id, item_id, answer_message)
+       VALUES ($1, $2, $3, $4, 'turn-12345678', 'request-1', 'item-1', '我的选择：\n发布渠道：小红书')`,
+      [tenantA, workspaceA1, userA, `thread-${suffix}`],
+    );
+    assert(
+      await count(scoped, `SELECT count(*)::text AS count FROM commerce_agent_user_input_answer`) === 1,
+      "thread owner could not read the user-input answer index",
+    );
+    const deletionJobId = randomUUID();
+    await scoped.query(
+      `INSERT INTO commerce_thread_deletion_job
+        (id, tenant_id, workspace_id, user_id, total_items)
+       VALUES ($1, $2, $3, $4, 1)`,
+      [deletionJobId, tenantA, workspaceA1, userA],
+    );
+    await scoped.query(
+      `INSERT INTO commerce_thread_deletion_item
+        (job_id, tenant_id, workspace_id, user_id, thread_id, ordinal)
+       VALUES ($1, $2, $3, $4, $5, 0)`,
+      [deletionJobId, tenantA, workspaceA1, userA, `thread-${suffix}`],
+    );
+    assert(
+      await count(scoped, `SELECT count(*)::text AS count FROM commerce_thread_deletion_job`) === 1,
+      "thread owner could not read the deletion job",
+    );
+    await scoped.query("SELECT set_config('commerce.user_id', $1, true)", [userB]);
+    assert(
+      await count(scoped, `SELECT count(*)::text AS count FROM commerce_agent_user_input_answer`) === 0,
+      "another user's user-input answer was visible",
+    );
+    assert(
+      await count(scoped, `SELECT count(*)::text AS count FROM commerce_thread_deletion_job`) === 0,
+      "another user's deletion job was visible",
+    );
+    await scoped.query("SELECT set_config('commerce.user_id', $1, true)", [userA]);
     await scoped.query("SAVEPOINT cross_tenant_write");
     let crossTenantWriteRejected = false;
     try {
@@ -105,7 +142,7 @@ try {
     scoped.release();
   }
 
-  console.log(JSON.stringify({ ok: true, applicationRole: "non-superuser/non-BYPASSRLS", checks: 9 }));
+  console.log(JSON.stringify({ ok: true, applicationRole: "non-superuser/non-BYPASSRLS", checks: 13 }));
 } finally {
   await owner.query(`DELETE FROM commerce_organization WHERE id = ANY($1::uuid[])`, [[organizationA, organizationB]]).catch(() => undefined);
   await owner.query(`DELETE FROM "user" WHERE id = ANY($1::text[])`, [[userA, userB]]).catch(() => undefined);

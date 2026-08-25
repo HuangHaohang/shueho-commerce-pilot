@@ -1,11 +1,17 @@
 import { NextResponse } from "next/server";
 
+import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "@/lib/agent/skill-invocation";
+
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
 import {
   deleteAgentThreadRecord,
   getAgentThreadForUser,
   updateAgentThreadStatus,
 } from "@/lib/agent/thread-ownership";
+import {
+  listAgentUserInputAnswers,
+  type AgentUserInputAnswer,
+} from "@/lib/agent/user-input-answers";
 import { readWebSourcesFromToolItem } from "@/lib/agent/web-sources";
 import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
 
@@ -40,7 +46,8 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
         { status },
       );
     }
-    const normalized = normalizeThreadHistory(payload, record);
+    const userInputAnswers = await listAgentUserInputAnswers(enterpriseContext, threadId);
+    const normalized = normalizeThreadHistory(payload, record, userInputAnswers);
     await updateAgentThreadStatus(
       threadId,
       enterpriseContext,
@@ -62,7 +69,11 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
   }
 }
 
-function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaited<ReturnType<typeof getAgentThreadForUser>>) {
+function normalizeThreadHistory(
+  payload: Record<string, unknown>,
+  record: Awaited<ReturnType<typeof getAgentThreadForUser>>,
+  userInputAnswers: AgentUserInputAnswer[],
+) {
   const result = isRecord(payload.result) ? payload.result : null;
   const thread = result && isRecord(result.thread) ? result.thread : null;
   const turns = thread && Array.isArray(thread.turns) ? thread.turns.filter(isRecord) : [];
@@ -71,6 +82,11 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
         .filter(isRecord)
         .sort((left, right) => String(left.createdAt ?? "").localeCompare(String(right.createdAt ?? "")))
     : [];
+  const threadAttachments = Array.isArray(payload.attachments)
+    ? payload.attachments.map((value) => readThreadAttachment(record?.threadId ?? "", value)).filter(
+        (attachment): attachment is NonNullable<ReturnType<typeof readThreadAttachment>> => Boolean(attachment),
+      )
+    : [];
   const messages: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
   const images: Array<Record<string, unknown>> = [];
@@ -78,33 +94,66 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
 
   for (const turn of turns) {
     const turnId = typeof turn.id === "string" ? turn.id : null;
+    const turnAttachments = threadAttachments.filter((attachment) => attachment.turnId === turnId);
     const turnRunning = turn.status === "inProgress" || turn.status === "running";
     const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+    const turnAnswers = userInputAnswers.filter((answer) => answer.turnId === turnId);
+    const persistedUserTexts = new Set(
+      items
+        .filter((item) => item.type === "userMessage" && Array.isArray(item.content))
+        .flatMap((item) => (item.content as unknown[]).filter(isRecord))
+        .filter((entry) => entry.type === "text" && typeof entry.text === "string")
+        .map((entry) => (entry.text as string).trim()),
+    );
+    let answersInserted = false;
+    const appendAnswers = () => {
+      if (answersInserted) return;
+      answersInserted = true;
+      for (const answer of turnAnswers) {
+        if (persistedUserTexts.has(answer.answerMessage.trim())) continue;
+        messages.push({
+          id: `user-input-answer-${answer.requestId}`,
+          sequence: ++sequence,
+          turnId,
+          role: "user",
+          content: answer.answerMessage,
+          delivery: "committed",
+          variant: "default",
+          status: "completed",
+        });
+      }
+    };
     let userMessageIndex = 0;
     for (const item of items) {
       const id = typeof item.id === "string" ? item.id : `history-${++sequence}`;
       if (item.type === "userMessage") {
         const content = Array.isArray(item.content) ? item.content.filter(isRecord) : [];
-        const text = content
+        const rawText = content
           .filter((entry) => entry.type === "text" && typeof entry.text === "string")
           .map((entry) => entry.text as string)
           .join("\n")
           .trim();
-        if (text) {
+        const explicitSkillMessage = readExplicitSkillMessage(rawText);
+        const text = readVisibleAttachmentMessage(explicitSkillMessage.content);
+        if (text || turnAttachments.length) {
           const clientId = typeof item.clientId === "string" ? item.clientId : null;
+          const variant = userMessageIndex++ === 0 ? "default" : "steer";
           messages.push({
             id,
             sequence: ++sequence,
             turnId,
             role: "user",
             content: text,
+            skillName: explicitSkillMessage.skillName,
+            attachments: variant === "default" ? turnAttachments.map(({ turnId: _turnId, ...attachment }) => attachment) : [],
             clientId,
             delivery: "committed",
-            variant: userMessageIndex++ === 0 ? "default" : "steer",
+            variant,
             status: "completed",
           });
         }
       } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
+        if (item.phase !== "commentary") appendAnswers();
         messages.push({
           id,
           sequence: ++sequence,
@@ -121,6 +170,7 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
         }
       }
     }
+    appendAnswers();
     for (const artifact of generatedImages) {
       const filename = typeof artifact.filename === "string" ? artifact.filename : "";
       if (
@@ -161,6 +211,26 @@ function normalizeThreadHistory(payload: Record<string, unknown>, record: Awaite
     messages,
     activities,
     images,
+  };
+}
+
+function readThreadAttachment(threadId: string, value: unknown) {
+  if (!threadId || !isRecord(value)) return null;
+  const id = typeof value.id === "string" ? value.id : "";
+  const name = typeof value.originalName === "string" ? value.originalName : "";
+  const mimeType = typeof value.mimeType === "string" ? value.mimeType : "";
+  const size = typeof value.size === "number" ? value.size : -1;
+  const kind = value.kind === "image" || value.kind === "document" ? value.kind : null;
+  const turnId = typeof value.turnId === "string" ? value.turnId : null;
+  if (!id || !name || !mimeType || size < 0 || !kind || !turnId) return null;
+  return {
+    id,
+    name,
+    mimeType,
+    size,
+    kind,
+    turnId,
+    url: `/api/agent/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(id)}`,
   };
 }
 

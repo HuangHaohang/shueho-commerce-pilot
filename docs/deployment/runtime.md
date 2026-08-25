@@ -108,6 +108,14 @@ Migration/provisioning jobs additionally load `MIGRATION_DATABASE_URL` from a jo
 
 Secrets must come from a secret manager or protected runtime injection. Do not put them in images, repositories, shell history, browser variables, logs, health payloads, or generated Codex TOML.
 
+## Background Workers
+
+Run one `npm run jobs:thread-deletion` worker beside each tenant-dedicated Gateway. The worker uses the least-privilege application `DATABASE_URL`, the internal `COMMERCE_GATEWAY_URL` and token, and the same optional `COMMERCE_RUNTIME_TENANT_ID` pin. It must not receive `MIGRATION_DATABASE_URL`.
+
+The worker claims durable deletion jobs with `FOR UPDATE SKIP LOCKED`, invokes Gateway `thread/delete`, waits for application artifact cleanup, and only then removes the Commerce Pilot thread index and marks the item deleted. Monitor queued/running age, partial/failed jobs, worker liveness, and `$CODEX_HOME/thread_artifacts` storage. A web process is not a replacement for this worker; deleting in a detached Next.js callback is not durable.
+
+Uploaded photos and documents are stored below `$CODEX_HOME/thread_artifacts/<threadId>/<artifactId>`. The Gateway image/document parsers are application dependencies and must be installed from the production lockfile. App Server and Gateway need the same dedicated tenant artifact volume; the web process does not need direct filesystem access. Enforce the 5 MB total-per-Turn limit at the edge/BFF and Gateway, and keep the multipart overhead allowance restricted to the authenticated attachment route. Backups and retention must include the artifact volume, while permanent thread deletion removes its complete thread directory.
+
 ## Provider Configuration
 
 Do not assume a developer's `~/.codex/config.toml` exists on the server. For deployment, render or mount provider config into:

@@ -1,59 +1,8 @@
-import { z } from "zod";
+import { withEnterpriseDatabaseContext } from "./database-context";
+import type { EnterpriseScope } from "./types";
+import type { SkillPublishedEvent, TurnCompletedEvent, UsageEvent } from "./agent-event-schema";
 
-import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context";
-import type { EnterpriseScope } from "@/lib/enterprise/types";
-
-const idSchema = z.string().min(8).max(128).regex(/^[A-Za-z0-9_-]+$/);
-const uuidSchema = z.string().uuid();
-const tokenSchema = z.number().int().nonnegative().safe();
-
-const scopeSchema = z.object({
-  tenantId: uuidSchema,
-  workspaceId: uuidSchema,
-  userId: z.string().min(1).max(255),
-  rootThreadId: idSchema,
-  threadId: idSchema,
-  parentThreadId: idSchema.nullable().optional(),
-  turnId: idSchema,
-  occurredAt: z.string().datetime(),
-});
-
-export const usageEventSchema = scopeSchema.extend({
-  kind: z.literal("usage.response.completed"),
-  source: z
-    .enum(["codex_harness", "commerce_web_mcp", "commerce_web_tool", "commerce_image_tool", "title_generation"])
-    .default("codex_harness"),
-  eventId: z.string().min(1).max(512),
-  responseId: z.string().min(1).max(255),
-  providerId: z.string().min(1).max(128),
-  requestedModel: z.string().min(1).max(128).nullable().optional(),
-  usageStatus: z.enum(["reported", "missing"]).default("reported"),
-  model: z.string().min(1).max(128).nullable().optional(),
-  usage: z.object({
-    totalTokens: tokenSchema,
-    inputTokens: tokenSchema,
-    cachedInputTokens: tokenSchema,
-    cacheWriteInputTokens: tokenSchema,
-    outputTokens: tokenSchema,
-    reasoningOutputTokens: tokenSchema,
-  }),
-});
-
-export const turnCompletedEventSchema = scopeSchema.extend({
-  kind: z.literal("turn.completed"),
-  eventId: z.string().min(1).max(512),
-  status: z.enum(["completed", "interrupted", "failed"]),
-  durationMs: z.number().int().nonnegative().nullable().optional(),
-  requestId: z.string().uuid().optional(),
-});
-
-export const internalAgentEventSchema = z.discriminatedUnion("kind", [
-  usageEventSchema,
-  turnCompletedEventSchema,
-]);
-
-export type UsageEvent = z.infer<typeof usageEventSchema>;
-export type TurnCompletedEvent = z.infer<typeof turnCompletedEventSchema>;
+export { internalAgentEventSchema } from "./agent-event-schema";
 
 export class EnterpriseAgentEventBindingError extends Error {
   constructor() {
@@ -166,13 +115,50 @@ export async function recordTurnCompletedEvent(event: TurnCompletedEvent): Promi
   });
 }
 
-function eventScope(event: UsageEvent | TurnCompletedEvent): EnterpriseScope {
+export async function recordSkillPublishedEvent(event: SkillPublishedEvent): Promise<void> {
+  const scope = eventScope(event);
+  await withEnterpriseDatabaseContext(scope, async (client) => {
+    await assertRootThreadBinding(client, event);
+    await client.query(
+      `
+        INSERT INTO commerce_enterprise_audit_event
+          (tenant_id, workspace_id, actor_user_id, action, target_type, target_id, outcome, metadata)
+        SELECT $1, $2, $3, 'agent.skill.publish', 'skill', $4, 'success',
+               jsonb_build_object(
+                 'operation', $5::text,
+                 'contentHash', $6::text,
+                 'threadId', $7::text,
+                 'turnId', $8::text
+               )
+        WHERE NOT EXISTS (
+          SELECT 1 FROM commerce_enterprise_audit_event
+          WHERE tenant_id = $1 AND workspace_id = $2
+            AND action = 'agent.skill.publish'
+            AND target_type = 'skill' AND target_id = $4
+            AND metadata->>'contentHash' = $6
+        )
+      `,
+      [
+        event.tenantId,
+        event.workspaceId,
+        event.userId,
+        event.skillName,
+        event.operation,
+        event.contentHash,
+        event.threadId,
+        event.turnId,
+      ],
+    );
+  });
+}
+
+function eventScope(event: UsageEvent | TurnCompletedEvent | SkillPublishedEvent): EnterpriseScope {
   return { tenantId: event.tenantId, workspaceId: event.workspaceId, userId: event.userId };
 }
 
 async function assertRootThreadBinding(
   client: import("pg").PoolClient,
-  event: UsageEvent | TurnCompletedEvent,
+  event: UsageEvent | TurnCompletedEvent | SkillPublishedEvent,
 ): Promise<void> {
   const result = await client.query(
     `

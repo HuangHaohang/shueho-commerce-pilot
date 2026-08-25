@@ -7,7 +7,6 @@ import remarkGfm from "remark-gfm";
 import {
   ArrowDown,
   ArrowUp,
-  BookOpen,
   Bot,
   Building2,
   Check,
@@ -39,7 +38,6 @@ import {
   Mic,
   Palette,
   PanelLeft,
-  Paperclip,
   Pencil,
   Phone,
   Plug,
@@ -59,9 +57,15 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 
+import { AgentRequestUserInputPanel } from "@/components/agent/request-user-input-panel";
+import {
+  ComposerAddMenu,
+  SelectedSkillChip,
+  useComposerSkillSelector,
+} from "@/components/agent/skill-selector";
 import { CopywritingWorkspace } from "@/components/creative/copywriting-workspace";
 import { PluginDirectory } from "@/components/plugins/plugin-directory";
 import { SkillsDirectory } from "@/components/skills/skills-directory";
@@ -71,8 +75,11 @@ import {
   useAgentThread,
   type AgentActivity,
   type AgentThreadSummary,
+  type ConversationAttachment,
   type ConversationMessage,
   type GeneratedImageItem,
+  type PendingRequestUserInput,
+  type PendingAttachmentUpload,
   type QueuedMessage,
 } from "@/lib/agent/use-agent-thread";
 import {
@@ -90,9 +97,15 @@ import {
 } from "@/lib/agent/web-sources";
 import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
 import { resolveTaskCategory, type TaskCategory } from "@/lib/agent/task-category";
+import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "@/lib/agent/skill-invocation";
+import { getSkills, sortSkillInventory, type SkillInventoryItem } from "@/lib/agent/skills";
+import { getPluginInventory, type CommercePluginInventoryItem } from "@/lib/plugins/catalog";
 import {
   buildCopywritingAdjustmentPrompt,
   buildCopywritingRecipeExecutionPrompt,
+  tryParseStructuredCopywritingAnswer,
+  tryParseStructuredCopywritingDraft,
+  type CopywritingDraft,
 } from "@/lib/copywriting/brief";
 import { cn } from "@/lib/utils";
 
@@ -111,6 +124,19 @@ type AuthUser = {
 
 type AuthSessionResponse = {
   user: AuthUser | null;
+};
+
+type ThreadDeletionJobView = {
+  id: string;
+  status: "queued" | "running" | "completed" | "partial" | "failed";
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  items: Array<{
+    threadId: string;
+    status: "queued" | "running" | "deleted" | "failed";
+    error: string | null;
+  }>;
 };
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
@@ -225,9 +251,30 @@ export function CommerceWorkbenchShell({
   const [authDialogMode, setAuthDialogMode] = useState<AuthMode>("login");
   const [selectedModel, setSelectedModel] = useState("gpt-5.6-sol");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("low");
+  const [selectedSkill, setSelectedSkill] = useState<SkillInventoryItem | null>(null);
+  const [composerAttachments, setComposerAttachments] = useState<PendingAttachmentUpload[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [selectedPluginDetailName, setSelectedPluginDetailName] = useState<string | null>(null);
+  const [threadSelectionMode, setThreadSelectionMode] = useState(false);
+  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
+  const [deleteDialogThreadIds, setDeleteDialogThreadIds] = useState<string[] | null>(null);
+  const [threadDeletionJobs, setThreadDeletionJobs] = useState<ThreadDeletionJobView[]>([]);
+  const [threadDeletionSubmitting, setThreadDeletionSubmitting] = useState(false);
+  const [threadDeletionError, setThreadDeletionError] = useState<string | null>(null);
   const autoRestoreAttemptedRef = useRef(false);
   const previousAuthUserIdRef = useRef<string | null | undefined>(undefined);
+  const composerAttachmentsRef = useRef<PendingAttachmentUpload[]>([]);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    composerAttachmentsRef.current = composerAttachments;
+  }, [composerAttachments]);
+
+  useEffect(() => () => {
+    for (const attachment of composerAttachmentsRef.current) {
+      if (attachment.kind === "image" && attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
+    }
+  }, []);
 
   const sessionQuery = useQuery({
     queryKey: ["auth-session"],
@@ -261,6 +308,30 @@ export function CommerceWorkbenchShell({
     staleTime: 60_000,
   });
 
+  const skillsQuery = useQuery({
+    queryKey: ["codex-skills"],
+    queryFn: getSkills,
+    enabled: isAuthenticated,
+    retry: 1,
+    staleTime: 0,
+  });
+  const enabledSkills = useMemo(
+    () => sortSkillInventory((skillsQuery.data?.skills ?? []).filter((skill) => skill.enabled)),
+    [skillsQuery.data?.skills],
+  );
+
+  const pluginsQuery = useQuery({
+    queryKey: ["commerce-plugin-inventory"],
+    queryFn: getPluginInventory,
+    enabled: isAuthenticated,
+    retry: 1,
+    staleTime: 10_000,
+  });
+  const enabledPlugins = useMemo(
+    () => (pluginsQuery.data?.plugins ?? []).filter((plugin) => plugin.enabled),
+    [pluginsQuery.data?.plugins],
+  );
+
   const threadsQuery = useQuery({
     queryKey: ["agent-threads", authUser?.id],
     queryFn: getAgentThreads,
@@ -270,6 +341,27 @@ export function CommerceWorkbenchShell({
     refetchInterval: (query) =>
       query.state.data?.threads.some((thread) => thread.status === "running") ? 3_000 : false,
   });
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setThreadDeletionJobs([]);
+      return;
+    }
+    let cancelled = false;
+    void getActiveThreadDeletionJobs()
+      .then((jobs) => {
+        if (cancelled) return;
+        setThreadDeletionJobs((current) => {
+          const merged = new Map(current.map((job) => [job.id, job]));
+          for (const job of jobs) merged.set(job.id, job);
+          return [...merged.values()];
+        });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
 
   useEffect(() => {
     const models = modelsQuery.data?.agentModels;
@@ -306,6 +398,47 @@ export function CommerceWorkbenchShell({
   });
   const hasActiveThread = Boolean(agentThread.threadId || agentThread.messages.length);
   const navigationLocked = agentThread.status === "connecting" && !agentThread.threadId;
+  const deletingThreadIds = useMemo(
+    () =>
+      new Set(
+        threadDeletionJobs.flatMap((job) =>
+          job.items
+            .filter((item) => item.status === "queued" || item.status === "running")
+            .map((item) => item.threadId),
+        ),
+      ),
+    [threadDeletionJobs],
+  );
+
+  useEffect(() => {
+    const activeJobs = threadDeletionJobs.filter((job) => job.status === "queued" || job.status === "running");
+    if (!activeJobs.length) return;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const refreshed = await Promise.all(activeJobs.map((job) => getThreadDeletionJobStatus(job.id).catch(() => job)));
+      if (cancelled) return;
+      setThreadDeletionJobs((current) => {
+        const replacements = new Map(refreshed.map((job) => [job.id, job]));
+        return current.map((job) => replacements.get(job.id) ?? job);
+      });
+      const terminal = refreshed.filter((job) => job.status !== "queued" && job.status !== "running");
+      if (terminal.length) {
+        const deletedIds = new Set(
+          terminal.flatMap((job) => job.items.filter((item) => item.status === "deleted").map((item) => item.threadId)),
+        );
+        if (agentThread.threadId && deletedIds.has(agentThread.threadId)) startNewTask();
+        if (terminal.some((job) => job.failedItems > 0)) {
+          setThreadDeletionError("部分任务未能删除，请重新选择失败项后重试。");
+        }
+        await threadsQuery.refetch();
+        setThreadDeletionJobs((current) => current.filter((job) => !terminal.some((item) => item.id === job.id)));
+      }
+    }, 1_500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [agentThread.threadId, threadDeletionJobs, threadsQuery.refetch]);
 
   useEffect(() => {
     const currentUserId = authUser?.id ?? null;
@@ -314,6 +447,8 @@ export function CommerceWorkbenchShell({
       previousAuthUserIdRef.current !== currentUserId
     ) {
       agentThread.resetThread();
+      setSelectedSkill(null);
+      clearComposerAttachments();
       autoRestoreAttemptedRef.current = false;
       queryClient.removeQueries({ queryKey: ["agent-threads"] });
       queryClient.removeQueries({ queryKey: ["provider-models"] });
@@ -354,7 +489,7 @@ export function CommerceWorkbenchShell({
 
   async function submitDraft() {
     const value = draft.trim();
-    if (!value) {
+    if (!value && !composerAttachments.length) {
       return;
     }
     if (agentThread.status === "connecting" || agentThread.compacting) {
@@ -370,9 +505,35 @@ export function CommerceWorkbenchShell({
         if (queued) {
           setDraft("");
         }
-      } else {
+      } else if (activeView === "copywriting" && agentThread.threadId) {
+        const attachmentsForSubmit = takeComposerAttachments();
         setDraft("");
-        await agentThread.submit(value);
+        const submitted = await agentThread.submit(buildCopywritingAdjustmentPrompt(value || "请结合附件继续处理。"), {
+          workflow: "commerce-copywriting",
+          attachments: attachmentsForSubmit,
+        });
+        if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
+        else {
+          restoreComposerAttachments(attachmentsForSubmit);
+          setDraft(value);
+        }
+      } else {
+        const attachmentsForSubmit = takeComposerAttachments();
+        setDraft("");
+        const submitted = await agentThread.submit(
+          value,
+          {
+            ...(selectedSkill ? { skillName: selectedSkill.name } : {}),
+            attachments: attachmentsForSubmit,
+          },
+        );
+        if (submitted) {
+          setSelectedSkill(null);
+          finalizeSubmittedAttachments(attachmentsForSubmit);
+        } else {
+          restoreComposerAttachments(attachmentsForSubmit);
+          setDraft(value);
+        }
       }
     } else {
       setDraft("");
@@ -387,6 +548,7 @@ export function CommerceWorkbenchShell({
 
   async function logout() {
     agentThread.resetThread();
+    clearComposerAttachments();
     autoRestoreAttemptedRef.current = false;
     await fetch("/api/account/logout", { method: "POST" });
     await sessionQuery.refetch();
@@ -398,6 +560,8 @@ export function CommerceWorkbenchShell({
     }
     setDraft("");
     setSubmittedDraft(null);
+    setSelectedSkill(null);
+    clearComposerAttachments();
     setActiveView("workbench");
     autoRestoreAttemptedRef.current = true;
     agentThread.resetThread();
@@ -405,12 +569,62 @@ export function CommerceWorkbenchShell({
   }
 
   function openStoredThread(thread: AgentThreadSummary) {
-    if (navigationLocked || thread.threadId === agentThread.threadId) {
+    if (navigationLocked || deletingThreadIds.has(thread.threadId)) {
       return;
     }
     setDraft("");
-    setActiveView(isCopywritingThread(thread) ? "copywriting" : "workbench");
+    setSelectedSkill(null);
+    clearComposerAttachments();
+    const threadView = isCopywritingThread(thread) ? "copywriting" : "workbench";
+    setActiveView(threadView);
+    if (thread.threadId === agentThread.threadId) return;
     void agentThread.loadThread(thread);
+  }
+
+  function toggleThreadSelection(threadId: string) {
+    if (deletingThreadIds.has(threadId)) return;
+    setSelectedThreadIds((current) => {
+      const next = new Set(current);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }
+
+  function toggleThreadSelectionMode() {
+    setThreadSelectionMode((current) => !current);
+    setSelectedThreadIds(new Set());
+    setThreadDeletionError(null);
+  }
+
+  function requestThreadDeletion(threadIds: string[]) {
+    const available = [...new Set(threadIds)].filter((threadId) => !deletingThreadIds.has(threadId));
+    if (!available.length) return;
+    setThreadDeletionError(null);
+    setDeleteDialogThreadIds(available);
+  }
+
+  async function confirmThreadDeletion() {
+    if (!deleteDialogThreadIds?.length || threadDeletionSubmitting) return;
+    setThreadDeletionSubmitting(true);
+    setThreadDeletionError(null);
+    try {
+      const response = await fetch("/api/agent/thread-deletions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadIds: deleteDialogThreadIds }),
+      });
+      const payload = (await response.json().catch(() => null)) as { job?: ThreadDeletionJobView; error?: string } | null;
+      if (!response.ok || !payload?.job) throw new Error(payload?.error || "无法创建后台删除任务。");
+      setThreadDeletionJobs((current) => [...current, payload.job as ThreadDeletionJobView]);
+      setSelectedThreadIds(new Set());
+      setThreadSelectionMode(false);
+      setDeleteDialogThreadIds(null);
+    } catch (error) {
+      setThreadDeletionError(error instanceof Error ? error.message : "无法创建后台删除任务。");
+    } finally {
+      setThreadDeletionSubmitting(false);
+    }
   }
 
   function openCopywriting() {
@@ -423,20 +637,127 @@ export function CommerceWorkbenchShell({
     }
     setDraft("");
     setSubmittedDraft(null);
+    setSelectedSkill(null);
+    clearComposerAttachments();
     agentThread.resetThread();
     setActiveView("copywriting");
   }
 
-  async function executeCopywritingRecipe(goal: string, answerSummary: string) {
-    await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal, answerSummary), {
+  async function executeCopywritingRecipe(goal: string) {
+    const attachmentsForSubmit = takeComposerAttachments();
+    const submitted = await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal), {
       workflow: "commerce-copywriting",
+      attachments: attachmentsForSubmit,
+    });
+    if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
+    else restoreComposerAttachments(attachmentsForSubmit);
+  }
+
+  function useSkill(skill: SkillInventoryItem) {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return;
+    }
+    if (navigationLocked) return;
+    setDraft("");
+    setSubmittedDraft(null);
+    setSelectedSkill(skill);
+    clearComposerAttachments();
+    setActiveView("workbench");
+    autoRestoreAttemptedRef.current = true;
+    agentThread.resetThread();
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>("[data-composer-input]")?.focus();
     });
   }
 
-  async function adjustCopywritingDraft(instruction: string) {
-    await agentThread.submit(buildCopywritingAdjustmentPrompt(instruction), {
-      workflow: "commerce-copywriting",
+  function openPluginFromComposer(plugin: CommercePluginInventoryItem) {
+    setSelectedPluginDetailName(plugin.manifest.name);
+    setActiveView("plugins");
+  }
+
+  function addComposerFiles(files: FileList | File[]) {
+    const incoming = Array.from(files);
+    setAttachmentError(null);
+    if (!incoming.length) return;
+    const accepted = incoming.filter(isAcceptedComposerFile);
+    if (accepted.length !== incoming.length) {
+      setAttachmentError("支持 PNG、JPEG、WebP、PDF、DOCX、XLSX、CSV、JSON、Markdown 和文本文件。");
+      return;
+    }
+    if (accepted.some((file) => !file.size || file.size > 5 * 1024 * 1024)) {
+      setAttachmentError("单个附件必须小于 5 MB。");
+      return;
+    }
+    if (composerAttachments.length + accepted.length > 8) {
+      setAttachmentError("每次最多添加 8 个附件。");
+      return;
+    }
+    const totalBytes = [...composerAttachments.map((attachment) => attachment.size), ...accepted.map((file) => file.size)]
+      .reduce((total, size) => total + size, 0);
+    if (totalBytes > 5 * 1024 * 1024) {
+      setAttachmentError("一次提交的附件总大小不能超过 5 MB。");
+      return;
+    }
+    setComposerAttachments((current) => {
+      const next = [
+        ...current,
+        ...accepted.map((file): PendingAttachmentUpload => {
+        const kind = file.type.startsWith("image/") ? "image" : "document";
+        return {
+          id: crypto.randomUUID(),
+          name: file.name,
+          mimeType: file.type || guessComposerFileMimeType(file.name),
+          size: file.size,
+          kind,
+          url: kind === "image" ? URL.createObjectURL(file) : "",
+          file,
+          local: true,
+        };
+        }),
+      ];
+      composerAttachmentsRef.current = next;
+      return next;
     });
+  }
+
+  function removeComposerAttachment(id: string) {
+    setComposerAttachments((current) => {
+      const removed = current.find((attachment) => attachment.id === id);
+      if (removed?.kind === "image" && removed.url.startsWith("blob:")) URL.revokeObjectURL(removed.url);
+      const next = current.filter((attachment) => attachment.id !== id);
+      composerAttachmentsRef.current = next;
+      return next;
+    });
+    setAttachmentError(null);
+  }
+
+  function clearComposerAttachments() {
+    for (const attachment of composerAttachmentsRef.current) {
+      if (attachment.kind === "image" && attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
+    }
+    composerAttachmentsRef.current = [];
+    setComposerAttachments([]);
+    setAttachmentError(null);
+  }
+
+  function takeComposerAttachments(): PendingAttachmentUpload[] {
+    const current = composerAttachmentsRef.current;
+    composerAttachmentsRef.current = [];
+    setComposerAttachments([]);
+    setAttachmentError(null);
+    return current;
+  }
+
+  function restoreComposerAttachments(attachments: PendingAttachmentUpload[]) {
+    composerAttachmentsRef.current = attachments;
+    setComposerAttachments(attachments);
+  }
+
+  function finalizeSubmittedAttachments(attachments: PendingAttachmentUpload[]) {
+    for (const attachment of attachments) {
+      if (attachment.kind === "image" && attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
+    }
   }
 
   return (
@@ -448,10 +769,19 @@ export function CommerceWorkbenchShell({
         threads={threadsQuery.data?.threads ?? []}
         activeThreadId={agentThread.threadId}
         navigationLocked={navigationLocked}
+        deletingThreadIds={deletingThreadIds}
+        selectionMode={threadSelectionMode}
+        selectedThreadIds={selectedThreadIds}
         onNewTask={startNewTask}
         onOpenThread={openStoredThread}
+        onToggleSelectionMode={toggleThreadSelectionMode}
+        onToggleThreadSelection={toggleThreadSelection}
+        onRequestThreadDeletion={requestThreadDeletion}
         onOpenCopywriting={openCopywriting}
-        onOpenPlugins={() => setActiveView("plugins")}
+        onOpenPlugins={() => {
+          setSelectedPluginDetailName(null);
+          setActiveView("plugins");
+        }}
         onOpenSkills={() => setActiveView("skills")}
         onOpenAuth={() => openAuthDialog("login")}
         onLogout={logout}
@@ -461,27 +791,18 @@ export function CommerceWorkbenchShell({
         <MobileTopbar user={authUser} onOpenAuth={() => openAuthDialog("login")} onLogout={logout} />
 
         {activeView === "plugins" ? (
-          <PluginDirectory />
+          <PluginDirectory initialSelectedPluginName={selectedPluginDetailName} />
         ) : activeView === "skills" ? (
-          <SkillsDirectory />
-        ) : activeView === "copywriting" ? (
+          <SkillsDirectory onUseSkill={useSkill} />
+        ) : activeView === "copywriting" && !agentThread.threadId ? (
           <CopywritingWorkspace
-            messages={agentThread.messages}
-            status={agentThread.status}
-            durationMs={agentThread.durationMs}
-            startedAt={agentThread.startedAt}
             error={agentThread.error}
-            pendingUserInput={agentThread.pendingUserInput}
-            answeringUserInput={agentThread.answeringUserInput}
             composerValue={draft}
             onComposerChange={setDraft}
             modelLabel={`${formatModelName(selectedModel)} · ${
               reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
             }`}
-            onAnswerUserInput={agentThread.respondToUserInput}
             onExecute={executeCopywritingRecipe}
-            onAdjust={adjustCopywritingDraft}
-            onInterrupt={agentThread.interrupt}
             renderComposer={({ placeholder, disabled, onSubmit }) => (
               <AgentComposer
                 value={draft}
@@ -497,6 +818,13 @@ export function CommerceWorkbenchShell({
                 modelsLoading={modelsQuery.isLoading}
                 selectedModel={selectedModel}
                 reasoningEffort={reasoningEffort}
+                plugins={enabledPlugins}
+                pluginsLoading={pluginsQuery.isLoading}
+                skills={enabledSkills}
+                skillsLoading={skillsQuery.isLoading}
+                selectedSkill={selectedSkill}
+                attachments={composerAttachments}
+                attachmentError={attachmentError}
                 disabled={disabled}
                 onChange={setDraft}
                 onSubmit={async () => {
@@ -513,6 +841,11 @@ export function CommerceWorkbenchShell({
                 onQueueClear={agentThread.clearQueuedMessages}
                 onModelChange={setSelectedModel}
                 onReasoningEffortChange={setReasoningEffort}
+                onOpenPlugin={openPluginFromComposer}
+                onSkillSelect={setSelectedSkill}
+                onSkillClear={() => setSelectedSkill(null)}
+                onAddFiles={addComposerFiles}
+                onRemoveAttachment={removeComposerAttachment}
               />
             )}
           />
@@ -538,6 +871,8 @@ export function CommerceWorkbenchShell({
             images={agentThread.images}
             status={agentThread.status}
             currentTurnId={agentThread.currentTurnId}
+            pendingUserInput={agentThread.pendingUserInput}
+            answeringUserInput={agentThread.answeringUserInput}
             compacting={agentThread.compacting}
             queuedMessages={agentThread.queuedMessages}
             pendingSteers={agentThread.pendingSteers}
@@ -553,14 +888,27 @@ export function CommerceWorkbenchShell({
             modelsLoading={modelsQuery.isLoading}
             selectedModel={selectedModel}
             reasoningEffort={reasoningEffort}
+            skills={enabledSkills}
+            skillsLoading={skillsQuery.isLoading}
+            plugins={enabledPlugins}
+            pluginsLoading={pluginsQuery.isLoading}
+            selectedSkill={selectedSkill}
+            attachments={composerAttachments}
+            attachmentError={attachmentError}
             onChange={setDraft}
             onSubmit={submitDraft}
             onInterrupt={agentThread.interrupt}
+            onAnswerUserInput={agentThread.respondToUserInput}
             onQueueDelete={agentThread.deleteQueuedMessage}
             onQueueSteer={agentThread.steerQueuedMessage}
             onQueueClear={agentThread.clearQueuedMessages}
             onModelChange={setSelectedModel}
             onReasoningEffortChange={setReasoningEffort}
+            onSkillSelect={setSelectedSkill}
+            onSkillClear={() => setSelectedSkill(null)}
+            onOpenPlugin={openPluginFromComposer}
+            onAddFiles={addComposerFiles}
+            onRemoveAttachment={removeComposerAttachment}
           />
         ) : (
         <section
@@ -591,10 +939,22 @@ export function CommerceWorkbenchShell({
                 modelsLoading={modelsQuery.isLoading}
                 selectedModel={selectedModel}
                 reasoningEffort={reasoningEffort}
+                skills={enabledSkills}
+                skillsLoading={skillsQuery.isLoading}
+                plugins={enabledPlugins}
+                pluginsLoading={pluginsQuery.isLoading}
+                selectedSkill={selectedSkill}
+                attachments={composerAttachments}
+                attachmentError={attachmentError}
                 onChange={setDraft}
                 onSubmit={submitDraft}
                 onModelChange={setSelectedModel}
                 onReasoningEffortChange={setReasoningEffort}
+                onSkillSelect={setSelectedSkill}
+                onSkillClear={() => setSelectedSkill(null)}
+                onOpenPlugin={openPluginFromComposer}
+                onAddFiles={addComposerFiles}
+                onRemoveAttachment={removeComposerAttachment}
               />
             ) : (
               <GuestComposer
@@ -622,6 +982,18 @@ export function CommerceWorkbenchShell({
             await sessionQuery.refetch();
             setAuthDialogOpen(false);
           }}
+        />
+      ) : null}
+      {deleteDialogThreadIds ? (
+        <ThreadDeletionDialog
+          threadIds={deleteDialogThreadIds}
+          threads={threadsQuery.data?.threads ?? []}
+          submitting={threadDeletionSubmitting}
+          error={threadDeletionError}
+          onClose={() => {
+            if (!threadDeletionSubmitting) setDeleteDialogThreadIds(null);
+          }}
+          onConfirm={confirmThreadDeletion}
         />
       ) : null}
     </div>
@@ -686,6 +1058,8 @@ function ConversationWorkspace({
   images,
   status,
   currentTurnId,
+  pendingUserInput,
+  answeringUserInput,
   compacting,
   queuedMessages,
   pendingSteers,
@@ -701,14 +1075,27 @@ function ConversationWorkspace({
   modelsLoading,
   selectedModel,
   reasoningEffort,
+  plugins,
+  pluginsLoading,
+  skills,
+  skillsLoading,
+  selectedSkill,
+  attachments,
+  attachmentError,
   onChange,
   onSubmit,
   onInterrupt,
+  onAnswerUserInput,
   onQueueDelete,
   onQueueSteer,
   onQueueClear,
   onModelChange,
   onReasoningEffortChange,
+  onOpenPlugin,
+  onSkillSelect,
+  onSkillClear,
+  onAddFiles,
+  onRemoveAttachment,
 }: {
   title: string;
   messages: ConversationMessage[];
@@ -716,6 +1103,8 @@ function ConversationWorkspace({
   images: GeneratedImageItem[];
   status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
   currentTurnId: string | null;
+  pendingUserInput: PendingRequestUserInput | null;
+  answeringUserInput: boolean;
   compacting: boolean;
   queuedMessages: QueuedMessage[];
   pendingSteers: QueuedMessage[];
@@ -731,14 +1120,27 @@ function ConversationWorkspace({
   modelsLoading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  plugins: CommercePluginInventoryItem[];
+  pluginsLoading: boolean;
+  skills: SkillInventoryItem[];
+  skillsLoading: boolean;
+  selectedSkill: SkillInventoryItem | null;
+  attachments: PendingAttachmentUpload[];
+  attachmentError: string | null;
   onChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
   onInterrupt: () => void | Promise<void>;
+  onAnswerUserInput: (answers: Record<string, { answers: string[] }>) => Promise<boolean>;
   onQueueDelete: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueSteer: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueClear: () => Promise<void>;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
+  onSkillSelect: (skill: SkillInventoryItem) => void;
+  onSkillClear: () => void;
+  onAddFiles: (files: FileList | File[]) => void;
+  onRemoveAttachment: (id: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineContentRef = useRef<HTMLDivElement>(null);
@@ -938,7 +1340,7 @@ function ConversationWorkspace({
           <div className="space-y-6">
             {timelineBeforeStatus.map((entry) =>
               entry.type === "message" ? (
-                <ConversationTimelineMessage key={entry.message.id} message={entry.message} />
+                <ConversationTimelineMessage key={entry.message.id} message={entry.message} skills={skills} />
               ) : (
                 <GeneratedImageCard key={entry.image.id} image={entry.image} />
               ),
@@ -950,11 +1352,14 @@ function ConversationWorkspace({
               durationMs={durationMs}
               startedAt={startedAt}
             />
+            {pendingUserInput ? (
+              <p className="cp-running-shimmer m-0 min-h-7 py-1 text-[13px]">正在等待你的回答</p>
+            ) : null}
             {activeTimeline.length > 0 ? (
               <div className="space-y-4">
                 {activeTimeline.map((entry) =>
                   entry.type === "message" ? (
-                    <ConversationTimelineMessage key={entry.message.id} message={entry.message} />
+                    <ConversationTimelineMessage key={entry.message.id} message={entry.message} skills={skills} />
                   ) : entry.type === "image" ? (
                     <GeneratedImageCard key={entry.image.id} image={entry.image} />
                   ) : entry.type === "activity" ? (
@@ -1006,32 +1411,58 @@ function ConversationWorkspace({
             </IconTooltip>
           </div>
         ) : null}
-        <p className="mx-auto mb-2 max-w-[768px] text-center text-[11px] text-[var(--cp-text-faint)]">
-          Commerce Pilot 也可能会犯错。请核查重要信息。
-        </p>
-        <AgentComposer
-          value={value}
-          placeholder={running && canInterrupt ? "输入调整方向" : "继续追问"}
-          running={running}
-          canInterrupt={canInterrupt}
-          interrupting={interrupting}
-          compacting={compacting}
-          queueSubmitting={queueSubmitting}
-          queuedMessages={queuedMessages}
-          queueOperationId={queueOperationId}
-          models={models}
-          modelsLoading={modelsLoading}
-          selectedModel={selectedModel}
-          reasoningEffort={reasoningEffort}
-          onChange={onChange}
-          onSubmit={onSubmit}
-          onInterrupt={onInterrupt}
-          onQueueDelete={onQueueDelete}
-          onQueueSteer={onQueueSteer}
-          onQueueClear={onQueueClear}
-          onModelChange={onModelChange}
-          onReasoningEffortChange={onReasoningEffortChange}
-        />
+        {pendingUserInput ? (
+          <AgentRequestUserInputPanel
+            key={pendingUserInput.requestId}
+            questions={pendingUserInput.questions}
+            submitting={answeringUserInput}
+            submitLabel="确认"
+            onSubmit={async (answers) => {
+              await onAnswerUserInput(answers);
+            }}
+          />
+        ) : (
+          <>
+            <p className="mx-auto mb-2 max-w-[768px] text-center text-[11px] text-[var(--cp-text-faint)]">
+              Commerce Pilot 也可能会犯错。请核查重要信息。
+            </p>
+            <AgentComposer
+              value={value}
+              placeholder={running && canInterrupt ? "输入调整方向" : "继续追问"}
+              running={running}
+              canInterrupt={canInterrupt}
+              interrupting={interrupting}
+              compacting={compacting}
+              queueSubmitting={queueSubmitting}
+              queuedMessages={queuedMessages}
+              queueOperationId={queueOperationId}
+              models={models}
+              modelsLoading={modelsLoading}
+              selectedModel={selectedModel}
+              reasoningEffort={reasoningEffort}
+              skills={skills}
+              skillsLoading={skillsLoading}
+              plugins={plugins}
+              pluginsLoading={pluginsLoading}
+              selectedSkill={selectedSkill}
+              attachments={attachments}
+              attachmentError={attachmentError}
+              onChange={onChange}
+              onSubmit={onSubmit}
+              onInterrupt={onInterrupt}
+              onQueueDelete={onQueueDelete}
+              onQueueSteer={onQueueSteer}
+              onQueueClear={onQueueClear}
+              onModelChange={onModelChange}
+              onReasoningEffortChange={onReasoningEffortChange}
+              onSkillSelect={onSkillSelect}
+              onSkillClear={onSkillClear}
+              onOpenPlugin={onOpenPlugin}
+              onAddFiles={onAddFiles}
+              onRemoveAttachment={onRemoveAttachment}
+            />
+          </>
+        )}
       </div>
     </section>
   );
@@ -1051,6 +1482,13 @@ function AgentComposer({
   modelsLoading,
   selectedModel,
   reasoningEffort,
+  plugins = [],
+  pluginsLoading = false,
+  skills = [],
+  skillsLoading = false,
+  selectedSkill = null,
+  attachments = [],
+  attachmentError = null,
   disabled = false,
   onChange,
   onSubmit,
@@ -1060,6 +1498,11 @@ function AgentComposer({
   onQueueClear,
   onModelChange,
   onReasoningEffortChange,
+  onOpenPlugin = () => undefined,
+  onSkillSelect = () => undefined,
+  onSkillClear = () => undefined,
+  onAddFiles = () => undefined,
+  onRemoveAttachment = () => undefined,
 }: {
   value: string;
   placeholder: string;
@@ -1074,6 +1517,13 @@ function AgentComposer({
   modelsLoading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  plugins?: CommercePluginInventoryItem[];
+  pluginsLoading?: boolean;
+  skills?: SkillInventoryItem[];
+  skillsLoading?: boolean;
+  selectedSkill?: SkillInventoryItem | null;
+  attachments?: PendingAttachmentUpload[];
+  attachmentError?: string | null;
   disabled?: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
@@ -1083,15 +1533,65 @@ function AgentComposer({
   onQueueClear: () => Promise<void>;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onOpenPlugin?: (plugin: CommercePluginInventoryItem) => void;
+  onSkillSelect?: (skill: SkillInventoryItem) => void;
+  onSkillClear?: () => void;
+  onAddFiles?: (files: FileList | File[]) => void;
+  onRemoveAttachment?: (id: string) => void;
 }) {
+  const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const leadingActionRef = useRef<HTMLDivElement>(null);
+  const trailingActionsRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [expanded, setExpanded] = useState(false);
+  const skillSelector = useComposerSkillSelector({
+    value,
+    skills,
+    selectedSkill,
+    disabled: disabled || running,
+    inputRef,
+    rootRef: formRef,
+    onChange,
+    onSelect: onSkillSelect,
+  });
+  const multiline = expanded || Boolean(selectedSkill) || attachments.length > 0;
+
+  const updateExpandedState = useCallback(() => {
+    const form = formRef.current;
+    const input = inputRef.current;
+    const leadingAction = leadingActionRef.current;
+    const trailingActions = trailingActionsRef.current;
+    if (!form || !input || !leadingAction || !trailingActions) return;
+    setExpanded(
+      shouldExpandComposer({
+        form,
+        input,
+        leadingAction,
+        trailingActions,
+        value,
+      }),
+    );
+  }, [value]);
+
+  useLayoutEffect(() => {
+    updateExpandedState();
+  }, [canInterrupt, disabled, modelsLoading, queueSubmitting, reasoningEffort, running, selectedModel, updateExpandedState]);
 
   useEffect(() => {
+    const form = formRef.current;
+    const trailingActions = trailingActionsRef.current;
+    if (!form || !trailingActions) return;
+    const observer = new ResizeObserver(updateExpandedState);
+    observer.observe(form);
+    observer.observe(trailingActions);
+    return () => observer.disconnect();
+  }, [updateExpandedState]);
+
+  useLayoutEffect(() => {
     if (!inputRef.current) return;
-    const inputHeight = resizeTextarea(inputRef.current, 32, 120);
-    setExpanded(inputHeight > 32);
-  }, [value]);
+    resizeTextarea(inputRef.current, 32, 120);
+  }, [multiline, value]);
 
   function returnQueuedMessageToComposer(message: QueuedMessage): void {
     const previousValue = value;
@@ -1120,55 +1620,105 @@ function AgentComposer({
         />
       ) : null}
       <form
+        ref={formRef}
         className={cn(
-          "mx-auto grid w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] gap-x-1 rounded-[28px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)] transition-[height,border-radius] duration-[var(--cp-duration-base)]",
-          expanded ? "max-h-[180px] grid-rows-[auto_36px] items-end gap-y-1" : "min-h-[56px] items-center",
+          "relative mx-auto grid w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] gap-x-1 rounded-[28px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)] transition-[height,border-radius] duration-[var(--cp-duration-base)]",
+          multiline ? "max-h-[220px] grid-rows-[auto_36px] items-end gap-y-1" : "min-h-[56px] items-center",
         )}
         onSubmit={(event) => {
           event.preventDefault();
           if (!disabled && (!running || canInterrupt)) void onSubmit();
         }}
       >
-        <IconTooltip label="添加内容">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            className={cn("rounded-full", expanded && "col-start-1 row-start-2")}
-            aria-label="添加内容"
-            disabled={disabled}
-          >
-            <Plus className="size-5" />
-          </Button>
-        </IconTooltip>
-        <textarea
-          ref={inputRef}
-          data-conversation-input
-          rows={1}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing &&
-              event.keyCode !== 229 &&
-              !disabled &&
-              (!running || canInterrupt)
-            ) {
-              event.preventDefault();
-              if (value.trim()) void onSubmit();
-            }
+        <ComposerAddMenu
+          open={skillSelector.open}
+          source={skillSelector.source}
+          query={skillSelector.query}
+          plugins={plugins}
+          pluginsLoading={pluginsLoading}
+          skills={skillSelector.filteredSkills}
+          activeIndex={skillSelector.activeIndex}
+          loading={skillsLoading}
+          selectedSkill={selectedSkill}
+          onSelect={skillSelector.selectSkill}
+          onActiveIndexChange={skillSelector.setActiveIndex}
+          onOpenPlugin={onOpenPlugin}
+          onAddFiles={() => {
+            skillSelector.closeMenu();
+            fileInputRef.current?.click();
           }}
-          placeholder={placeholder}
-          className={cn(
-            "cp-composer-textarea min-h-8 max-h-[120px] min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]",
-            expanded ? "col-span-3 col-start-1 row-start-1 w-full px-3" : "col-start-2 row-start-1 w-full",
-          )}
-          aria-label={placeholder}
-          disabled={disabled}
         />
-        <div className={cn("flex items-center gap-1", expanded ? "col-start-3 row-start-2" : "col-start-3 row-start-1")}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.xlsx,.txt,.md,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log"
+          className="hidden"
+          aria-label="选择文件和图片"
+          onChange={(event) => {
+            if (event.target.files?.length) onAddFiles(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        <div
+          ref={leadingActionRef}
+          className={cn("flex items-center", multiline && "col-start-1 row-start-2")}
+        >
+          <IconTooltip label="添加">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="rounded-full"
+              aria-label="添加"
+              aria-expanded={skillSelector.open}
+              disabled={disabled || running}
+              onClick={skillSelector.toggleMenu}
+            >
+              <Plus className="size-5" />
+            </Button>
+          </IconTooltip>
+        </div>
+        <div className={cn("min-w-0", multiline ? "col-span-3 col-start-1 row-start-1 px-3" : "col-start-2 row-start-1")}>
+          {selectedSkill ? (
+            <div className="mb-1.5 flex min-w-0">
+              <SelectedSkillChip skill={selectedSkill} onRemove={onSkillClear} />
+            </div>
+          ) : null}
+          {attachments.length || attachmentError ? (
+            <ComposerAttachmentStrip
+              attachments={attachments}
+              error={attachmentError}
+              onRemove={onRemoveAttachment}
+            />
+          ) : null}
+          <textarea
+            ref={inputRef}
+            data-conversation-input
+            rows={1}
+            value={value}
+            onChange={(event) => skillSelector.handleChange(event.target.value, event.target.selectionStart)}
+            onKeyDown={(event) => {
+              if (skillSelector.handleKeyDown(event)) return;
+              if (
+                event.key === "Enter" &&
+                !event.shiftKey &&
+                !event.nativeEvent.isComposing &&
+                event.keyCode !== 229 &&
+                !disabled &&
+                (!running || canInterrupt)
+              ) {
+                event.preventDefault();
+                if (value.trim() || attachments.length) void onSubmit();
+              }
+            }}
+            placeholder={placeholder}
+            className="cp-composer-textarea block min-h-8 max-h-[120px] w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
+            aria-label={placeholder}
+            disabled={disabled}
+          />
+        </div>
+        <div ref={trailingActionsRef} className={cn("flex items-center gap-1", multiline ? "col-start-3 row-start-2" : "col-start-3 row-start-1")}>
           <ModelAndReasoningControl
             models={models}
             loading={modelsLoading}
@@ -1207,7 +1757,7 @@ function AgentComposer({
             </IconTooltip>
           ) : (
             <IconTooltip label="发送">
-              <Button type="submit" size="icon" className="rounded-full" aria-label="发送" disabled={disabled || !value.trim()}>
+              <Button type="submit" size="icon" className="rounded-full" aria-label="发送" disabled={disabled || (!value.trim() && !attachments.length)}>
                 <ArrowUp />
               </Button>
             </IconTooltip>
@@ -1461,6 +2011,57 @@ function clampPercent(value: number): number {
   return Math.min(Math.max(value, 0), 100);
 }
 
+function shouldExpandComposer({
+  form,
+  input,
+  leadingAction,
+  trailingActions,
+  value,
+}: {
+  form: HTMLFormElement;
+  input: HTMLTextAreaElement;
+  leadingAction: HTMLElement;
+  trailingActions: HTMLDivElement;
+  value: string;
+}): boolean {
+  if (value.includes("\n")) return true;
+  const formStyle = window.getComputedStyle(form);
+  const inputStyle = window.getComputedStyle(input);
+  const horizontalPadding = numericCssValue(formStyle.paddingLeft) + numericCssValue(formStyle.paddingRight);
+  const inputPadding = numericCssValue(inputStyle.paddingLeft) + numericCssValue(inputStyle.paddingRight);
+  const columnGap = numericCssValue(formStyle.columnGap);
+  const availableTextWidth = Math.max(
+    80,
+    form.clientWidth -
+      horizontalPadding -
+      leadingAction.getBoundingClientRect().width -
+      trailingActions.getBoundingClientRect().width -
+      columnGap * 2 -
+      inputPadding,
+  );
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+  if (!context) return input.scrollHeight > 32;
+  context.font = [
+    inputStyle.fontStyle,
+    inputStyle.fontVariant,
+    inputStyle.fontWeight,
+    inputStyle.fontSize,
+    inputStyle.fontFamily,
+  ].filter(Boolean).join(" ");
+  const letterSpacing = numericCssValue(inputStyle.letterSpacing);
+  const textWidth = value.split("\n").reduce((maximum, line) => {
+    const measured = context.measureText(line).width + Math.max(0, Array.from(line).length - 1) * letterSpacing;
+    return Math.max(maximum, measured);
+  }, 0);
+  return textWidth + 4 > availableTextWidth;
+}
+
+function numericCssValue(value: string): number {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight: number): number {
   node.style.height = "0px";
   const nextHeight = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight);
@@ -1469,16 +2070,23 @@ function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight:
   return nextHeight;
 }
 
-function ConversationTimelineMessage({ message }: { message: ConversationMessage }) {
+function ConversationTimelineMessage({
+  message,
+  skills,
+}: {
+  message: ConversationMessage;
+  skills: SkillInventoryItem[];
+}) {
+  const preview = readConversationMessagePreview(message);
   return (
     <div
       data-conversation-minimap-anchor
       data-minimap-prompt={message.role === "user" ? "" : undefined}
       data-minimap-id={`message-${message.id}`}
       data-minimap-kind={message.role}
-      data-minimap-preview={message.content}
+      data-minimap-preview={preview}
     >
-      <ConversationMessageView message={message} />
+      <ConversationMessageView message={message} skills={skills} />
     </div>
   );
 }
@@ -1495,7 +2103,7 @@ function PendingSteerPreview({ messages }: { messages: QueuedMessage[] }) {
           data-minimap-preview={message.content}
           className="flex justify-end"
         >
-          <div className="max-w-[75%] rounded-[18px] bg-[var(--cp-bg-muted)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-text)]">
+          <div className="max-w-[75%] rounded-[18px] bg-[var(--cp-user-message-bg)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-user-message-text)]">
             {message.content}
           </div>
         </div>
@@ -1507,19 +2115,114 @@ function PendingSteerPreview({ messages }: { messages: QueuedMessage[] }) {
   );
 }
 
-function ConversationMessageView({ message }: { message: ConversationMessage }) {
+function ComposerAttachmentStrip({
+  attachments,
+  error,
+  onRemove,
+}: {
+  attachments: PendingAttachmentUpload[];
+  error: string | null;
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <div className="mb-2 min-w-0">
+      {attachments.length ? (
+        <div className="cp-flat-scrollbar flex max-w-full gap-2 overflow-x-auto pb-1" aria-label="待发送附件">
+          {attachments.map((attachment) => (
+            <div
+              key={attachment.id}
+              className="relative flex h-14 min-w-[156px] max-w-[220px] shrink-0 items-center gap-2 rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] p-1.5 pr-8"
+            >
+              {attachment.kind === "image" ? (
+                <img
+                  src={attachment.url}
+                  alt={attachment.name}
+                  className="size-11 shrink-0 rounded-[6px] object-cover"
+                />
+              ) : (
+                <span className="flex size-11 shrink-0 items-center justify-center rounded-[6px] bg-[var(--cp-surface)] text-[var(--cp-text-muted)]">
+                  <FileText className="size-5" strokeWidth={1.7} />
+                </span>
+              )}
+              <span className="min-w-0">
+                <span className="block truncate text-xs font-medium text-[var(--cp-text)]">{attachment.name}</span>
+                <span className="mt-0.5 block text-[10px] text-[var(--cp-text-faint)]">{formatFileSize(attachment.size)}</span>
+              </span>
+              <button
+                type="button"
+                className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)]"
+                aria-label={`移除附件 ${attachment.name}`}
+                onClick={() => onRemove(attachment.id)}
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {error ? <p className="m-0 mt-1 text-xs leading-5 text-[var(--cp-danger)]">{error}</p> : null}
+    </div>
+  );
+}
+
+function ConversationAttachmentList({ attachments }: { attachments: ConversationAttachment[] }) {
+  if (!attachments.length) return null;
+  return (
+    <div className="mb-2 flex max-w-full flex-wrap justify-end gap-2" aria-label="消息附件">
+      {attachments.map((attachment) =>
+        attachment.kind === "image" ? (
+          <a
+            key={attachment.id}
+            href={attachment.url}
+            target="_blank"
+            rel="noreferrer"
+            className="block overflow-hidden rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-surface)]"
+            aria-label={`查看图片 ${attachment.name}`}
+          >
+            <img src={attachment.url} alt={attachment.name} className="h-[88px] w-[112px] object-cover" />
+          </a>
+        ) : (
+          <a
+            key={attachment.id}
+            href={attachment.url}
+            className="flex h-12 max-w-[240px] items-center gap-2 rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2.5 text-left no-underline"
+            download={attachment.name}
+          >
+            <FileText className="size-5 shrink-0 text-[var(--cp-text-muted)]" strokeWidth={1.7} />
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-medium text-[var(--cp-text)]">{attachment.name}</span>
+              <span className="block text-[10px] text-[var(--cp-text-faint)]">{formatFileSize(attachment.size)}</span>
+            </span>
+          </a>
+        ),
+      )}
+    </div>
+  );
+}
+
+function ConversationMessageView({
+  message,
+  skills,
+}: {
+  message: ConversationMessage;
+  skills: SkillInventoryItem[];
+}) {
   if (message.role === "user") {
+    const content = readConversationUserContent(message.content);
     return (
       <div className="flex justify-end">
-        <div
-          className={cn(
-            "max-w-[75%] rounded-[18px] px-4 py-2.5 text-sm leading-6",
-            message.variant === "steer"
-              ? "bg-[var(--cp-bg-muted)] text-[var(--cp-text)]"
-              : "bg-[var(--cp-text)] text-[var(--cp-text-inverse)]",
-          )}
-        >
-          {message.content}
+        <div className="max-w-[75%] whitespace-pre-wrap rounded-[18px] bg-[var(--cp-user-message-bg)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-user-message-text)]">
+          <ConversationAttachmentList attachments={message.attachments ?? []} />
+          {message.skillName ? (
+            <SelectedSkillChip
+              skill={{
+                name: message.skillName,
+                displayName: skills.find((skill) => skill.name === message.skillName)?.displayName,
+              }}
+              inlineMessage
+            />
+          ) : null}
+          {content}
         </div>
       </div>
     );
@@ -1528,6 +2231,10 @@ function ConversationMessageView({ message }: { message: ConversationMessage }) 
   if (!message.content) {
     return null;
   }
+
+  const copywritingDraft = tryParseStructuredCopywritingDraft(message.content);
+  if (copywritingDraft) return <CopywritingDraftResponse draft={copywritingDraft} />;
+  const content = tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
 
   return (
     <div
@@ -1554,10 +2261,95 @@ function ConversationMessageView({ message }: { message: ConversationMessage }) 
           ),
         }}
       >
-        {message.content}
+        {content}
       </ReactMarkdown>
     </div>
   );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function isAcceptedComposerFile(file: File): boolean {
+  const extension = file.name.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
+  return new Set([
+    ".png", ".jpg", ".jpeg", ".webp", ".pdf", ".docx", ".xlsx", ".txt", ".md", ".csv",
+    ".json", ".xml", ".html", ".htm", ".yaml", ".yml", ".log",
+  ]).has(extension);
+}
+
+function guessComposerFileMimeType(filename: string): string {
+  const extension = filename.toLowerCase().match(/\.[^.]+$/)?.[0] ?? "";
+  const mimeTypes: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv",
+    ".json": "application/json",
+    ".md": "text/markdown",
+    ".xml": "application/xml",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".yaml": "text/yaml",
+    ".yml": "text/yaml",
+  };
+  return mimeTypes[extension] ?? "text/plain";
+}
+
+function CopywritingDraftResponse({ draft }: { draft: CopywritingDraft }) {
+  return (
+    <article className="text-[14px] leading-6 text-[var(--cp-text)]" data-copywriting-delivery>
+      <h2 className="mb-4 mt-0 text-[19px] font-semibold leading-7">{draft.title}</h2>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="mb-4 mt-0 last:mb-0">{children}</p>,
+          ul: ({ children }) => <ul className="my-4 list-disc space-y-2 pl-6">{children}</ul>,
+          ol: ({ children }) => <ol className="my-4 list-decimal space-y-2 pl-6">{children}</ol>,
+        }}
+      >
+        {draft.body}
+      </ReactMarkdown>
+      {draft.callToAction ? (
+        <div className="mt-5 border-t border-[var(--cp-border-subtle)] pt-4">
+          <div className="mb-1 text-xs font-medium text-[var(--cp-text-muted)]">行动引导</div>
+          <p className="m-0">{draft.callToAction}</p>
+        </div>
+      ) : null}
+      {draft.complianceNotes.length ? (
+        <div className="mt-5 flex items-start gap-2 border-t border-[var(--cp-border-subtle)] pt-4 text-xs leading-5 text-[var(--cp-warning)]">
+          <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.8} />
+          <div className="space-y-1">
+            {draft.complianceNotes.map((note) => <p key={note} className="m-0">{note}</p>)}
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function readConversationMessagePreview(message: ConversationMessage): string {
+  if (message.role === "user") return readConversationUserContent(message.content);
+  const draft = tryParseStructuredCopywritingDraft(message.content);
+  if (draft) return `${draft.title} ${draft.body}`;
+  return tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
+}
+
+function readConversationUserContent(content: string): string {
+  const followup = content.match(/用户后续消息：([\s\S]+)$/)?.[1]?.trim();
+  if (followup) return followup;
+  const legacyAdjustment = content.match(/调整要求：([\s\S]+)$/)?.[1]?.trim();
+  if (legacyAdjustment) return legacyAdjustment;
+  const goal = content.match(/用户目标：([^\n]+)/)?.[1]?.trim();
+  if (goal) return goal;
+  return readVisibleAttachmentMessage(readExplicitSkillMessage(content).content);
 }
 
 function ActivityRow({ activity }: { activity: AgentActivity }) {
@@ -2077,8 +2869,14 @@ function Sidebar({
   threads,
   activeThreadId,
   navigationLocked,
+  deletingThreadIds,
+  selectionMode,
+  selectedThreadIds,
   onNewTask,
   onOpenThread,
+  onToggleSelectionMode,
+  onToggleThreadSelection,
+  onRequestThreadDeletion,
   onOpenCopywriting,
   onOpenPlugins,
   onOpenSkills,
@@ -2091,8 +2889,14 @@ function Sidebar({
   threads: AgentThreadSummary[];
   activeThreadId: string | null;
   navigationLocked: boolean;
+  deletingThreadIds: Set<string>;
+  selectionMode: boolean;
+  selectedThreadIds: Set<string>;
   onNewTask: () => void;
   onOpenThread: (thread: AgentThreadSummary) => void;
+  onToggleSelectionMode: () => void;
+  onToggleThreadSelection: (threadId: string) => void;
+  onRequestThreadDeletion: (threadIds: string[]) => void;
   onOpenCopywriting: () => void;
   onOpenPlugins: () => void;
   onOpenSkills: () => void;
@@ -2290,7 +3094,13 @@ function Sidebar({
             activeView={activeView}
             activeThreadId={activeThreadId}
             navigationLocked={navigationLocked}
+            deletingThreadIds={deletingThreadIds}
+            selectionMode={selectionMode}
+            selectedThreadIds={selectedThreadIds}
             onOpenThread={onOpenThread}
+            onToggleSelectionMode={onToggleSelectionMode}
+            onToggleThreadSelection={onToggleThreadSelection}
+            onRequestThreadDeletion={onRequestThreadDeletion}
           />
         ) : null}
       </nav>
@@ -2315,13 +3125,25 @@ function SidebarThreadTree({
   activeView,
   activeThreadId,
   navigationLocked,
+  deletingThreadIds,
+  selectionMode,
+  selectedThreadIds,
   onOpenThread,
+  onToggleSelectionMode,
+  onToggleThreadSelection,
+  onRequestThreadDeletion,
 }: {
   threads: AgentThreadSummary[];
   activeView: WorkbenchView;
   activeThreadId: string | null;
   navigationLocked: boolean;
+  deletingThreadIds: Set<string>;
+  selectionMode: boolean;
+  selectedThreadIds: Set<string>;
   onOpenThread: (thread: AgentThreadSummary) => void;
+  onToggleSelectionMode: () => void;
+  onToggleThreadSelection: (threadId: string) => void;
+  onRequestThreadDeletion: (threadIds: string[]) => void;
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<TaskCategory>>(() => new Set());
   const groupedThreads = useMemo(() => {
@@ -2347,8 +3169,23 @@ function SidebarThreadTree({
   }, [activeThreadId, threads]);
 
   return (
-    <div className="mt-5 px-1" aria-label="最近任务分类">
-      <div className="mb-1 px-2 text-xs font-medium text-[var(--cp-text-faint)]">最近</div>
+    <div className="relative mt-5 min-h-full px-1" aria-label="最近任务分类">
+      <div className="mb-1 flex h-7 items-center justify-between px-2">
+        <span className="text-xs font-medium text-[var(--cp-text-faint)]">最近</span>
+        <IconTooltip label={selectionMode ? "退出批量删除" : "批量删除"}>
+          <button
+            type="button"
+            className={cn(
+              "flex size-7 items-center justify-center rounded-[var(--cp-radius-xs)] text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)]",
+              selectionMode && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+            )}
+            aria-label={selectionMode ? "退出批量删除" : "批量删除"}
+            onClick={onToggleSelectionMode}
+          >
+            {selectionMode ? <X className="size-3.5" /> : <ListX className="size-3.5" />}
+          </button>
+        </IconTooltip>
+      </div>
       <div className="space-y-1">
         {taskGroupDefinitions.map((definition) => {
           const items = groupedThreads.get(definition.category) ?? [];
@@ -2381,27 +3218,60 @@ function SidebarThreadTree({
                     const active =
                       thread.threadId === activeThreadId &&
                       (activeView === "workbench" || activeView === "copywriting");
+                    const deleting = deletingThreadIds.has(thread.threadId);
+                    const selected = selectedThreadIds.has(thread.threadId);
                     return (
-                      <button
+                      <div
                         key={thread.threadId}
-                        type="button"
                         data-thread-id={thread.threadId}
                         data-thread-status={thread.status}
                         className={cn(
-                          "flex h-[var(--cp-sidebar-item-height)] w-full items-center rounded-[var(--cp-radius-item)] px-2.5 text-left text-[13px] text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                          "group flex h-[var(--cp-sidebar-item-height)] w-full items-center rounded-[var(--cp-radius-item)] transition-colors hover:bg-[var(--cp-surface-hover)]",
                           active && "bg-[var(--cp-surface-hover)]",
-                          navigationLocked && thread.threadId !== activeThreadId && "cursor-not-allowed opacity-50",
+                          deleting && "opacity-55",
                         )}
-                        disabled={navigationLocked && thread.threadId !== activeThreadId}
-                        onClick={() => onOpenThread(thread)}
                       >
-                        <span className="min-w-0 flex-1 truncate">{thread.title}</span>
-                        {thread.status === "running" ? (
-                          <Loader2 data-thread-spinner className="ml-2 size-3.5 shrink-0 animate-spin text-[var(--cp-text-muted)]" />
-                        ) : thread.status === "failed" ? (
-                          <CircleAlert className="ml-2 size-3.5 shrink-0 text-[var(--cp-danger)]" strokeWidth={1.8} />
-                        ) : null}
-                      </button>
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex min-w-0 flex-1 items-center self-stretch rounded-[var(--cp-radius-item)] px-2 text-left text-[13px] text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                            ((navigationLocked && thread.threadId !== activeThreadId) || deleting) && "cursor-not-allowed",
+                          )}
+                          disabled={(navigationLocked && thread.threadId !== activeThreadId) || deleting}
+                          onClick={() => selectionMode ? onToggleThreadSelection(thread.threadId) : onOpenThread(thread)}
+                        >
+                          {selectionMode ? (
+                            <span
+                              className={cn(
+                                "mr-2 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                                selected
+                                  ? "border-[var(--cp-text)] bg-[var(--cp-text)] text-white"
+                                  : "border-[var(--cp-border-strong)]",
+                              )}
+                              aria-hidden="true"
+                            >
+                              {selected ? <Check className="size-2.5" strokeWidth={2.5} /> : null}
+                            </span>
+                          ) : null}
+                          <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+                          {thread.status === "running" && !deleting ? (
+                            <Loader2 data-thread-spinner className="ml-2 size-3.5 shrink-0 animate-spin text-[var(--cp-text-muted)]" />
+                          ) : thread.status === "failed" && !deleting ? (
+                            <CircleAlert className="ml-2 size-3.5 shrink-0 text-[var(--cp-danger)]" strokeWidth={1.8} />
+                          ) : null}
+                        </button>
+                        <IconTooltip label={deleting ? "正在后台删除" : "永久删除任务"}>
+                          <button
+                            type="button"
+                            className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-[var(--cp-radius-xs)] text-[var(--cp-text-faint)] opacity-70 hover:bg-[var(--cp-bg-muted)] hover:text-[var(--cp-danger)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+                            aria-label={deleting ? "正在后台删除" : `永久删除 ${thread.title}`}
+                            disabled={deleting}
+                            onClick={() => onRequestThreadDeletion([thread.threadId])}
+                          >
+                            {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                          </button>
+                        </IconTooltip>
+                      </div>
                     );
                   })}
                 </div>
@@ -2410,6 +3280,21 @@ function SidebarThreadTree({
           );
         })}
       </div>
+      {selectionMode ? (
+        <div className="sticky bottom-0 mt-3 flex items-center justify-between border-t border-[var(--cp-border-subtle)] bg-[var(--cp-sidebar)] px-2 py-2">
+          <span className="text-xs text-[var(--cp-text-muted)]">已选 {selectedThreadIds.size} 个</span>
+          <Button
+            type="button"
+            variant="destructive"
+            size="sm"
+            disabled={!selectedThreadIds.size}
+            onClick={() => onRequestThreadDeletion([...selectedThreadIds])}
+          >
+            <Trash2 className="size-3.5" />
+            删除所选
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2451,6 +3336,75 @@ function AuthenticatedSidebarFooter({
         </IconTooltip>
       </div>
     </div>
+  );
+}
+
+function ThreadDeletionDialog({
+  threadIds,
+  threads,
+  submitting,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  threadIds: string[];
+  threads: AgentThreadSummary[];
+  submitting: boolean;
+  error: string | null;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  const titles = threadIds.map(
+    (threadId) => threads.find((thread) => thread.threadId === threadId)?.title ?? "未命名任务",
+  );
+  useEffect(() => {
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape" && !submitting) onClose();
+    }
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose, submitting]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-[90] flex items-center justify-center bg-[rgba(0,0,0,0.38)] p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="thread-deletion-title"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget && !submitting) onClose();
+      }}
+    >
+      <div className="w-full max-w-[440px] rounded-[var(--cp-radius-popover)] bg-[var(--cp-surface)] p-6 shadow-[var(--cp-shadow-popover)]">
+        <div className="flex items-start gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-[var(--cp-danger-bg)] text-[var(--cp-danger)]">
+            <Trash2 className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 id="thread-deletion-title" className="m-0 text-lg font-semibold">永久删除 {threadIds.length} 个任务？</h2>
+            <p className="mb-0 mt-2 text-sm leading-6 text-[var(--cp-text-muted)]">
+              任务将进入后台删除队列。对话、生成图片、附件、视频、来源缓存和其他关联产物都会永久删除，无法恢复。
+            </p>
+          </div>
+        </div>
+        <div className="mt-5 max-h-32 overflow-y-auto border-y border-[var(--cp-border-subtle)] py-2">
+          {titles.map((title, index) => (
+            <div key={`${threadIds[index]}:${index}`} className="truncate px-1 py-1.5 text-sm text-[var(--cp-text-soft)]">
+              {title}
+            </div>
+          ))}
+        </div>
+        {error ? <p className="mb-0 mt-3 text-xs text-[var(--cp-danger)]">{error}</p> : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <Button type="button" variant="ghost" disabled={submitting} onClick={onClose}>取消</Button>
+          <Button type="button" variant="destructive" disabled={submitting} onClick={() => void onConfirm()}>
+            {submitting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+            {submitting ? "正在加入后台任务" : "永久删除"}
+          </Button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -2946,10 +3900,22 @@ function WorkComposer({
   modelsLoading,
   selectedModel,
   reasoningEffort,
+  plugins,
+  pluginsLoading,
+  skills,
+  skillsLoading,
+  selectedSkill,
+  attachments,
+  attachmentError,
   onChange,
   onSubmit,
   onModelChange,
   onReasoningEffortChange,
+  onOpenPlugin,
+  onSkillSelect,
+  onSkillClear,
+  onAddFiles,
+  onRemoveAttachment,
 }: {
   mode: WorkMode;
   value: string;
@@ -2959,14 +3925,38 @@ function WorkComposer({
   modelsLoading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  plugins: CommercePluginInventoryItem[];
+  pluginsLoading: boolean;
+  skills: SkillInventoryItem[];
+  skillsLoading: boolean;
+  selectedSkill: SkillInventoryItem | null;
+  attachments: PendingAttachmentUpload[];
+  attachmentError: string | null;
   onChange: (value: string) => void;
   onSubmit: () => void;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
+  onSkillSelect: (skill: SkillInventoryItem) => void;
+  onSkillClear: () => void;
+  onAddFiles: (files: FileList | File[]) => void;
+  onRemoveAttachment: (id: string) => void;
 }) {
   const placeholder =
     mode === "work" ? "处理订单、库存、商品、售后或报表事务" : "询问电商运营、系统配置或数据问题";
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
+  const composerRootRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const skillSelector = useComposerSkillSelector({
+    value,
+    skills,
+    selectedSkill,
+    disabled: false,
+    inputRef: composerInputRef,
+    rootRef: composerRootRef,
+    onChange,
+    onSelect: onSkillSelect,
+  });
 
   useEffect(() => {
     if (composerInputRef.current) {
@@ -2976,13 +3966,56 @@ function WorkComposer({
 
   return (
     <div className="w-full">
-      <div className="min-h-[var(--cp-composer-min-height)] rounded-[var(--cp-radius-composer)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-5 py-4 shadow-[var(--cp-shadow-composer)] transition-[border-color,box-shadow] duration-[var(--cp-duration-base)] focus-within:border-[var(--cp-border-strong)] focus-within:shadow-[var(--cp-shadow-composer)]">
+      <div
+        ref={composerRootRef}
+        className="relative min-h-[var(--cp-composer-min-height)] rounded-[var(--cp-radius-composer)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-5 py-4 shadow-[var(--cp-shadow-composer)] transition-[border-color,box-shadow] duration-[var(--cp-duration-base)] focus-within:border-[var(--cp-border-strong)] focus-within:shadow-[var(--cp-shadow-composer)]"
+      >
+        <ComposerAddMenu
+          open={skillSelector.open}
+          placement="below"
+          source={skillSelector.source}
+          query={skillSelector.query}
+          plugins={plugins}
+          pluginsLoading={pluginsLoading}
+          skills={skillSelector.filteredSkills}
+          activeIndex={skillSelector.activeIndex}
+          loading={skillsLoading}
+          selectedSkill={selectedSkill}
+          onSelect={skillSelector.selectSkill}
+          onActiveIndexChange={skillSelector.setActiveIndex}
+          onOpenPlugin={onOpenPlugin}
+          onAddFiles={() => {
+            skillSelector.closeMenu();
+            fileInputRef.current?.click();
+          }}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.xlsx,.txt,.md,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log"
+          className="hidden"
+          aria-label="选择文件和图片"
+          onChange={(event) => {
+            if (event.target.files?.length) onAddFiles(event.target.files);
+            event.target.value = "";
+          }}
+        />
+        {selectedSkill ? (
+          <div className="mb-3 flex min-w-0">
+            <SelectedSkillChip skill={selectedSkill} onRemove={onSkillClear} />
+          </div>
+        ) : null}
+        {attachments.length || attachmentError ? (
+          <ComposerAttachmentStrip attachments={attachments} error={attachmentError} onRemove={onRemoveAttachment} />
+        ) : null}
         <textarea
           ref={composerInputRef}
           data-composer-input
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => skillSelector.handleChange(event.target.value, event.target.selectionStart)}
           onKeyDown={(event) => {
+            if (skillSelector.handleKeyDown(event)) return;
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -2995,25 +4028,22 @@ function WorkComposer({
           }}
           rows={1}
           placeholder={placeholder}
-          className="min-h-[68px] max-h-[180px] w-full resize-none overflow-y-hidden border-0 bg-transparent p-0 text-[14px] leading-relaxed text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
+          className="block min-h-[68px] max-h-[180px] w-full resize-none overflow-y-hidden border-0 bg-transparent p-0 text-[14px] leading-relaxed text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
           aria-label="任务输入"
         />
 
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-1">
-            <IconTooltip label="添加上下文">
-              <Button type="button" variant="ghost" size="composerIcon" aria-label="添加上下文">
+            <IconTooltip label="添加">
+              <Button
+                type="button"
+                variant="ghost"
+                size="composerIcon"
+                aria-label="添加"
+                aria-expanded={skillSelector.open}
+                onClick={skillSelector.toggleMenu}
+              >
                 <Plus className="size-5" />
-              </Button>
-            </IconTooltip>
-            <IconTooltip label="添加附件">
-              <Button type="button" variant="ghost" size="composerIcon" aria-label="添加附件">
-                <Paperclip />
-              </Button>
-            </IconTooltip>
-            <IconTooltip label="资料库">
-              <Button type="button" variant="ghost" size="composerIcon" aria-label="资料库">
-                <BookOpen />
               </Button>
             </IconTooltip>
           </div>
@@ -3039,7 +4069,7 @@ function WorkComposer({
                 type="button"
                 size="composerIcon"
                 aria-label="提交"
-                disabled={!value.trim()}
+                disabled={!value.trim() && !attachments.length}
                 onClick={onSubmit}
                 className="rounded-full"
               >
@@ -3443,6 +4473,22 @@ async function getAgentThreads(): Promise<AgentThreadsResponse> {
     throw new Error("Agent thread history endpoint failed.");
   }
   return (await response.json()) as AgentThreadsResponse;
+}
+
+async function getThreadDeletionJobStatus(jobId: string): Promise<ThreadDeletionJobView> {
+  const response = await fetch(`/api/agent/thread-deletions/${encodeURIComponent(jobId)}`, {
+    cache: "no-store",
+  });
+  const payload = (await response.json().catch(() => null)) as { job?: ThreadDeletionJobView; error?: string } | null;
+  if (!response.ok || !payload?.job) throw new Error(payload?.error || "无法读取后台删除任务。");
+  return payload.job;
+}
+
+async function getActiveThreadDeletionJobs(): Promise<ThreadDeletionJobView[]> {
+  const response = await fetch("/api/agent/thread-deletions", { cache: "no-store" });
+  const payload = (await response.json().catch(() => null)) as { jobs?: ThreadDeletionJobView[]; error?: string } | null;
+  if (!response.ok || !Array.isArray(payload?.jobs)) throw new Error(payload?.error || "无法读取后台删除任务。");
+  return payload.jobs;
 }
 
 async function getEnterpriseNavigationContext(): Promise<EnterpriseNavigationContextResponse> {

@@ -19,6 +19,34 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(13, 13, 13, 0.22) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: rgba(13, 13, 13, 0.2);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(13, 13, 13, 0.34);
+  background-clip: padding-box;
+}
+
+.cp-flat-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(13, 13, 13, 0.22) transparent;
 }
 
 html,

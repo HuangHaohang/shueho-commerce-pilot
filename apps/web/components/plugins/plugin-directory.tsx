@@ -16,23 +16,14 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   filterCommercePlugins,
+  getPluginInventory,
   type CommercePluginInventoryItem,
 } from "@/lib/plugins/catalog";
 import { cn } from "@/lib/utils";
 
-type PluginInventoryResponse = {
-  plugins: CommercePluginInventoryItem[];
-  policy: {
-    installMode: "application-managed";
-    arbitraryPackages: false;
-    hostExecution: false;
-    runtimeFoundation: "codex-app-server";
-  };
-};
-
-export function PluginDirectory() {
+export function PluginDirectory({ initialSelectedPluginName = null }: { initialSelectedPluginName?: string | null }) {
   const [query, setQuery] = useState("");
-  const [selectedPluginName, setSelectedPluginName] = useState<string | null>(null);
+  const [selectedPluginName, setSelectedPluginName] = useState<string | null>(initialSelectedPluginName);
   const inventoryQuery = useQuery({
     queryKey: ["commerce-plugin-inventory"],
     queryFn: getPluginInventory,
@@ -356,15 +347,6 @@ function PluginInventorySkeleton() {
       </div>
     </div>
   );
-}
-
-async function getPluginInventory(): Promise<PluginInventoryResponse> {
-  const response = await fetch("/api/plugins", { cache: "no-store" });
-  const payload = (await response.json().catch(() => null)) as PluginInventoryResponse | { error?: string } | null;
-  if (!response.ok || !payload || !("plugins" in payload)) {
-    throw new Error(payload && "error" in payload ? payload.error : "Plugin inventory unavailable.");
-  }
-  return payload;
 }
 
 function networkLabel(value: CommercePluginInventoryItem["manifest"]["security"]["network"]): string {

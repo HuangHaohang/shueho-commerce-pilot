@@ -1,20 +1,3 @@
-export const copywritingChannels = ["淘宝/天猫", "抖音", "小红书", "京东", "私域"] as const;
-export const copywritingTypes = ["商品卖点", "商品详情", "活动推广", "社媒种草"] as const;
-export const copywritingTones = ["专业克制", "自然种草", "简洁有力", "轻松活泼"] as const;
-export const copywritingLengths = [80, 150, 300, 500] as const;
-
-export type CopywritingBrief = {
-  channel: (typeof copywritingChannels)[number];
-  copyType: (typeof copywritingTypes)[number];
-  productName: string;
-  sellingPoints: string;
-  audience: string;
-  tone: (typeof copywritingTones)[number];
-  approximateLength: (typeof copywritingLengths)[number];
-  requiredWording: string;
-  prohibitedWording: string;
-};
-
 export type CopywritingDraft = {
   title: string;
   body: string;
@@ -22,156 +5,69 @@ export type CopywritingDraft = {
   complianceNotes: string[];
 };
 
-export function validateCopywritingBrief(brief: CopywritingBrief): string | null {
-  if (!brief.productName.trim()) return "请输入商品名称。";
-  if (!brief.sellingPoints.trim()) return "请输入至少一个核心卖点。";
-  return null;
-}
+export type CopywritingWorkflowResponse =
+  | { responseType: "draft"; draft: CopywritingDraft; message: string }
+  | { responseType: "answer"; message: string };
 
-export function buildCopywritingPrompt(brief: CopywritingBrief): string {
+export function buildCopywritingRecipeExecutionPrompt(goal: string): string {
   return [
-    "请根据以下结构化电商文案 Brief 生成一个可直接编辑的中文版本。",
+    "这是一个对话型电商文案 Task Recipe，不要输出计划。",
     "",
-    `渠道：${brief.channel}`,
-    `文案类型：${brief.copyType}`,
-    `商品名称：${brief.productName.trim()}`,
-    `核心卖点：${brief.sellingPoints.trim()}`,
-    `目标人群：${brief.audience.trim() || "未指定"}`,
-    `表达语气：${brief.tone}`,
-    `目标字数：约 ${brief.approximateLength} 字`,
-    `必须包含：${brief.requiredWording.trim() || "无"}`,
-    `禁止使用：${brief.prohibitedWording.trim() || "无"}`,
+    `用户目标：${goal.trim()}`,
     "",
-    "只使用 Brief 中可以确认的事实；不确定的信息不要补造，并在合规备注中指出。",
+    "先判断完成文案所需的高影响信息是否缺失。",
+    "如果确实需要用户决策，调用 request_user_input 动态询问 1-3 个简短问题并等待回答；不要用普通正文假装提问。每个问题都应提供一个由 Agent 判断的选项。",
+    "如果信息已经足够，不要为了走流程而提问。回答完成后继续同一个 Turn，直接交付最终文案。",
+    "这是首次交付，responseType 必须使用 draft。",
+    "只使用可以确认的事实；缺失信息不要补造，并在合规备注中指出。",
   ].join("\n");
 }
 
 export function buildCopywritingAdjustmentPrompt(instruction: string): string {
   return [
-    "请基于当前文案和最初 Brief 生成一个新版本，并保持原有事实约束。",
-    `调整要求：${instruction.trim()}`,
+    "请处理用户对当前文案任务的后续消息，并保持最初目标与已确认信息的事实约束。",
+    "如果用户是在提问、询问缺失信息、要求解释或征求建议，请直接回答，responseType 使用 answer，不要创建文案版本。",
+    "只有用户明确要求改写、调整、重写或生成新文案时，responseType 才使用 draft，并在当前对话中交付新文案。",
+    `用户后续消息：${instruction.trim()}`,
   ].join("\n");
 }
 
-export function buildCopywritingRecipeExecutionPrompt(goal: string, answerSummary: string): string {
-  return [
-    "请直接完成用户需要的电商文案交付，不要输出计划或继续追问。",
-    "",
-    `用户目标：${goal.trim()}`,
-    `已确认信息：${answerSummary.trim() || "由 Agent 根据目标做专业判断"}`,
-    "",
-    "只使用可以确认的事实；缺失信息不要补造，并在合规备注中指出。",
-  ].join("\n");
+export function tryParseStructuredCopywritingDraft(content: string): CopywritingDraft | null {
+  const response = parseCopywritingWorkflowResponse(content);
+  return response?.responseType === "draft" ? response.draft : null;
 }
 
-export function parseCopywritingBriefPrompt(content: string): CopywritingBrief | null {
-  const fields = new Map<string, string>();
-  const knownLabels = new Set([
-    "渠道",
-    "文案类型",
-    "商品名称",
-    "核心卖点",
-    "目标人群",
-    "表达语气",
-    "目标字数",
-    "必须包含",
-    "禁止使用",
-  ]);
-  let activeLabel: string | null = null;
-  for (const line of content.split("\n")) {
-    const separatorIndex = line.indexOf("：");
-    const possibleLabel = separatorIndex > 0 ? line.slice(0, separatorIndex).trim() : "";
-    if (knownLabels.has(possibleLabel)) {
-      activeLabel = possibleLabel;
-      fields.set(possibleLabel, line.slice(separatorIndex + 1).trim());
-      continue;
-    }
-    if (activeLabel === "核心卖点" && line.trim()) {
-      fields.set(activeLabel, `${fields.get(activeLabel) ?? ""}\n${line.trim()}`.trim());
-    }
-  }
-
-  const channel = fields.get("渠道");
-  const copyType = fields.get("文案类型");
-  const tone = fields.get("表达语气");
-  const lengthMatch = fields.get("目标字数")?.match(/(80|150|300|500)/);
-  const productName = fields.get("商品名称") ?? "";
-  const sellingPoints = fields.get("核心卖点") ?? "";
-  if (
-    !copywritingChannels.includes(channel as CopywritingBrief["channel"]) ||
-    !copywritingTypes.includes(copyType as CopywritingBrief["copyType"]) ||
-    !copywritingTones.includes(tone as CopywritingBrief["tone"]) ||
-    !lengthMatch ||
-    !productName ||
-    !sellingPoints
-  ) {
-    return null;
-  }
-
-  return {
-    channel: channel as CopywritingBrief["channel"],
-    copyType: copyType as CopywritingBrief["copyType"],
-    productName,
-    sellingPoints,
-    audience: normalizeOptionalBriefField(fields.get("目标人群")),
-    tone: tone as CopywritingBrief["tone"],
-    approximateLength: Number(lengthMatch[1]) as CopywritingBrief["approximateLength"],
-    requiredWording: normalizeOptionalBriefField(fields.get("必须包含")),
-    prohibitedWording: normalizeOptionalBriefField(fields.get("禁止使用")),
-  };
+export function tryParseStructuredCopywritingAnswer(content: string): string | null {
+  const response = parseCopywritingWorkflowResponse(content);
+  return response?.responseType === "answer" ? response.message : null;
 }
 
-export function parseCopywritingDraft(content: string): CopywritingDraft {
+export function parseCopywritingWorkflowResponse(content: string): CopywritingWorkflowResponse | null {
   const normalized = content
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "");
-
   try {
     const parsed = JSON.parse(normalized) as Record<string, unknown>;
-    if (typeof parsed.body === "string") {
-      return {
+    if (parsed.responseType === "answer" && typeof parsed.message === "string" && parsed.message.trim()) {
+      return { responseType: "answer", message: parsed.message.trim() };
+    }
+    if (typeof parsed.body !== "string" || (parsed.responseType !== undefined && parsed.responseType !== "draft")) {
+      return null;
+    }
+    return {
+      responseType: "draft",
+      draft: {
         title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : "未命名文案",
         body: parsed.body,
         callToAction: typeof parsed.callToAction === "string" ? parsed.callToAction : "",
         complianceNotes: Array.isArray(parsed.complianceNotes)
           ? parsed.complianceNotes.filter((note): note is string => typeof note === "string")
           : [],
-      };
-    }
-  } catch {
-    // Older threads may contain plain text; preserve it as an editable draft.
-  }
-
-  return {
-    title: "生成文案",
-    body: content.trim(),
-    callToAction: "",
-    complianceNotes: [],
-  };
-}
-
-export function tryParseStructuredCopywritingDraft(content: string): CopywritingDraft | null {
-  const normalized = content
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "");
-  try {
-    const parsed = JSON.parse(normalized) as Record<string, unknown>;
-    if (typeof parsed.body !== "string") return null;
-    return {
-      title: typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim() : "未命名文案",
-      body: parsed.body,
-      callToAction: typeof parsed.callToAction === "string" ? parsed.callToAction : "",
-      complianceNotes: Array.isArray(parsed.complianceNotes)
-        ? parsed.complianceNotes.filter((note): note is string => typeof note === "string")
-        : [],
+      },
+      message: typeof parsed.message === "string" ? parsed.message.trim() : "",
     };
   } catch {
     return null;
   }
-}
-
-function normalizeOptionalBriefField(value: string | undefined): string {
-  return !value || value === "无" || value === "未指定" ? "" : value;
 }

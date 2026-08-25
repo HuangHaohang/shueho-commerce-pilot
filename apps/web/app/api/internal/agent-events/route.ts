@@ -4,6 +4,7 @@ import { isAuthorizedGatewayCallback } from "@/lib/agent/internal-auth";
 import {
   EnterpriseAgentEventBindingError,
   internalAgentEventSchema,
+  recordSkillPublishedEvent,
   recordTurnCompletedEvent,
   recordUsageEvent,
 } from "@/lib/enterprise/usage";
@@ -20,6 +21,10 @@ export async function POST(request: Request) {
     if (parsed.data.kind === "usage.response.completed") {
       const result = await recordUsageEvent(parsed.data);
       return NextResponse.json({ accepted: true, inserted: result.inserted });
+    }
+    if (parsed.data.kind === "skill.published") {
+      await recordSkillPublishedEvent(parsed.data);
+      return NextResponse.json({ accepted: true });
     }
     await recordTurnCompletedEvent(parsed.data);
     return NextResponse.json({ accepted: true });

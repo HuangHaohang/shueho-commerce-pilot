@@ -9,6 +9,7 @@ export type PendingRequestUserInput = {
   questions: unknown[];
   isBlocking: boolean;
   receivedAt: string;
+  action?: "skill.publish";
 };
 
 export function readPendingRequestUserInput(
@@ -43,6 +44,7 @@ export function serializePendingRequestUserInput(request: PendingRequestUserInpu
     questions: request.questions,
     isBlocking: request.isBlocking,
     receivedAt: request.receivedAt,
+    ...(request.action ? { action: request.action } : {}),
   };
 }
 
@@ -68,6 +70,32 @@ export function normalizeRequestUserInputAnswers(
     normalized[question.id] = { answers };
   }
   return normalized;
+}
+
+export function formatRequestUserInputAnswerMessage(
+  questions: unknown[],
+  answers: Record<string, { answers: string[] }>,
+): string | null {
+  const lines: string[] = [];
+  for (const question of questions) {
+    if (!isRecord(question) || typeof question.id !== "string") continue;
+    const answer = answers[question.id];
+    if (!answer?.answers.length) continue;
+    const label =
+      typeof question.header === "string" && question.header.trim()
+        ? question.header.trim()
+        : typeof question.question === "string" && question.question.trim()
+          ? question.question.trim()
+          : "问题";
+    const value = question.isSecret === true
+      ? "已提供"
+      : answer.answers
+          .map((item) => item.replace(/\s*\(Recommended\)\s*/gi, "").trim())
+          .filter(Boolean)
+          .join("；");
+    lines.push(`${label}：${value}`);
+  }
+  return lines.length ? `我的选择：\n${lines.join("\n")}` : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -46,12 +46,17 @@
 - `More`，内部收纳 `Scheduled`、`Plugins` 和 `Skills`，不得把这些入口同时放在一级导航。
 - `More > Plugins` 必须在现有工作台壳内打开插件目录；桌面侧栏、最近任务与账号区保持稳定，只替换主内容区。`/plugins` 仅作为可直达入口，并复用同一工作台壳，不得另造独立页面框架。目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；列表项加号用于进入同壳详情视图，不代表安装成功。第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
 - `More > Skills` 与插件入口分离，技能目录必须来自 App Server `skills/list`，不得从插件 manifest 推导。`skill-creator` 作为 Codex 系统技能全局可见；浏览器不得获得技能宿主路径，也不得直接写入任意 Skill 目录。
+- 技能详情提供“立即使用”，点击后返回现有“新任务”公共 composer 并预选该技能，不得打开另一套任务输入框。首屏与会话 composer 都提供独立的技能图标；输入 `@` 时在 composer 上方显示技能目录并支持名称筛选、方向键和回车选择。选择结果显示为带技能图标的独立标签，插件标签与技能标签不得混用同一语义。
+- 前端选择只提交 `skillName`。Gateway 必须通过 `skills/list(forceReload)` 重新解析已启用技能，并按 Codex 显式调用规范同时提交 `$skill-name` 文本标记和原生 `skill` input item；浏览器不得提交 path。执行标记不得作为用户正文显示，刷新后的历史必须保留原始文本和技能标签。
+- 创建技能时复用全局 Harness `request_user_input` 问答面板。`commerce_skill.publish` 的最终写入必须显示应用拥有的发布确认；用户确认前工具保持等待，取消不得产生 Skill。当前 tenant 共享目录仅允许拥有 `tenant.manage` 的企业所有者发布；发布完成后以 `skills/list(forceReload)` 回读为成功依据。
 - Account/workspace footer。
 
 交互：
 
 - 菜单项 `36px` 高。
 - 品牌头、五个一级导航项和账户区必须 `shrink-0`，任务数量增加时不得压缩高度；只有“最近任务分类”区域使用 `min-h-0 overflow-y-auto overscroll-contain`。侧栏根节点和一级导航区不得出现滚动条。
+- 点击历史任务只更新 active 背景，不得刷新任务的最近活动时间或改变分类内顺序；只有用户提交新 Turn 等真实任务活动才能将任务置顶。
+- 每个历史任务行必须提供独立的永久删除图标；“最近”标题提供批量删除模式。删除前显示不可恢复确认，确认后只创建后台 Job，删除中的行显示 spinner。不得用 `thread/archive`、隐藏列表项或仅删除数据库索引来冒充删除完成。
 - hover 使用 `--cp-surface-hover`。
 - active 不使用亮色背景。
 - 图标和文字间距 `10px - 12px`。
@@ -92,20 +97,22 @@
 - 文案生成是统一电商 Agent 的 Task Recipe，不是独立表单应用，也不跳转到另一套页面壳。
 - Recipe 首屏和结果页必须复用全局 `AgentComposer`；不得创建独立 textarea、发送按钮、停止按钮或模型选择器。Recipe 只能改变 placeholder、提交语义和当前内容区。
 - 首屏只提供自然语言目标输入和少量任务示例；专业字段不得作为普通用户的必填首屏。
-- Recipe 根据目标即时判断缺失的高影响决策，并复用 Codex `request_user_input` 的问题、选项、自由补充和逐题进度交互。
-- 每题提供明确选项和“让我决定”；用户回答最后一题后直接启动执行，不展示计划文本。
+- Recipe Skill 根据目标即时判断缺失的高影响决策，并在 Default collaboration mode 中调用 Codex `request_user_input`；前端不得维护固定问题数组。
+- 问题面板停靠在标准对话底部，保留上方正文、commentary 和活动时间线；每题提供明确选项、推荐项和自由补充。用户回答最后一题后继续同一个 Turn，不展示计划文本。
+- 提交 Harness 问题后必须立即生成右侧“我的选择”用户气泡，按问题标题展示所选值；秘密字段只显示“已提供”。选择摘要必须由服务端格式化并在刷新后恢复，不得只保存在组件 state。
 - 用户已经在目标中明确渠道或表达方向时，对应问题必须跳过。
-- 结果区使用版本切换而不是向下堆叠多个完整文案；标题、正文和 CTA 可本地编辑，合规备注与正文分离。
-- 运行中显示真实“正在生成 x 秒”和停止按钮；完成后才增加版本。调整请求必须进入同一 Codex thread 的新 turn，不覆盖旧版本。
-- 刷新或点击历史文案任务时，使用服务端 thread history 恢复任务目标和版本。
+- 文案线程创建后必须使用标准 `ConversationWorkspace`，不得切换到独立版本编辑器或第二套对话面板。结构化文案作为助手消息渲染标题、正文、CTA 和合规备注。
+- 运行中显示真实“正在处理 x 秒”和停止按钮。提问、解释和明确改写都进入同一 Codex thread 的新 turn，并按普通对话顺序展示。
+- 刷新或点击历史文案任务时，使用服务端 thread history 恢复完整对话和 Harness 问答。
 
 Harness 契约：
 
-- 每个文案任务对应一个 Codex thread；Recipe 问答是产品层决策收集，回答完成后的生成和每次调整各对应一个 `turn/start`。
+- 每个文案任务对应一个 Codex thread；首个 `turn/start` 内由 Harness 动态提问、等待答案并继续到最终交付，后续消息各对应一个新 Turn。
 - 文案规则通过应用托管 `commerce-copywriting` Skill 注入；Gateway 只接受固定 workflow id，并自行解析 Skill 路径和 `outputSchema`。
-- Gateway 支持 App Server 原生 `item/tool/requestUserInput` server request，并将其作为运行中动态问题转发给拥有该 thread 的用户；固定 Recipe 问题不必先消耗一个模型 turn。
+- 文案后续 Turn 必须区分 `answer` 与 `draft`，但两者均属于标准对话消息；前端不得创建版本标签。
+- Gateway 支持 App Server 原生 `item/tool/requestUserInput` server request，并将其作为运行中动态问题转发给拥有该 thread 的用户；运行时启用 `default_mode_request_user_input`，不进入 Plan mode。
 - 浏览器不得提交任意 Skill 路径、developer instructions、output schema、tool definition、cwd 或权限策略。
-- 输出 Schema 固定为 `title`、`body`、`callToAction`、`complianceNotes`。商品资料读取和保存草稿必须使用另行注册、带租户授权的应用工具；Hook 不承载文案业务逻辑。
+- 输出 Schema 固定为 `responseType`、`title`、`body`、`callToAction`、`complianceNotes`、`message`。商品资料读取和保存草稿必须使用另行注册、带租户授权的应用工具；Hook 不承载文案业务逻辑。
 
 ## WorkComposer
 
@@ -151,6 +158,8 @@ type WorkComposerProps = {
 - 输入法组合态的 `Enter` 只确认候选内容，不得提交。
 - 空内容不得提交。
 - 登录后的首屏和会话 composer 使用自适应高度 textarea；内容未达到上限时随输入增长，达到上限后高度固定并只在 textarea 内部纵向滚动。
+- 首屏和会话 composer 只保留一个 `+` 作为添加入口，不得在 `+` 旁重复放置独立 Skill、附件或资料库按钮。点击 `+` 后的同宽弹层按“添加 / 插件 / 技能”分区：插件必须来自真实应用插件目录并进入对应详情，技能必须来自 App Server `skills/list` 并沿用原生 Skill 选择；“文件和图片”必须调用真实多选文件选择器，并显示照片预览、文档名称、大小与单项移除。
+- 点击发送后，附件立即从 composer 移入右侧乐观用户消息；Turn 接受成功后只保留消息附件，上传或启动失败则撤销乐观消息并把原文字和附件恢复到 composer。不得同时在用户消息和输入框中重复显示同一附件。
 - 会话 composer 单行时保持紧凑横排；进入多行后切换为“上方完整输入区、下方工具栏”，不得把高 textarea 与所有按钮硬塞在同一横排。
 - 多行 composer 的上层 grid row 必须由 textarea 实际高度驱动，不得预先拉伸到最大高度；一到两行文字顶部保持正常内边距，只有内容增长到上限后才固定高度并内部滚动。
 - textarea 内部滚动条使用窄轨道并贴近 composer 右侧，不得在正文与操作区之间形成粗重分割。
@@ -234,6 +243,7 @@ type WorkComposerProps = {
 职责：
 
 - 首次提交后将首页居中 composer 切换为持续会话工作区。
+- 所有用户输入气泡统一使用 `--cp-user-message-bg` 浅灰背景和 `--cp-user-message-text` 深色文字，包括普通消息、显式 Skill 消息、选择回答和待确认调整；不得按消息类型恢复为黑底白字。
 - 使用 App Server `turn/*`、`item/*` 和 delta 通知驱动渲染，不使用本地假回复。
 - 底部保留“继续追问”composer，运行中提交按钮切换为停止按钮并调用 `turn/interrupt`。
 

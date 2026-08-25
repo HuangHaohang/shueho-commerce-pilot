@@ -1,63 +1,52 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildCopywritingPrompt,
-  parseCopywritingBriefPrompt,
-  parseCopywritingDraft,
-  validateCopywritingBrief,
-  type CopywritingBrief,
+  buildCopywritingAdjustmentPrompt,
+  buildCopywritingRecipeExecutionPrompt,
+  tryParseStructuredCopywritingAnswer,
+  tryParseStructuredCopywritingDraft,
 } from "./brief";
 
-const brief: CopywritingBrief = {
-  channel: "淘宝/天猫",
-  copyType: "商品卖点",
-  productName: "轻量通勤包",
-  sellingPoints: "轻量\n防泼水\n分区收纳",
-  audience: "城市通勤人群",
-  tone: "专业克制",
-  approximateLength: 150,
-  requiredWording: "防泼水",
-  prohibitedWording: "全网第一",
-};
-
-describe("copywriting brief", () => {
-  it("builds a grounded, human-readable workflow prompt", () => {
-    const prompt = buildCopywritingPrompt(brief);
-
-    expect(prompt).toContain("商品名称：轻量通勤包");
-    expect(prompt).toContain("必须包含：防泼水");
-    expect(prompt).toContain("禁止使用：全网第一");
-    expect(prompt).not.toContain("$commerce-copywriting");
+describe("conversational copywriting Recipe", () => {
+  it("starts one Harness turn that dynamically requests only missing decisions", () => {
+    const prompt = buildCopywritingRecipeExecutionPrompt("帮我写一份上新文案");
+    expect(prompt).toContain("调用 request_user_input 动态询问");
+    expect(prompt).toContain("不要输出计划");
+    expect(prompt).toContain("回答完成后继续同一个 Turn");
+    expect(prompt).not.toContain("已确认信息：");
   });
 
-  it("requires product identity and at least one selling point", () => {
-    expect(validateCopywritingBrief({ ...brief, productName: "" })).toBe("请输入商品名称。");
-    expect(validateCopywritingBrief({ ...brief, sellingPoints: "" })).toBe("请输入至少一个核心卖点。");
-    expect(validateCopywritingBrief(brief)).toBeNull();
-  });
+  it("routes follow-up questions to conversation answers instead of draft deliveries", () => {
+    const prompt = buildCopywritingAdjustmentPrompt("我还需要补充什么信息？");
+    expect(prompt).toContain("responseType 使用 answer");
+    expect(prompt).toContain("用户后续消息：我还需要补充什么信息？");
 
-  it("restores a saved brief from the first harness turn", () => {
-    expect(parseCopywritingBriefPrompt(buildCopywritingPrompt(brief))).toEqual(brief);
-    expect(parseCopywritingBriefPrompt("普通对话消息")).toBeNull();
-  });
-
-  it("parses structured harness output and preserves plain-text history", () => {
-    expect(
-      parseCopywritingDraft(
-        JSON.stringify({
-          title: "通勤更从容",
-          body: "轻量通勤包，分区收纳日常所需。",
-          callToAction: "立即了解",
-          complianceNotes: ["防泼水等级需要复核"],
-        }),
-      ),
-    ).toEqual({
-      title: "通勤更从容",
-      body: "轻量通勤包，分区收纳日常所需。",
-      callToAction: "立即了解",
-      complianceNotes: ["防泼水等级需要复核"],
+    const answer = JSON.stringify({
+      responseType: "answer",
+      title: "",
+      body: "",
+      callToAction: "",
+      complianceNotes: [],
+      message: "建议补充商品重量、容量、材质和内部结构。",
     });
+    expect(tryParseStructuredCopywritingAnswer(answer)).toBe("建议补充商品重量、容量、材质和内部结构。");
+    expect(tryParseStructuredCopywritingDraft(answer)).toBeNull();
+  });
 
-    expect(parseCopywritingDraft("保留旧版纯文本").body).toBe("保留旧版纯文本");
+  it("renders explicit revisions as draft messages and accepts legacy draft objects", () => {
+    const revision = JSON.stringify({
+      responseType: "draft",
+      title: "通勤更轻松",
+      body: "轻量随行，从容通勤。",
+      callToAction: "立即了解",
+      complianceNotes: [],
+      message: "已按简洁语气调整。",
+    });
+    expect(tryParseStructuredCopywritingDraft(revision)?.title).toBe("通勤更轻松");
+    expect(
+      tryParseStructuredCopywritingDraft(
+        JSON.stringify({ title: "旧版", body: "兼容旧线程", callToAction: "", complianceNotes: [] }),
+      )?.title,
+    ).toBe("旧版");
   });
 });

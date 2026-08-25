@@ -74,4 +74,6 @@ export type TurnStartInput = {
   model?: string;
   effort?: string;
   workflow?: "commerce-copywriting";
+  skillName?: string;
+  attachmentIds?: string[];
 };

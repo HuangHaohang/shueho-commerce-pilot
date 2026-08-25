@@ -43,7 +43,14 @@ export type TurnCompletedEvent = AgentEventBase & {
   requestId?: string;
 };
 
-export type AgentOutboxEvent = UsageCompletedEvent | TurnCompletedEvent;
+export type SkillPublishedEvent = AgentEventBase & {
+  kind: "skill.published";
+  skillName: string;
+  operation: "created" | "updated" | "unchanged";
+  contentHash: string;
+};
+
+export type AgentOutboxEvent = UsageCompletedEvent | TurnCompletedEvent | SkillPublishedEvent;
 
 type DeadLetterEvent = {
   event: AgentOutboxEvent;
@@ -176,7 +183,9 @@ function isAgentOutboxEvent(value: unknown): value is AgentOutboxEvent {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const event = value as Record<string, unknown>;
   return (
-    (event.kind === "usage.response.completed" || event.kind === "turn.completed") &&
+    (event.kind === "usage.response.completed" ||
+      event.kind === "turn.completed" ||
+      event.kind === "skill.published") &&
     typeof event.eventId === "string" &&
     typeof event.tenantId === "string" &&
     typeof event.workspaceId === "string" &&

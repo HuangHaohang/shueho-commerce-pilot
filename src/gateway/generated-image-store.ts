@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 const IMAGE_FILENAME_PATTERN = /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i;
@@ -113,6 +113,30 @@ export class GeneratedImageStore {
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
+  async deleteForThreads(threadIds: Iterable<string>): Promise<{ files: number; metadata: number }> {
+    const targets = new Set(threadIds);
+    for (const threadId of targets) assertAgentId(threadId, "thread id");
+    let entries: string[];
+    try {
+      entries = await readdir(this.metadataDirectory);
+    } catch (error) {
+      if (isNotFoundError(error)) return { files: 0, metadata: 0 };
+      throw error;
+    }
+    let files = 0;
+    let metadata = 0;
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      const filename = entry.slice(0, -".json".length);
+      if (!isSafeImageFilename(filename)) continue;
+      const artifact = await this.get(filename);
+      if (!artifact || !targets.has(artifact.threadId)) continue;
+      if (await removeIfPresent(this.imagePath(filename))) files += 1;
+      if (await removeIfPresent(this.metadataPath(filename))) metadata += 1;
+    }
+    return { files, metadata };
+  }
+
   imageContentType(filename: string): GeneratedImageArtifact["mimeType"] {
     assertImageFilename(filename);
     const extension = extname(filename).toLowerCase();
@@ -203,4 +227,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isNotFoundError(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
+}
+
+async function removeIfPresent(path: string): Promise<boolean> {
+  try {
+    await rm(path, { force: false });
+    return true;
+  } catch (error) {
+    if (isNotFoundError(error)) return false;
+    throw error;
+  }
 }

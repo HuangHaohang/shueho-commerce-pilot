@@ -86,7 +86,7 @@ export async function listAgentThreadsForUser(scope: EnterpriseScope, limit = 50
                title_model, title_generated_at, recipe_id, category
         FROM commerce_agent_thread
         WHERE tenant_id = $1 AND workspace_id = $2 AND created_by_user_id = $3
-        ORDER BY updated_at DESC
+        ORDER BY COALESCE(turn_started_at, created_at) DESC, created_at DESC
         LIMIT $4
       `,
       [scope.tenantId, scope.workspaceId, scope.userId, limit],
@@ -240,13 +240,23 @@ export async function updateAgentThreadStatus(
     scope,
     `UPDATE commerce_agent_thread
      SET status = $5, active_turn_id = CASE WHEN $5 = 'running' THEN active_turn_id ELSE NULL END,
-         duration_ms = $6, updated_at = CURRENT_TIMESTAMP`,
+         duration_ms = $6`,
     [status, durationMs],
   );
 }
 
 export async function deleteAgentThreadRecord(threadId: string, scope: EnterpriseScope): Promise<void> {
   await withEnterpriseDatabaseContext(scope, async (client) => {
+    await client.query(
+      `DELETE FROM commerce_agent_turn_lease
+       WHERE tenant_id = $2 AND workspace_id = $3 AND user_id = $4 AND thread_id = $1`,
+      [threadId, scope.tenantId, scope.workspaceId, scope.userId],
+    );
+    await client.query(
+      `DELETE FROM commerce_agent_turn_completion
+       WHERE tenant_id = $2 AND workspace_id = $3 AND root_thread_id = $1`,
+      [threadId, scope.tenantId, scope.workspaceId],
+    );
     await client.query(
       `DELETE FROM commerce_agent_thread
        WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4`,

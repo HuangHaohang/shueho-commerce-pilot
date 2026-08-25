@@ -12,7 +12,8 @@
     "auth:migrate": "tsx scripts/migrate-auth.ts",
     "enterprise:bootstrap": "tsx scripts/bootstrap-enterprise.ts",
     "enterprise:verify-isolation": "tsx scripts/verify-enterprise-isolation.ts",
-    "enterprise:reconcile-usage": "tsx scripts/reconcile-enterprise-usage.ts"
+    "enterprise:reconcile-usage": "tsx scripts/reconcile-enterprise-usage.ts",
+    "jobs:thread-deletion": "tsx scripts/run-thread-deletion-worker.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.2.3",

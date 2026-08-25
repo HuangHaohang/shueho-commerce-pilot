@@ -143,6 +143,18 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260824_014_task_categories",
       path: resolve(process.cwd(), "migrations/014_task_categories.sql"),
     },
+    {
+      version: "20260825_015_user_input_answer_history",
+      path: resolve(process.cwd(), "migrations/015_user_input_answer_history.sql"),
+    },
+    {
+      version: "20260825_016_thread_deletion_jobs",
+      path: resolve(process.cwd(), "migrations/016_thread_deletion_jobs.sql"),
+    },
+    {
+      version: "20260825_017_task_category_correction",
+      path: resolve(process.cwd(), "migrations/017_task_category_correction.sql"),
+    },
   ];
 
   for (const migration of migrations) {

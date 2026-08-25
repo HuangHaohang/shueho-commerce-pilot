@@ -4,6 +4,18 @@ Web application for a commerce agent, built on OpenAI's open-source Codex App Se
 
 The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce agent runtime must be based on the Codex open-source harness, and the product surface is a browser-based web application, not a desktop app. Product UI, commerce tools, persistence, and integrations should sit around that runtime instead of replacing it.
 
+## Start Here
+
+This repository is designed for humans collaborating with coding agents. Before changing code, read:
+
+1. [AGENTS.md](./AGENTS.md) - non-negotiable Harness, security, product, and UI rules;
+2. [CONTRIBUTING.md](./CONTRIBUTING.md) - setup, branch, migration, test, commit, and PR workflow;
+3. [Architecture Overview](./docs/architecture/overview.md) - technology stack and service boundaries;
+4. [AI-Assisted Collaboration](./docs/development/ai-collaboration.md) - shared vibe-coding and handoff rules;
+5. [Documentation Map](./docs/README.md) - feature-specific architecture and deployment documents.
+
+**Do not replace Codex App Server with a self-built agent loop or another orchestration framework.** Codex Harness owns threads, Turns, streaming items, tools, Skills, approvals, interruption, queueing, recovery, compaction, and multi-agent behavior.
+
 ## What Is Integrated
 
 - Starts `codex app-server --listen stdio://` as the local agent runtime.
@@ -18,7 +30,7 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Exposes provider-backed Web Search through the application-owned `commerce_web.search` MCP server, with real Harness `mcpToolCall` lifecycle events and cited source URLs. This remains available when old threads are resumed because it is managed runtime configuration rather than a `thread/start` dynamic-tool snapshot.
 - Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog instead of a configured-only flag, and transient provider timeouts receive one bounded MCP-internal retry.
 - Allows bounded multi-agent collaboration; subagents inherit the same restricted runtime policy.
-- Keeps the built-in local-path `view_image` tool disabled until images are tenant-scoped artifacts or App Server runs with a tenant-only artifact mount.
+- Keeps arbitrary local-path `view_image` disabled. Tenant-owned photos use the authenticated thread attachment pipeline and native App Server `localImage` inputs; browser events never receive host paths.
 - Enables an application-generated managed Hook runner for prompt, tool, compaction, stop, session, and subagent lifecycle policy/audit events; users cannot provide Hook commands.
 - Monitors App Server token-usage events and invokes native `thread/compact/start` at a configurable context threshold; no application-authored conversation summary loop is used.
 - Uses the App Server thread queue for running-turn submissions, including native add/list/update/delete operations. “调整方向” atomically moves one queue item into an application-owned durable FIFO pending-steer state, submits it through `turn/steer`, immediately interrupts the superseded turn, and resubmits the uncommitted steer as the next Harness turn.
@@ -28,8 +40,11 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 - Reserves direct, queue-steer, and context-compaction root-job leases under tenant-wide concurrency and projected token/request budgets; Codex multi-agent fan-out is separately capped at four threads per session by default.
 - Actively polls Enterprise authorization for running roots, reauthorizes host-tool calls, and interrupts active work plus clears queued input when access is revoked or the authorizer fails.
 - Provides an authenticated, read-only Commerce Plugin inventory inside the existing workbench shell, with `/plugins` as a direct entry point. Manifests describe application-managed skills, MCP servers, tools, UI, and security scope, while enablement is derived from live Gateway/MCP/Provider evidence. List controls open same-shell details; arbitrary package installation and host execution remain disabled. See [Commerce Plugin Runtime](./docs/architecture/commerce-plugin-runtime.md).
-- Provides a same-shell copywriting Task Recipe: users state a goal, answer only missing high-impact decisions through a Codex-inspired question UI, and receive an editable versioned artifact instead of a plan. Each job remains a native App Server thread; generation and revisions use `turn/start` with an application-owned `commerce-copywriting` Skill and a Gateway-fixed output schema. See [Commerce Copywriting Workflow](./docs/architecture/commerce-copywriting-workflow.md).
-- Provides a separate authenticated Skills inventory backed directly by App Server `skills/list`. Bundled Codex system skills remain enabled, so `skill-creator` is globally discoverable as the "创建技能" skill; browser responses omit host paths and cannot directly write Skill directories. See [Commerce Skill Runtime](./docs/architecture/commerce-skill-runtime.md).
+- Provides a same-shell conversational copywriting Task Recipe: users state a goal, the Harness asks only high-impact missing questions through native `request_user_input`, and the same Turn returns the requested copy or a direct answer rather than a plan or parallel form wizard. See [Commerce Copywriting Workflow](./docs/architecture/commerce-copywriting-workflow.md).
+- Provides a separate authenticated Skills inventory backed directly by App Server `skills/list`, explicit `@` selection in the shared composer, and native `$skill-name` + `skill` Turn inputs. The global `skill-creator` can publish instruction-only Skills through application validation, Enterprise-owner approval, and App Server readback. See [Commerce Skill Runtime](./docs/architecture/commerce-skill-runtime.md).
+- Supports tenant/thread/request-bound photos and bounded PDF, DOCX, XLSX, CSV, JSON, Markdown, and text attachments. Photos use native `localImage`; documents are safely extracted into bounded context. See [Thread Attachments](./docs/architecture/thread-attachments.md).
+- Permanently deletes tasks through a durable PostgreSQL background queue. App Server thread-tree deletion completes before generated images, uploads, extracted text, and application indexes are removed. See [Thread Deletion](./docs/architecture/thread-deletion.md).
+- Generates outcome-oriented titles with `gpt-5.3-codex-spark` and applies deterministic business-category correction before grouping recent tasks.
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
 
@@ -37,7 +52,7 @@ Commerce Pilot is currently an Enterprise-only B2B product. One customer company
 
 ## Requirements
 
-- Node.js 20+
+- Node.js 20.16+
 - npm
 - Docker with Compose for the provided local PostgreSQL environment, or an externally managed PostgreSQL database
 - OpenAI/Codex credentials or a compatible custom provider configured for the deployed app runtime
@@ -78,7 +93,7 @@ http://127.0.0.1:8787
 
 The browser frontend lives in `apps/web` and follows the design system in [designs/DESIGN.md](./designs/DESIGN.md). Authentication uses PostgreSQL-backed Better Auth sessions.
 
-Configure the runtime credential from `apps/web/.env.example` and the job-only owner credential from `apps/web/.env.migration.example`, start PostgreSQL, apply migrations `001-011`, and verify forced RLS:
+Configure the runtime credential from `apps/web/.env.example` and the job-only owner credential from `apps/web/.env.migration.example`, start PostgreSQL, apply all registered migrations, and verify forced RLS:
 
 ```bash
 npm run db:up
@@ -107,6 +122,12 @@ Copy `apps/web/.env.example` to an ignored `apps/web/.env` and `apps/web/.env.mi
 npm run web:dev
 ```
 
+Run the durable deletion worker in a third terminal. A web-process callback is not a replacement for this worker:
+
+```bash
+npm run jobs:thread-deletion
+```
+
 Default URL:
 
 ```text
@@ -125,6 +146,18 @@ Frontend checks:
 npm run web:check
 npm run web:test
 npm run web:build
+```
+
+Full pull-request validation:
+
+```bash
+npm run check
+npm run web:check
+npm run test:gateway
+npm run web:test
+npm run security:runtime
+npm run web:build
+git diff --check
 ```
 
 Production registration is Enterprise invitation-only and requires the exact invited work email. Invite bearer tokens use `/invite#token=...`; the browser moves the fragment into memory and immediately removes it from the address bar. `COMMERCE_ALLOW_PUBLIC_REGISTRATION=true` works only outside production for bootstrap/E2E. Email/SMS delivery interfaces remain disabled until explicitly configured, and the application never logs verification codes. See [docs/architecture/authentication.md](./docs/architecture/authentication.md).

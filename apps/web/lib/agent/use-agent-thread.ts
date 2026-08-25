@@ -20,6 +20,7 @@ import {
   type WebSource,
 } from "./web-sources";
 import type { TaskCategory } from "./task-category";
+import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "./skill-invocation";
 
 export type { QueuedMessage } from "./pending-input-state";
 
@@ -33,7 +34,23 @@ export type ConversationMessage = {
   clientId?: string | null;
   delivery?: "pending" | "committed";
   phase?: "commentary" | "final_answer" | null;
+  skillName?: string | null;
+  attachments?: ConversationAttachment[];
   status: "streaming" | "completed";
+};
+
+export type ConversationAttachment = {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  kind: "image" | "document";
+  url: string;
+};
+
+export type PendingAttachmentUpload = ConversationAttachment & {
+  file: File;
+  local: true;
 };
 
 export type AgentActivity = {
@@ -81,10 +98,13 @@ export type PendingRequestUserInput = {
   questions: RequestUserInputQuestion[];
   isBlocking: boolean;
   receivedAt: string;
+  action?: "skill.publish";
 };
 
 export type AgentSubmitOptions = {
   workflow?: "commerce-copywriting";
+  skillName?: string;
+  attachments?: PendingAttachmentUpload[];
 };
 
 export type AgentThreadSummary = {
@@ -344,7 +364,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setCompacting(true);
       }
       if (item.type === "userMessage") {
-        const content = readUserMessageText(item);
+        const explicitSkillMessage = readExplicitSkillMessage(readUserMessageText(item));
+        const content = readVisibleAttachmentMessage(explicitSkillMessage.content);
         const clientId = typeof item.clientId === "string" ? item.clientId : null;
         if (clientId) {
           pendingSteerRequestsRef.current.delete(clientId);
@@ -361,6 +382,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             turnId,
             nextSequence(sequenceRef),
             clientId,
+            explicitSkillMessage.skillName,
           );
         }
       } else if (item.type === "agentMessage") {
@@ -725,10 +747,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
 
   const submit = useCallback(
-    async (text: string, options?: AgentSubmitOptions) => {
+    async (text: string, options?: AgentSubmitOptions): Promise<boolean> => {
       const message = text.trim();
-      if (!message || status === "running" || status === "connecting") {
-        return;
+      const pendingAttachments = options?.attachments ?? [];
+      if ((!message && !pendingAttachments.length) || status === "running" || status === "connecting") {
+        return false;
       }
       setStatus("connecting");
       setError(null);
@@ -753,6 +776,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           role: "user",
           content: message,
           clientId: clientRequestId,
+          skillName: options?.skillName ?? null,
+          attachments: pendingAttachments.map(({ file: _file, local: _local, ...attachment }) => attachment),
           delivery: "pending",
           status: "completed",
         },
@@ -780,10 +805,24 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         }
 
         await connectEventStream(currentThreadId);
+        let uploadedAttachments = await uploadThreadAttachments(currentThreadId, clientRequestId, pendingAttachments);
+        if (uploadedAttachments.length) {
+          setMessages((current) => current.map((item) =>
+            item.id === optimisticMessageId ? { ...item, attachments: uploadedAttachments } : item,
+          ));
+        }
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/turns`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, model, effort, workflow: options?.workflow, clientRequestId }),
+          body: JSON.stringify({
+            message,
+            model,
+            effort,
+            workflow: options?.workflow,
+            skillName: options?.skillName,
+            attachmentIds: uploadedAttachments.map((attachment) => attachment.id),
+            clientRequestId,
+          }),
         });
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         if (!response.ok) {
@@ -812,10 +851,26 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             setImages([]);
             setMessages((current) => current.filter((item) => item.role === "user").slice(-1));
             await connectEventStream(replacementThreadId);
+            uploadedAttachments = await uploadThreadAttachments(
+              replacementThreadId,
+              clientRequestId,
+              pendingAttachments,
+            );
+            setMessages((current) => current.map((item) =>
+              item.role === "user" ? { ...item, attachments: uploadedAttachments } : item,
+            ));
             const retryResponse = await fetch(`/api/agent/threads/${encodeURIComponent(replacementThreadId)}/turns`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ message, model, effort, workflow: options?.workflow, clientRequestId }),
+              body: JSON.stringify({
+                message,
+                model,
+                effort,
+                workflow: options?.workflow,
+                skillName: options?.skillName,
+                attachmentIds: uploadedAttachments.map((attachment) => attachment.id),
+                clientRequestId,
+              }),
             });
             const retryPayload = (await retryResponse.json().catch(() => null)) as Record<string, unknown> | null;
             if (!retryResponse.ok) {
@@ -827,7 +882,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
               setMessages((current) => bindLatestUserMessageToTurn(current, retryTurnId));
             }
             setStatus("running");
-            return;
+            return true;
           }
           throw new Error(responseError);
         }
@@ -840,7 +895,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           }
           await refreshQueue(currentThreadId);
           setStatus("running");
-          return;
+          return true;
         }
         const turnId = readTurnId(payload);
         if (turnId) {
@@ -848,9 +903,12 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setMessages((current) => bindLatestUserMessageToTurn(current, turnId));
         }
         setStatus("running");
+        return true;
       } catch (submitError) {
+        setMessages((current) => current.filter((item) => item.id !== optimisticMessageId));
         setError(submitError instanceof Error ? submitError.message : "Agent 请求失败。");
         setStatus("failed");
+        return false;
       }
     },
     [activateTurn, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
@@ -1100,6 +1158,21 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         if (!response.ok) {
           throw new Error(readError(payload) || "无法提交答案。");
         }
+        const answerMessage = payload && typeof payload.answerMessage === "string"
+          ? payload.answerMessage.trim()
+          : "";
+        if (answerMessage) {
+          upsertUserMessage(
+            setMessages,
+            `user-input-answer-${pendingUserInput.requestId}`,
+            answerMessage,
+            pendingUserInput.turnId,
+            nextSequence(sequenceRef),
+          );
+        }
+        if (payload?.answerIndexed === false) {
+          setError("选择已提交，但暂时无法保存到对话记录。刷新后可能需要重新确认。");
+        }
         setPendingUserInput(null);
         return true;
       } catch (responseError) {
@@ -1257,6 +1330,7 @@ function upsertUserMessage(
   turnId: string | null,
   sequence: number,
   clientId: string | null = null,
+  skillName: string | null = null,
 ) {
   setter((current) => {
     const existing = current.find(
@@ -1271,6 +1345,7 @@ function upsertUserMessage(
               content,
               turnId,
               clientId: clientId ?? message.clientId,
+              skillName: skillName ?? message.skillName,
               delivery: "committed",
               status: "completed",
             }
@@ -1315,6 +1390,7 @@ function upsertUserMessage(
         content,
         variant,
         clientId,
+        skillName,
         delivery: "committed",
         status: "completed",
       },
@@ -1477,6 +1553,43 @@ function readError(payload: Record<string, unknown> | null): string | null {
   return payload && typeof payload.error === "string" ? payload.error : null;
 }
 
+async function uploadThreadAttachments(
+  threadId: string,
+  clientRequestId: string,
+  attachments: PendingAttachmentUpload[],
+): Promise<ConversationAttachment[]> {
+  if (!attachments.length) return [];
+  const formData = new FormData();
+  formData.set("clientRequestId", clientRequestId);
+  for (const attachment of attachments) formData.append("files", attachment.file, attachment.name);
+  const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/attachments`, {
+    method: "POST",
+    body: formData,
+  });
+  const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!response.ok || !payload || !Array.isArray(payload.attachments)) {
+    throw new Error(readError(payload) || "无法上传附件。");
+  }
+  const uploaded = payload.attachments.map(readConversationAttachment).filter(
+    (attachment): attachment is ConversationAttachment => Boolean(attachment),
+  );
+  if (uploaded.length !== attachments.length) throw new Error("附件服务返回了不完整的上传结果。");
+  return uploaded;
+}
+
+function readConversationAttachment(value: unknown): ConversationAttachment | null {
+  if (!isRecord(value)) return null;
+  const id = typeof value.id === "string" ? value.id : "";
+  const name = typeof value.name === "string" ? value.name : "";
+  const mimeType = typeof value.mimeType === "string" ? value.mimeType : "";
+  const size = typeof value.size === "number" ? value.size : -1;
+  const kind = value.kind === "image" || value.kind === "document" ? value.kind : null;
+  const url = typeof value.url === "string" ? value.url : "";
+  return id && name && mimeType && size >= 0 && kind && url
+    ? { id, name, mimeType, size, kind, url }
+    : null;
+}
+
 function readPendingRequestUserInputEvent(event: Record<string, unknown>): PendingRequestUserInput | null {
   if (!isRecord(event.params) || (typeof event.id !== "string" && typeof event.id !== "number")) {
     return null;
@@ -1529,6 +1642,7 @@ function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserI
     questions,
     isBlocking: value.isBlocking !== false,
     receivedAt: typeof value.receivedAt === "string" ? value.receivedAt : new Date().toISOString(),
+    action: value.action === "skill.publish" ? "skill.publish" : undefined,
   };
 }
 
