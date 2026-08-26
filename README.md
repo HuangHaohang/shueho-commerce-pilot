@@ -26,39 +26,27 @@ This repository is designed for humans collaborating with coding agents. Before 
 - Streams allowlisted Codex App Server notifications over SSE.
 - Fixes the model provider, runtime directory, permissions, and tool registry on the server; browser requests cannot override them.
 - Discovers text and image models from the application-owned CPA provider.
-- Uses Codex Harness `imageGeneration` Items as the sole image-artifact authority. The application-owned `rust-v0.150.1` Harness patch projects Provider-hosted Responses `image_generation_call` output into the same native Item lifecycle, including historical replay, without issuing a second Provider call. The actor-authorized relay injects the upstream credential and streams the single request; Gateway only persists completed Harness Items.
+- Uses the Codex host-tool protocol to expose `gpt-image-2` image generation inside agent turns.
 - Disables shell, unified exec, arbitrary local-path file tools, process network access, connectors, unmanaged MCP, plugins, and unmanaged Hooks.
 - Exposes provider-backed Web Search through the application-owned `commerce_web.search` MCP server, with real Harness `mcpToolCall` lifecycle events and cited source URLs. This remains available when old threads are resumed because it is managed runtime configuration rather than a `thread/start` dynamic-tool snapshot.
-- Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog and dedicated search model instead of a configured-only flag. Search failures return structured reasons to the Harness; any retry is a visible, shorter follow-up tool call rather than a hidden repeat of the same expensive query.
+- Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog instead of a configured-only flag, and transient provider timeouts receive one bounded MCP-internal retry.
 - Allows bounded multi-agent collaboration; subagents inherit the same restricted runtime policy.
 - Keeps arbitrary local-path `view_image` disabled. Tenant-owned photos use the authenticated thread attachment pipeline and native App Server `localImage` inputs; browser events never receive host paths.
 - Enables an application-generated managed Hook runner for prompt, tool, compaction, stop, session, and subagent lifecycle policy/audit events; users cannot provide Hook commands.
 - Monitors App Server token-usage events and invokes native `thread/compact/start` at a configurable context threshold; no application-authored conversation summary loop is used.
-- Uses the App Server thread queue for ordinary running-turn submissions, including native add/list/update/delete operations. An ordinary queued “调整方向” interrupts the superseded Turn, waits for authoritative `turn/completed`, and starts the same queued submission through `thread/queue/start`; no second pending-message store exists. Schema-constrained managed workflows are the explicit exception: active-Turn changes use native `turn/steer`, keep one stable `clientUserMessageId`, and wait for Harness readback because `thread/queue/*` cannot carry `outputSchema`.
-- Opens persisted tasks directly through concurrent `thread/read` and paginated history APIs without resuming execution or waiting for per-thread MCP readiness. The sidebar prewarms recent task status, switches selection immediately, cancels stale rapid-click loads, and performs resume/tool verification only before the next model Turn.
+- Uses the App Server thread queue for running-turn submissions, including native add/list/update/delete operations. “调整方向” atomically moves one queue item into an application-owned durable FIFO pending-steer state, submits it through `turn/steer`, immediately interrupts the superseded turn, and resubmits the uncommitted steer as the next Harness turn.
 - Implements an Enterprise-only organization, one-to-one isolation tenant, and workspace foundation with invitation-only registration, members, workspace lifecycle, invitation revocation, tenant audit reads, direct/group roles, explicit-deny precedence, contracts, seats, quotas, and tenant-scoped thread ownership.
-- Enforces business-data isolation through authenticated BFF scope, tenant-pinned Gateway principals, a non-`BYPASSRLS` runtime role, forced PostgreSQL RLS, validated tenant/workspace compound foreign keys, live RBAC, audit and readback. See [Enterprise Data Isolation And Security](./docs/architecture/data-isolation.md).
 - Pins each production Gateway/App Server/`CODEX_HOME` to one Enterprise tenant; tenant, workspace, and user scope are resolved by the authenticated BFF and cannot be selected by the browser.
-- Records exact Codex 0.150.1 Harness usage, including native image generation, plus source-attributed MCP/Web Search usage and explicit missing-usage status through a durable outbox/dead-letter pipeline and idempotent PostgreSQL ledger.
+- Records exact Codex 0.149 Harness usage plus source-attributed MCP/Web Search/image usage, including explicit missing-usage status, through a durable outbox/dead-letter pipeline and idempotent PostgreSQL ledger.
 - Reserves direct, queue-steer, and context-compaction root-job leases under tenant-wide concurrency and projected token/request budgets; Codex multi-agent fan-out is separately capped at four threads per session by default.
 - Actively polls Enterprise authorization for running roots, reauthorizes host-tool calls, and interrupts active work plus clears queued input when access is revoked or the authorizer fails.
 - Provides an authenticated, read-only Commerce Plugin inventory inside the existing workbench shell, with `/plugins` as a direct entry point. Manifests describe application-managed skills, MCP servers, tools, UI, and security scope, while enablement is derived from live Gateway/MCP/Provider evidence. List controls open same-shell details; arbitrary package installation and host execution remain disabled. See [Commerce Plugin Runtime](./docs/architecture/commerce-plugin-runtime.md).
 - Provides a same-shell conversational copywriting Task Recipe: users state a goal, the Harness asks only high-impact missing questions through native `request_user_input`, and the same Turn returns the requested copy or a direct answer rather than a plan or parallel form wizard. See [Commerce Copywriting Workflow](./docs/architecture/commerce-copywriting-workflow.md).
-- Provides a three-pane Creative Space that maps each project to one persisted Codex thread. A closed, application-managed method registry adds native specialist Skill Items for Campaign asset packs, four-layer creative QA, listing copy, promotion copy, main images, gallery images, detail pages, shooting scripts, and short-video storyboards while the project Skill keeps Harness ownership of the conversation. Campaign packs materialize a brief, claim matrix, channel-derivative matrix and product/claim/brand/channel QA gates on the same canvas. Completed Harness Items materialize into tenant-owned document, native-image-plus-text-layer, and script/table nodes; application tables persist layout and append-only manual revisions without replacing conversation history or native image artifacts. Main/gallery image Turns are admitted only with an explicitly selected Product revision and a tenant-owned image attachment. Incomplete deep-history reads upsert safely and visibly retain unloaded assets rather than deleting them. Rendered video remains explicitly disabled until a governed application video tool, approval, asynchronous job, tenant artifact, and readback exist. See [Creative Space Workbench](./docs/architecture/creative-space-workbench.md).
-- Provides a workspace-owned Product Catalog plugin with immutable CSV/JSON source records, AI-assisted closed-schema mapping, append-only Product/SPU and Variant/SKU revisions, a composer product-context picker, and application-owned Harness tools that retrieve bounded canonical product context without copying the catalog into conversation history. New companies can also discover connectors, upload a thread-bound CSV/JSON artifact, create a source configuration, run a governed connection test, inspect/map/validate an import, and request approved publication inside the same Harness conversation; unavailable API/ERP/PIM synchronization is reported explicitly rather than simulated. See [Commerce Product Catalog](./docs/architecture/product-catalog.md).
-- Provides a separate authenticated Skills inventory backed directly by App Server `skills/list`, explicit `@` selection in the shared composer, and native unmodified text + `skill` Turn inputs. The global `skill-creator` can publish instruction-only Skills through application validation, Enterprise-owner approval, and App Server readback. See [Commerce Skill Runtime](./docs/architecture/commerce-skill-runtime.md).
+- Provides the phase-one Creative Space shell with My Work, content-project browsing and mock creation, a free chapter index, Inspiration & Cases, and an AI Toolbox that preserves the existing copywriting Recipe. Phase-one project data is explicitly in-memory and not persisted. See [Creative Space Foundation](./docs/architecture/creative-space-foundation.md).
+- Provides a separate authenticated Skills inventory backed directly by App Server `skills/list`, explicit `@` selection in the shared composer, and native `$skill-name` + `skill` Turn inputs. The global `skill-creator` can publish instruction-only Skills through application validation, Enterprise-owner approval, and App Server readback. See [Commerce Skill Runtime](./docs/architecture/commerce-skill-runtime.md).
 - Supports tenant/thread/request-bound photos and bounded PDF, DOCX, XLSX, CSV, JSON, Markdown, and text attachments. Photos use native `localImage`; documents are safely extracted into bounded context. See [Thread Attachments](./docs/architecture/thread-attachments.md).
 - Permanently deletes tasks through a durable PostgreSQL background queue. App Server thread-tree deletion completes before generated images, uploads, extracted text, and application indexes are removed. See [Thread Deletion](./docs/architecture/thread-deletion.md).
 - Generates outcome-oriented titles with `gpt-5.3-codex-spark` and applies deterministic business-category correction before grouping recent tasks.
-- Connects Codex Harness to the independent SHUEHO External Data MCP service; the Gateway never connects to JustOneAPI MCP. The service calls allowlisted JustOneAPI REST APIs, while Commerce Pilot retains approval, RBAC, quota, audit and billing ownership. Paid calls remain exact-once and uncertain results are never retried automatically.
-- Persists complete provider response text and JSON in the independent SQL-only raw warehouse, normalizes every returned Taobao item/brand/property/value/page/trace record, and promotes only quality-checked, locally scored evidence to the business layer. See [SHUEHO External Data Service](./docs/architecture/external-data-service.md).
-- Imports the complete official JustOneAPI documentation/OpenAPI catalog into immutable SQL receipts, joins it to the official pricing snapshot, and drives all GET/POST query/form calls through one database-configured adapter. Generic source collections and records preserve every returned list/item for endpoints without a specialized normalizer.
-- Runs a separate bearer-authenticated Commerce Pilot Streamable HTTP MCP server for external clients. Customer MCP Tokens are hashed, workspace-bound and intersected with live RBAC; customers never receive the JustOneAPI Token. See [External Data MCP And Governance](./docs/architecture/external-data-mcp.md).
-- Provides one Product Insights workbench backed by the Codex Harness, with fixed application-managed Skills for market research, new-product development, and product retrospective. The browser submits only an allowlisted `insightMethod`; BFF/Gateway own the Recipe and native Skill Items, while every task continues in one persisted Harness thread with the shared composer, Product selector, history, questions, approvals, and evidence UI. Every report now returns an explainable dimension-level Scorecard, a proposed `proceed / validate / hold / insufficient_evidence` decision Gate, and bounded experiments with success and stop conditions. Report receipts are reconciled against same-Turn Harness tool activity; model-only or mismatched receipts remain visibly unverified and cannot acquire a verified state. Only accepted review evidence may support a buyer-pain conclusion. The company-operating-evidence lane is disabled until a governed source exists, and an uploaded operating report remains unverified context rather than an enterprise metric.
-- Exposes `list_marketplace_research_platforms`, `get_marketplace_options`, free `plan_marketplace_research`, paid `execute_marketplace_research`, `research_social_content`, `search_business_data` and `get_research_result` to new Harness threads. A ready marketplace plan is persisted under Enterprise RLS, pinned to immutable catalog/workflow/market-profile revisions, expires after 30 minutes, includes a control-plane quote, and is the only accepted input to paid execution. Legacy `research_marketplace_products` calls remain server-handled only for already-persisted tool contracts.
-- Resolves marketplace identifiers inside database-driven business workflows. Discovery now selects a bounded, title/shop-diversified representative sample from quality-promoted products and materializes an independent detail/price/review/SKU step instance for each target. Every actual provider step keeps its own approval, reservation, exact-once call id, raw archive and billing settlement; known failure of one representative does not replay it or erase independent completed evidence.
-- Imports versioned platform-market search-language profiles separately from provider endpoint enums. The profile receipt supplies BCP-47 query locales, accepted languages/scripts, timezone, currency, localization policy, sample bounds and quality thresholds. Unsupported markets never appear merely because a profile exists; officially enumerated markets without an active profile fail closed.
-- Places copy, positive, and negative actions below every completed final Agent reply. Ratings are revalidated against authoritative Harness message ids, stored under Enterprise RLS as current state plus append-only events, and never routed through Codex's diagnostic `feedback/upload` API.
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
 
@@ -69,8 +57,6 @@ Commerce Pilot is currently an Enterprise-only B2B product. One customer company
 - Node.js 20.16+
 - npm
 - Docker with Compose for the provided local PostgreSQL environment, or an externally managed PostgreSQL database
-- `uv` and Python 3.11-3.13 for the local Qwen3 retrieval service
-- Apple Silicon with Metal/MPS for the provided local Qwen3 setup; production may use a dedicated compatible GPU worker
 - OpenAI/Codex credentials or a compatible custom provider configured for the deployed app runtime
 
 The app uses the dependency-managed Codex binary by default:
@@ -93,41 +79,7 @@ This starts Codex App Server over stdio, initializes it, reads diagnostics/confi
 npm run smoke:codex
 ```
 
-Verify that Codex exposes native `image_gen` only after actor authorization, without calling a real image Provider:
-
-```bash
-npm run smoke:image-tool
-```
-
-Commerce Pilot also carries a reviewed source patch for the pinned open-source Harness. Build or install the manifest-verified application runtime before testing the hosted Responses image path:
-
-```bash
-npm run codex:runtime:build
-npm run codex:runtime:verify
-```
-
-The built binary, manifest, upstream license/notice and patch sources live under ignored `.runtime/bin/<platform>`. Production never falls back to the npm binary when the managed runtime is absent or fails integrity verification.
-
 ## Run The Gateway
-
-Start and migrate the independent external-data infrastructure, then run the local retrieval models and SHUEHO MCP in separate terminals:
-
-```bash
-npm run external-data:infra:up
-npm run external-data:migrate
-npm run external-data:import-catalog
-npm run external-data:import-market-profiles
-npm run external-data:import-business-workflows
-npm run external-data:models:sync
-npm run external-data:models:download
-npm run external-data:models
-npm run external-data:dev
-```
-
-The JustOneAPI REST Token belongs only in ignored `apps/external-data/.env`. Gateway `.env` receives only `EXTERNAL_DATA_SERVICE_MCP_URL` and the separate internal MCP token.
-`external-data:import-catalog` is a one-shot operator job: it requires the independent warehouse migration credential and read access to the immutable Commerce Pilot pricing catalog. The long-running external-data service must not receive the Commerce Pilot migration credential.
-
-Then run the Gateway:
 
 ```bash
 npm run dev
@@ -149,7 +101,6 @@ Configure the runtime credential from `apps/web/.env.example` and the job-only o
 npm run db:up
 npm run auth:migrate
 npm run enterprise:verify-isolation
-npm run enterprise:verify-external-data
 ```
 
 `DATABASE_URL` is the non-superuser, non-`BYPASSRLS` web role. `MIGRATION_DATABASE_URL` lives only in `.env.migration` or a migration/provisioning job secret; it must not exist in the long-running Web environment. Production fails closed when these boundaries are not satisfied.
@@ -173,45 +124,11 @@ Copy `apps/web/.env.example` to an ignored `apps/web/.env` and `apps/web/.env.mi
 npm run web:dev
 ```
 
-Run the separate public MCP listener when testing an external MCP client:
-
-```bash
-npm run dev:mcp
-```
-
-It listens on `http://127.0.0.1:8790/mcp` by default and requires a Commerce Pilot MCP Access Token created in Enterprise settings. It remains unavailable until the BFF control callbacks and private SHUEHO external-data MCP credential are configured; no vendor Token is accepted from browser or MCP tool arguments.
-
 Run the durable deletion worker in a third terminal. A web-process callback is not a replacement for this worker:
 
 ```bash
 npm run jobs:thread-deletion
 ```
-
-The worker is tenant-dedicated and requires the same valid `COMMERCE_RUNTIME_TENANT_ID` pin as its Gateway. It uses only the runtime `DATABASE_URL`; do not provide or mount `.env.migration` for this long-running process.
-
-Run the tenant-pinned external-data retention worker when JustOneAPI governance is enabled:
-
-```bash
-npm run jobs:external-data-retention
-```
-
-Run the tenant-pinned Product Catalog retention worker to enforce contract storage budgets and scrub expired, non-held raw import payloads while preserving hashes, lineage, canonical revisions, and audit evidence:
-
-```bash
-npm run jobs:product-import-retention
-```
-
-It removes only expired terminal call-ledger rows, preserves unresolved calls and legal holds, and writes a summary audit event.
-
-Import a complete official JustOneAPI pricing export before enabling monetary budgets. The import is SHA-256 idempotent, validates the exact workbook schema, derives stable `endpoint_id` values from official REST paths, and replaces the active provider snapshot without editing application code:
-
-```bash
-npm run enterprise:import-justoneapi-pricing -- \
-  --file=/absolute/path/justoneapi-pricing.xlsx \
-  --actor-email=owner@example.com
-```
-
-Official provider prices become the default vendor and customer unit price. Workspace rate cards are optional customer-pricing overrides.
 
 Default URL:
 
@@ -237,27 +154,12 @@ Full pull-request validation:
 
 ```bash
 npm run check
-npm run codex:runtime:test
-npm run external-data:check
-npm run external-data:test
-npm run external-data:evaluate
-npm run external-data:verify:catalog
 npm run web:check
 npm run test:gateway
 npm run web:test
 npm run security:runtime
 npm run web:build
-npm run enterprise:verify-isolation
-npm run enterprise:verify-external-data
-npm run external-data:migrate
-npm run external-data:verify
 git diff --check
-```
-
-To repair only the normalization or enrichment stage of an already archived provider response, without dispatching another provider call:
-
-```bash
-npm run external-data:repair:research -- --research-request-id=<warehouse-research-uuid>
 ```
 
 Production registration is Enterprise invitation-only and requires the exact invited work email. Invite bearer tokens use `/invite#token=...`; the browser moves the fragment into memory and immediately removes it from the address bar. `COMMERCE_ALLOW_PUBLIC_REGISTRATION=true` works only outside production for bootstrap/E2E. Email/SMS delivery interfaces remain disabled until explicitly configured, and the application never logs verification codes. See [docs/architecture/authentication.md](./docs/architecture/authentication.md).
@@ -328,9 +230,9 @@ name = "Luusmosh CPA"
 base_url = "https://cpa.luusmosh.com/v1"
 env_key = "COMMERCE_PROVIDER_API_KEY"
 wire_api = "responses"
-request_max_retries = 0
-stream_max_retries = 0
-stream_idle_timeout_ms = 120000
+request_max_retries = 4
+stream_max_retries = 10
+stream_idle_timeout_ms = 300000
 ```
 
 The browser selects only the model. Provider identity and runtime policy remain server-owned:
@@ -343,13 +245,13 @@ The browser selects only the model. Provider identity and runtime policy remain 
 
 Thread titles are generated after the first completed result by the dedicated `COMMERCE_TITLE_MODEL` (default `gpt-5.3-codex-spark`). The Gateway reads the authoritative App Server history, generates an outcome-oriented title through the configured provider, calls App Server `thread/name/set`, and updates the tenant-scoped thread index. The browser cannot submit a title or choose the title model. See [Commerce Thread Titles](./docs/architecture/commerce-thread-titles.md).
 
-The Gateway consumes only Harness `imageGeneration` Items; it does not expose `commerce_image.generate` or a direct image-generation HTTP route. The patched Harness supports both the namespace extension path and a Provider-hosted Responses `image_generation_call`, but always emits the same native Item before Gateway persistence. Native image bytes and host paths are stripped before browser fan-out, while completed files are stored under the tenant-owned `$CODEX_HOME/generated_images` and served only through ownership-checked artifact reads. Usage remains part of the original Harness response stream, and an uncertain Responses request is never replayed automatically.
+The gateway exposes `gpt-image-2` only as the Codex-hosted `commerce_image.generate` tool; no direct image-generation HTTP route exists. Authenticated artifact reads still verify thread ownership. Generated files are stored under the tenant-owned `$CODEX_HOME/generated_images`, provider keys remain server-side, and image-provider usage is recorded separately.
 
 Generated-image artifact metadata is stored separately under `$CODEX_HOME/generated_image_metadata` and binds each immutable filename to its originating thread and turn. For installations that created images before this metadata existed, run `npm run backfill:image-artifacts` once before serving restored history.
 
 Web Search is the application-owned `commerce_web.search` MCP tool. App Server launches the fixed stdio server from app-owned config, exposes only its read-only `search(query)` contract, and receives normal `mcpToolCall` events. The MCP server calls the configured provider's OpenAI-compatible `/v1/responses` Web Search capability and returns cited sources. Because MCP configuration is loaded by the runtime when a thread is resumed, conversations created before Web Search was added receive it without history migration. Native `web_search = "live"` remains enabled when the provider supports it, and the old dynamic-tool handler remains compatibility-only for threads that already persisted that definition.
 
-Gateway calls App Server `config/mcpServer/reload` at startup, then requires `mcpServerStatus/list` to contain `commerce_web.search`; startup and thread operations fail closed otherwise. `COMMERCE_WEB_SEARCH_MODEL` selects the dedicated sourced-search model (`gpt-5.6-luna` by default); the default 30-second provider timeout and one attempt keep failures bounded and visible to the Harness. `npm run smoke:web-search` verifies the complete Gateway → App Server → model → MCP → provider → cited-answer path.
+Gateway calls App Server `config/mcpServer/reload` at startup, then requires `mcpServerStatus/list` to contain `commerce_web.search`; startup and thread operations fail closed otherwise. Configure provider retry bounds with `COMMERCE_WEB_SEARCH_TIMEOUT_MS` and `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS`. `npm run smoke:web-search` verifies the complete Gateway → App Server → model → MCP → provider → cited-answer path.
 
 See [docs/config/custom-model-provider.md](./docs/config/custom-model-provider.md) for details.
 

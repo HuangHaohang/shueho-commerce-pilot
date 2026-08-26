@@ -40,32 +40,15 @@
 必须包含：
 
 - `NewTask` 或等价新工作入口。
-- `ProductInsights` 或等价商品决策入口；内部承载市场调研、新品开发和产品复盘三个固定 Skill。
+- `MarketResearch` 或等价市场调研入口。
 - `CreativeSpace` 或等价创作空间入口。
 - `KnowledgeBase`。
 - `More`，内部收纳 `Scheduled`、`Plugins` 和 `Skills`，不得把这些入口同时放在一级导航。
-- `More > Plugins` 必须在现有工作台壳内打开插件目录；桌面侧栏、最近任务与账号区保持稳定，只替换主内容区。`/plugins` 仅作为可直达入口，并复用同一工作台壳，不得另造独立页面框架。目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；列表项加号用于进入同壳详情视图，不代表安装成功。所有应用托管条目必须复用同一个 `PluginListItem` 和同一个详情骨架；条目容器按可用内容宽度自适应为一、二或三列，不能因奇数项留下半幅分割线，加载 skeleton 必须使用相同列规则。详情中的组件类型和动作名称使用中文主标题，例如“服务 / 搜索公开网页”；`commerce_web.search`、`image_gen` 和其他协议标识只能作为小号等宽副标题。第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
-- 产品库插件详情提供真实“通过对话接入”和“管理产品库”入口：前者返回现有公共 composer、预填普通用户可读的接入目标，并在首次及后续 Turn 使用固定 `commerce-product-onboarding` Harness workflow；后者进入同壳 `ProductLibraryWorkspace`。不得另建聊天状态或在插件详情里放置假上传表单。
+- `More > Plugins` 必须在现有工作台壳内打开插件目录；桌面侧栏、最近任务与账号区保持稳定，只替换主内容区。`/plugins` 仅作为可直达入口，并复用同一工作台壳，不得另造独立页面框架。目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；列表项加号用于进入同壳详情视图，不代表安装成功。第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
 - `More > Skills` 与插件入口分离，技能目录必须来自 App Server `skills/list`，不得从插件 manifest 推导。`skill-creator` 作为 Codex 系统技能全局可见；浏览器不得获得技能宿主路径，也不得直接写入任意 Skill 目录。
-- `Product Insights` 使用现有工作台 shell、公共 `AgentComposer` 和 Harness 会话，不另造表单式研究流程。首屏以三个紧凑、扁平的业务 Skill 选项承载“市场调研 / 新品开发 / 产品复盘”；每项只显示图标、中文标题和一行短副标题，不显示 `commerce-*` 协议名、选择要求或额外状态行。选择仅更新方法、placeholder 和建议任务，不自动发送，也不得显示或拼接 Skill body、path、tool schema、output schema 或隐藏 Prompt。
-- 三个 Skill 下方显示与真实输出合同一致的四阶段只读轨道：市场调研为范围/事实/证据/Scorecard-Gate，新品开发为机会/概念/评分/验证，产品复盘为版本/证据/假设/行动 Gate。轨道不是前端自建工作流状态机，不允许点击跳过 Harness 步骤，也不表示数据已读取或动作已执行。
-- 浏览器只提交固定 workflow `commerce-product-insight` 与闭合 `insightMethod=market_research | new_product_development | product_retrospective`。BFF 将其一对一持久化为同名 Recipe；一个 thread 创建后不得切换方法。Gateway 自行解析总控 Skill 与专业 Skill 的 App Server 路径，并用原生 `skill` Items 启动同一个 Harness Turn。兼容历史 `market_research + commerce-market-research`，但新入口统一使用商品决策工作流。
-- 三个 Skill 都复用公共产品库 selector、附件、访问策略、模型、问题面板、审批、历史和证据 UI。市场调研与新品开发允许从品类 `auto` 开始，也可选择产品；产品复盘必须选择至少一个产品。复盘使用的 CSV/XLSX/报表附件只标记为待核验上下文，在受控经营数据源没有真实接入和回执时不得冒充企业指标、ROI、绩效或已证实根因。
-- 选中产品后，首屏标题、placeholder 和建议任务必须转为该产品的机会验证、新品延伸或复盘目标。历史商品决策任务根据持久 Recipe 恢复固定方法；已发送产品必须只恢复到其所属 Turn 的首条用户消息，不得重新填回 composer。浏览器不得保存第二份产品快照，也不得从消息正文猜测产品或方法。
-- 商品决策报告使用同一结构化投影：产品事实、市场证据、AI 对比推断和待验证假设使用不同标签；每条结论和建议动作提供可展开的产品事实/市场证据引用。每份新报告还必须呈现可解释 Scorecard 分项、建议态 `继续推进 / 小规模验证 / 暂停 / 证据不足` Gate，以及带成功信号和停止条件的待执行实验。总分不能替代分项证据，缺失经营、成本、供应链或利润证据的维度必须显示 unavailable。当前没有受控企业经营数据工具，`company_metric` 不得进入 Harness Schema，保留的 `companyEvidenceRefs` 必须为空，UI 也不得显示假经营指标。
-- 商品决策入口显示公开网页与外部数据连接状态；用户只描述业务目标，由 Harness 自主判断外部数据是否能实质改善结果，不要求用户点名 JustOneAPI、接口或工具，也不得因工具可用就无意义地产生费用。外部 API 权限菜单提供“每次询问 / 本任务内允许 / 按企业策略自动调用”：每次询问在实际收费调用前确认，本任务授权在企业最高自动化等级内直接执行且离开任务后自动失效，企业策略档按白名单、费率、预算和自动批准上限执行。任何档位都不得暗示电脑控制、本机文件或任意网络访问。
-- 免费计划和执行结果只显示安全业务投影。超宽桌面在右侧输出区展示研究证据，较窄桌面和移动端使用同一 `Sheet` 入口；两种布局必须提供等价回执，不得展示 provider endpoint、raw archive、作者、原始响应、内部 workflow id 或供应商成本。
-- 报告正文中的 receipt 是模型生成的引用摘要，不能覆盖同一 `researchRequestId` 的 Harness 工具回执。报告正文和证据面板都必须让同 Turn 实际工具回执优先；只有报告引用而没有任务工具回读时，明确标记为“尚未核对”，数量不一致时显示 mismatch 并使用工具投影，不得使用已验证视觉状态。
-- 一级导航“商品决策”是新建入口，不是当前视图选中开关，因此不得显示持续选中背景；只保留 hover 与键盘焦点反馈。无论用户正在查看普通任务还是商品决策历史任务，单击都必须先显示干净的商品决策 Skill 选择界面，再以非阻塞 transition 清理旧 thread、未提交输入和任务级授权；历史任务只能通过“最近”列表重新打开。
-- 新 Harness 线程只看到业务级外部数据工具：`research_social_content`、`plan_marketplace_research`、`execute_marketplace_research`、`search_business_data` 和 `get_research_result`。市场选项及查询语言来自免费目录工具；供应商端点、Schema、排序值和原始参数只存在于内部控制面。计划成功时可展示市场、语言、代表样本数、预计调用次数和计费报价，但不得展示供应商端点；执行只提交 `plan_id`。能力缺口必须按 Harness 原生 `success:false + contentItems` 返回精确原因，禁止静默放宽、网页兜底或伪造成功。
-- 市场目录不得向模型暴露内部质量阈值、档案 UUID/修订或代表样本最大值。额度报价要求降低覆盖率时，必须使用 App Server 原生 `request_user_input` 卡片一次性确认；禁止先用普通 Agent 回复列 `1/2` 编号选项，再让用户发送数字形成第二个 Turn。
-- 完整 JustOneAPI 请求和响应属于 SQL-only 企业数据仓，不是前端资料库功能。任何浏览器页面、普通 BFF 路由、下载按钮或公共 MCP 读取工具都不得展示或导出原始归档；现有企业设置只显示调用与计费元数据。
-- Composer 的添加目录、访问权限和模型设置共用一个互斥弹层状态；打开任意一个必须关闭另外两个，输入 `@` 自动打开技能目录时也必须关闭访问与模型弹层。禁止出现多个上拉列表叠放。
-- 插件和技能目录不得在工作台顶部重复显示独立的“插件/技能”标题栏；保留目录内部 H1，让主内容直接占用可用高度。详情页的返回导航不受此规则影响。
-- 技能详情提供“立即使用”，点击后返回现有“新任务”公共 composer 并预选该技能，不得打开另一套任务输入框。首屏与会话 composer 通过统一的 `+` 菜单和输入 `@` 打开技能目录，并支持名称筛选、方向键和回车选择。选择结果显示为带技能图标的独立标签，插件标签与技能标签不得混用同一语义。
+- 技能详情提供“立即使用”，点击后返回现有“新任务”公共 composer 并预选该技能，不得打开另一套任务输入框。首屏与会话 composer 都提供独立的技能图标；输入 `@` 时在 composer 上方显示技能目录并支持名称筛选、方向键和回车选择。选择结果显示为带技能图标的独立标签，插件标签与技能标签不得混用同一语义。
 - 前端选择只提交 `skillName`。Gateway 必须通过 `skills/list(forceReload)` 重新解析已启用技能，并按 Codex 显式调用规范同时提交 `$skill-name` 文本标记和原生 `skill` input item；浏览器不得提交 path。执行标记不得作为用户正文显示，刷新后的历史必须保留原始文本和技能标签。
-- 点击发送时，已选 Skill 必须立即从 composer 迁移到乐观用户气泡；`turn/start` 失败时才恢复到 composer。托管 Task Recipe 也必须在乐观消息中显示其实际调用的 Skill，不能等 Harness 历史回读后才补标签，更不能让同一标签同时停留在输入框和用户消息中。
-- 创建技能时复用全局问答面板的视觉组件，但协议必须分开：模型问题只能来自 App Server `item/tool/requestUserInput`，`commerce_skill.publish` 的最终写入确认来自应用事件 `commerce/approval/requested`。用户确认前原始 `item/tool/call` 保持等待，取消不得产生 Skill；不得伪造 Harness server request。当前 tenant 共享目录仅允许拥有 `tenant.manage` 的企业所有者发布；发布完成后以 `skills/list(forceReload)` 回读为成功依据。
+- 创建技能时复用全局 Harness `request_user_input` 问答面板。`commerce_skill.publish` 的最终写入必须显示应用拥有的发布确认；用户确认前工具保持等待，取消不得产生 Skill。当前 tenant 共享目录仅允许拥有 `tenant.manage` 的企业所有者发布；发布完成后以 `skills/list(forceReload)` 回读为成功依据。
 - Account/workspace footer。
 
 交互：
@@ -74,14 +57,13 @@
 - 品牌头、五个一级导航项和账户区必须 `shrink-0`，任务数量增加时不得压缩高度；只有“最近任务分类”区域使用 `min-h-0 overflow-y-auto overscroll-contain`。侧栏根节点和一级导航区不得出现滚动条。
 - 点击历史任务只更新 active 背景，不得刷新任务的最近活动时间或改变分类内顺序；只有用户提交新 Turn 等真实任务活动才能将任务置顶。
 - 每个历史任务行必须提供独立的永久删除图标；“最近”标题提供批量删除模式。删除前显示不可恢复确认，确认后只创建后台 Job，删除中的行显示 spinner。不得用 `thread/archive`、隐藏列表项或仅删除数据库索引来冒充删除完成。
-- 后台删除遇到可恢复的 Gateway 认证或可用性故障时，任务行保持删除中并由 Worker 退避重试；只有明确的永久失败才恢复普通行并显示可关闭的错误提示。成功必须以 App Server 删除、附件清理和线程索引删除全部完成为准。
 - hover 使用 `--cp-surface-hover`。
 - active 不使用亮色背景。
 - 图标和文字间距 `10px - 12px`。
 - `More` 使用从侧栏右侧弹出的独立菜单，不在侧栏内部向下展开。
-- `CreativeSpace` 是直接入口，不打开二级生成器菜单；点击后进入三栏创作工作台。
-- 进入创作空间后，全局侧栏替换为项目侧栏；项目侧栏必须提供返回主工作台、新建项目和租户范围内的创作项目列表。
-- `More` 弹出菜单使用 `--cp-radius-popover`、轻边框和 `--cp-shadow-popover`，并提供 `aria-expanded`、`aria-haspopup` 与 menu roles；点击菜单外、按 `Escape` 或选择菜单项时关闭。
+- `CreativeSpace` 直接进入同壳的“我的创作”默认首页，不再通过侧栏 flyout 暴露 AI 工具。创作空间内部使用轻量横向文字导航承载 `我的创作`、`内容项目`、`灵感与案例`、`AI 工具箱`，不得增加第二套全局 Sidebar。
+- `More` 弹出菜单使用 `--cp-radius-popover`、轻边框和 `--cp-shadow-popover`，并提供 `aria-expanded`、`aria-haspopup` 与 menu roles。
+- 点击菜单外、按 `Escape` 或选择菜单项时关闭弹出菜单。
 - 登录用户的“最近”列表来自服务端 thread 索引并按更新时间倒序显示；选中项映射到真实 Codex thread id。
 - 所有普通对话和 Task Recipe 的显示标题必须在首个结果完成后由服务端固定的 `gpt-5.3-codex-spark` 生成；前端截断原始 prompt 只能显示临时“新任务”，不得持久化为最终标题。生成结果同步写入 App Server `thread/name/set` 与租户线程索引。
 - Task Recipe 身份使用独立 `recipeId` 元数据，不能从模型生成标题或标题前缀推断。
@@ -91,53 +73,7 @@
 - 点击历史记录必须经过用户所有权检查并用 App Server `thread/read` 恢复 turns；刷新页面自动恢复最近 thread，不得只依赖浏览器内存。
 - 用户可以让多个不同 thread 并行运行；侧栏中 `running` thread 必须在标题右侧显示小型旋转图标。离开运行中的 thread 只取消当前页面 SSE 订阅，不得调用 interrupt。
 - 同一个 thread 仍只允许一个 active turn；切回运行中的 thread 时恢复消息、active turn、计时和停止按钮，并重新订阅后续事件。
-- 新 turn 启动前，Gateway 必须用 `thread/read` 与 Harness 对账 active turn，不能只相信进程内缓存。缓存残留但 Harness 已 idle 时清除残留并启动；Harness 仍有 active turn 时，普通输入转成原生 `thread/queue/add` 并在 composer 上方显示队列。带固定 output schema 的托管工作流不得进入不支持该字段的 queue；它必须通过原生 `turn/steer` 调整当前 Turn。不得向用户暴露英文 `Thread already has an active turn` 错误。每个 thread 的启动对账和 `turn/start` 必须串行化，避免并发双启动。
-
-## CreativeSpaceWorkbench
-
-职责：
-
-- 桌面端组织“项目侧栏 / 创作画布 / Harness 对话”三栏结构。
-- 一个创作项目严格对应一个持久 Codex thread；项目对话、Turn、Item、队列、停止、恢复和压缩均由 App Server 管理。
-- 项目侧栏只读取租户/工作区/用户范围内 `recipe_id=creative_project` 或兼容 `recipe_id=copywriting` 的 thread 索引；禁止用分类或标题猜测 Recipe；运行中项目显示轻量 spinner。
-- 中央区域使用无限画布承载真实交付节点。Harness 完成 Item 是 Agent 产出来源；应用只保存节点、布局、视口、消息引用和追加式人工修订，不保存第二套对话或执行状态。
-- 节点类型固定为文案、原生图片加文字图层、脚本表格。没有最终交付物时保持真正空白，不用示例卡片、伪画布节点或营销 empty state 填充；窄屏下空白画布不占固定高度，避免把 Harness composer 推到首屏之外。
-- 右侧对话复用标准 `ConversationWorkspace`、`AgentComposer`、Harness 问题面板和审批面板；不得创建第二套消息数组、prompt loop 或 WebSocket。
-
-Harness 契约：
-
-- 新项目首次提交使用固定 `commerce-creative-project` workflow，由 Gateway 解析应用托管 Skill 路径和固定 output schema。
-- 用户通过业务模板选择“Campaign 资产包 / 商品标题与文案 / 推广文案 / 商品主图 / 副图与场景图 / 商品详情页 / 产品拍摄脚本 / 短视频分镜 / 创作合规检查”；模板只提交闭合 `creativeMethod`，Gateway 将其映射到应用托管专业 Skill。前端不得拼接隐藏 Prompt、Skill 路径或 output schema。
-- 浏览器不得直接提交 `recipeId`；BFF 将固定 workflow 映射为 `recipe_id=creative_project` 与 `category=creative`。
-- 后续 Agent 修改在同一 thread 中进行：idle 时启动新 Turn，active 时通过原生 `turn/steer` 调整同一个 schema-constrained Turn；人工节点编辑只写入应用追加式 revision，不修改 Harness 历史。
-- 图片制品只认 Harness `imageGeneration` Item；它可以来自 `image_gen` extension，也可以来自应用自带补丁在 Harness 内投影的 Provider-hosted Responses `image_generation_call`，但不得由 Gateway/BFF 伪造或重复调用 Provider。画布只读取 ownership-checked artifact URL。
-- 商品主图、副图、详情图和分镜的“保持真实商品外观”必须存在租户/线程归属的参考图。产品库 `imageUrl` 只用于摘要展示，不能由浏览器或 Agent 直接抓取；无参考图时控件需说明只能生成创意方向或概念图。
-- 切换已有项目时，历史接口按 Turn 恢复已成功绑定的 Product chips，并将其渲染在对应首条用户消息中；composer 始终以未选择产品的 `auto` 模式开始。接口必须重新检查 `product_catalog.read`、线程所有权和 RLS，每条消息仅返回最多 20 个安全摘要；不得恢复未绑定请求，也不得返回原始记录、mapping、attributes、连接器或凭据。
-- 普通问答、commentary、streaming fragment 和用户消息不得覆盖当前画布。
-- 最终 assistant Item 与节点使用真实 Item id 映射。点击回复中的节点引用必须居中画布节点；点击节点必须定位到原始回复，禁止按标题或正文模糊匹配。
-- 原生图片 artifact 永不可由浏览器替换；浏览器只能编辑应用自有文字图层。商品主体或像素级修改必须形成新的 Harness 图片编辑/生成 Item。
-- 同一 Turn 内 phase 与正文完全相同的重复最终 `agentMessage` 只投影一次。`main_image` / `gallery_images` 没有同 Turn 完成的原生图片 artifact 时不得生成文档假节点，回复必须显示“图片未生成”。
-- “生成视频成片”在真实视频工具健康前保持 disabled，并用一行说明“当前可生成脚本与分镜，暂不渲染成片”；不得把多张图片、loading 或外链冒充视频产物。
-- 任何未来的发布、同步或保存到外部系统动作仍需应用授权、审批、幂等、审计和读回，不能由画布更新冒充完成。
-
-布局：
-
-- Desktop：项目栏使用 `--cp-sidebar-width`；画布占剩余空间；对话栏宽 `360px - 430px`。
-- 右侧对话栏属于宽屏中的窄容器。`AgentComposer` 必须使用 compact rail 变体：访问、产品和模型入口保留图标、`aria-label` 与 tooltip，不得依赖 viewport 的 `max-sm` 断点，也不得让发送按钮超出对话栏。
-- 从右侧对话栏打开的宽弹层必须以该对话栏作为碰撞边界。产品库收窄到不超过 `400px` 并使用单列；不得覆盖中央创作画布，也不得移除 Radix Portal 后被 `overflow-hidden` 裁切。
-- 窄屏：使用“项目 / 画布 / 对话”受控视图切换；“项目”视图原位显示全高可滚动项目侧栏，不能简单堆叠三个固定高度面板。`390px × 844px` 下 composer 必须首屏可达且不得横向溢出。
-- 使用全局灰白 token，不建立创作空间专属暖色、字体、圆角或阴影体系。
-
-### CreativeMethodSelector
-
-- 放在右侧 Harness composer 附近，显示普通电商用户可理解的中文业务类型，不显示 Skill 文件名或协议 id。
-- 按“整套营销 / 商品上架 / 营销推广 / 短视频 / 审核交付”分组，使用紧凑扁平列表；列表项只显示标题和一行结果描述，使用前提在选中后结合当前产品上下文显示一次；选择后只更新方法标签和预填用户可编辑的 starter，不得自动发送。
-- Campaign 资产包必须物化 brief、主张矩阵、渠道衍生矩阵和四层 QA 门禁。创作合规检查分别展示商品忠实度、主张证据、品牌一致性、渠道规则，状态只允许 pass/hold/fail；不得把缺失权威依据判为通过或合成黑盒总分。
-- Campaign、主图、副图与创作 QA 必须先选择 Product revision；主图和副图还必须在本 Turn 附加真实图片 artifact。浏览器只做即时提示，BFF 与 Gateway 必须再次执行产品上下文、artifact ownership 和 detected image kind 门禁。
-- 无产品时允许标题、推广文案、脚本等方法继续使用 auto 产品上下文；主图、副图等依赖视觉一致性的类型必须引导选择产品并附加可信参考图。
-- 平台、受众、比例、时长等高影响缺失项由 Specialist Skill 通过原生 `request_user_input` 补问，前端不维护第二套固定表单。
-- 运行中的 Turn 不允许静默切换方法；变更必须作为同一 Harness `turn/steer` 的明确用户方向，或留给下一 Turn。
-- 可用状态来自真实 Gateway/Product Catalog/native image capability。视频渲染没有后端时只能显示禁用项，不得出现可点击假按钮。
+- 新 turn 启动前，Gateway 必须用 `thread/read` 与 Harness 对账 active turn，不能只相信进程内缓存。缓存残留但 Harness 已 idle 时清除残留并启动；Harness 仍有 active turn 时，把本次提交转成原生 `thread/queue/add` 并在 composer 上方显示队列，不得向用户暴露英文 `Thread already has an active turn` 错误。每个 thread 的启动对账和 `turn/start` 必须串行化，避免并发双启动。
 
 ## ModeSwitch
 
@@ -154,16 +90,35 @@ Harness 契约：
 - 当前项白底轻阴影，非当前项透明或浅灰。
 - 未登录状态隐藏整个模式切换，只在登录后进入工作台时显示。
 
+## CreativeSpaceWorkspace
+
+职责：
+
+- 作为内容策划、拍摄、剪辑与审核成员共同工作的 AI 内容创作空间；内容项目是正式内容生产的上下文容器，AI 是项目内能力。
+- 默认打开“我的创作”；该页面根据用户参与的内容项目动态形成，不建立独立业务实体。
+- 内部一级结构固定为 `我的创作`、`内容项目`、`灵感与案例`、`AI 工具箱`。AI 工具箱承载文案、脚本、图片、视频等临时入口。
+- 一个内容项目只承载一个核心选题或内容方向，但允许多个脚本版本、剪辑版本和平台发布版本。
+- 项目章节固定为 `概览`、`需求`、`产品`、`选题`、`表现形式`、`脚本`、`拍摄`、`剪辑`、`成片`、`数据`、`复盘`。AI 预审、最终脚本、视频审核等属于章节内部能力，不得提升为一级导航。
+
+规则：
+
+- 项目页面表现为持续生长的内容文档；章节导航是可自由切换、回看的内容索引，不显示完成百分比、审批连线或强流程步骤条。
+- 项目列表使用内容行、标题、核心方向和少量上下文组织，不使用传统后台表格、Dashboard 或任务管理卡片墙。
+- 项目允许一个负责人和多个参与成员；前端和数据契约不得假定单人所有。
+- 内容项目最多关联一个来源任务，一个任务可以产生多个内容项目；从创作空间直接创建时来源任务可以为空。
+- 项目过程自动保留在项目历史中，只有用户主动执行“沉淀为团队资产”后才进入资料库；AI 只能推荐，不得自动沉淀。
+- 第一阶段未接入后端的数据必须通过统一 adapter 提供 Mock，不得散落在页面组件中；创建结果仅为当前运行时演示，不得暗示已持久化。
+
 ## CopywritingWorkspace
 
 职责：
 
-- 文案生成是统一电商 Agent 的 Task Recipe，不是独立表单应用，也不跳转到另一套页面壳。
+- 文案生成是统一电商 Agent 的 Task Recipe，从创作空间的 `AI 工具箱` 进入；它不是独立表单应用，也不跳转到另一套页面壳。
 - Recipe 首屏和结果页必须复用全局 `AgentComposer`；不得创建独立 textarea、发送按钮、停止按钮或模型选择器。Recipe 只能改变 placeholder、提交语义和当前内容区。
 - 首屏只提供自然语言目标输入和少量任务示例；专业字段不得作为普通用户的必填首屏。
 - Recipe Skill 根据目标即时判断缺失的高影响决策，并在 Default collaboration mode 中调用 Codex `request_user_input`；前端不得维护固定问题数组。
 - 问题面板停靠在标准对话底部，保留上方正文、commentary 和活动时间线；每题提供明确选项、推荐项和自由补充。用户回答最后一题后继续同一个 Turn，不展示计划文本。
-- 提交原生 Harness `item/tool/requestUserInput` 问题后必须立即生成右侧“我的选择”用户气泡，按问题标题展示所选值；秘密字段只显示“已提供”。选择摘要必须由服务端格式化并在刷新后恢复，不得只保存在组件 state。应用侧 `commerce/approval/*` 可以复用同一问题面板，但确认结果只推进原始工具调用并写入审计/计费证据，不得追加用户会话气泡。
+- 提交 Harness 问题后必须立即生成右侧“我的选择”用户气泡，按问题标题展示所选值；秘密字段只显示“已提供”。选择摘要必须由服务端格式化并在刷新后恢复，不得只保存在组件 state。
 - 用户已经在目标中明确渠道或表达方向时，对应问题必须跳过。
 - 文案线程创建后必须使用标准 `ConversationWorkspace`，不得切换到独立版本编辑器或第二套对话面板。结构化文案作为助手消息渲染标题、正文、CTA 和合规备注。
 - 运行中显示真实“正在处理 x 秒”和停止按钮。提问、解释和明确改写都进入同一 Codex thread 的新 turn，并按普通对话顺序展示。
@@ -222,9 +177,8 @@ type WorkComposerProps = {
 - 输入法组合态的 `Enter` 只确认候选内容，不得提交。
 - 空内容不得提交。
 - 登录后的首屏和会话 composer 使用自适应高度 textarea；内容未达到上限时随输入增长，达到上限后高度固定并只在 textarea 内部纵向滚动。
-- Composer 底部工具栏必须按实际容器宽度切换紧凑控件，而不是只依赖 viewport 断点；`390px` 页面中添加、访问、产品、模型、语音和提交按钮都必须完整位于 composer 边界内。
-- 首屏和会话 composer 只保留一个 `+` 作为添加入口，不得在 `+` 旁重复放置独立 Skill、附件或普通资料库按钮。`产品库` 是用户明确选择的例外：它必须作为当前任务的产品上下文选择器放在访问策略之后，而不是第二个添加入口。点击 `+` 后的同宽弹层按“添加 / 插件 / 技能”分区：插件必须来自真实应用插件目录并进入对应详情，技能必须来自 App Server `skills/list` 并沿用原生 Skill 选择；“文件和图片”必须调用真实多选文件选择器，并显示照片预览、文档名称、大小与单项移除。
-- 点击发送后，附件与已选产品立即进入右侧乐观用户消息；只有 Harness 确认接受 Turn 后才从 composer 清除产品选择。上传或明确启动失败时撤销乐观消息并保留原文字、附件和产品；状态不确定时等待 SSE 或历史中的同一 `clientId` 确认。不得同时在已确认用户消息和输入框中重复显示同一附件或产品。
+- 首屏和会话 composer 只保留一个 `+` 作为添加入口，不得在 `+` 旁重复放置独立 Skill、附件或资料库按钮。点击 `+` 后的同宽弹层按“添加 / 插件 / 技能”分区：插件必须来自真实应用插件目录并进入对应详情，技能必须来自 App Server `skills/list` 并沿用原生 Skill 选择；“文件和图片”必须调用真实多选文件选择器，并显示照片预览、文档名称、大小与单项移除。
+- 点击发送后，附件立即从 composer 移入右侧乐观用户消息；Turn 接受成功后只保留消息附件，上传或启动失败则撤销乐观消息并把原文字和附件恢复到 composer。不得同时在用户消息和输入框中重复显示同一附件。
 - 会话 composer 单行时保持紧凑横排；进入多行后切换为“上方完整输入区、下方工具栏”，不得把高 textarea 与所有按钮硬塞在同一横排。
 - 多行 composer 的上层 grid row 必须由 textarea 实际高度驱动，不得预先拉伸到最大高度；一到两行文字顶部保持正常内边距，只有内容增长到上限后才固定高度并内部滚动。
 - textarea 内部滚动条使用窄轨道并贴近 composer 右侧，不得在正文与操作区之间形成粗重分割。
@@ -251,51 +205,6 @@ type WorkComposerProps = {
 - 选择后显示短名称，长名称截断但 tooltip 展示完整。
 - 平台和店铺不是装饰标签，必须映射到实际后端 context id。
 - 没有项目时显示创建/配置入口，但不做营销式空状态。
-
-## ProductLibraryPicker
-
-职责：
-
-- 在首屏与会话 composer 中选择当前任务可引用的 canonical Product。
-- 只提交产品上下文模式和稳定 Product id；不得提交来源原始 JSON、产品描述全集、映射代码或租户范围。
-- 通过应用注册的 Harness 产品工具按需检索当前 revision，不把完整产品库复制进 prompt 或对话历史。
-
-规则：
-
-- 入口位于访问策略之后，使用 `PackageSearch + 产品库`；选中时显示数量，例如 `产品库 · 2`。
-- 该入口是 context selector，不是第二个附件/添加按钮。它与 `+`、访问策略、Skill 目录和模型设置使用同一个互斥 popover 状态。
-- 首屏 `WorkComposer` 使用锚定在入口下方的 `<=560px` 双列扁平 Popover；普通持续会话可向上展开。创作中心右侧 compact rail 使用碰撞绑定的 `<=380px` 单列 Popover；三者都包含紧凑标题/状态、产品/SPU/SKU 搜索、最近使用/已选择、`48px` 轻量产品行和固定 footer。
-- 产品行高度 `40px - 48px`，显示标题、SPU、SKU 数、来源和更新时间；缩略图缺失时使用 lucide `Package`，禁止伪造商品图。
-- 最多选择 20 个产品。选择变化直接同步到 textarea 与工具栏之间的可移除 ProductRef chips；取消最后一个产品必须立即恢复 `auto` context 并移除 chip，`完成` 只关闭选择器。发送后产品引用跟随同一 `clientRequestId` 进入当前 Turn，失败时恢复。
-- 不使用永久右侧产品面板。`管理产品库` 打开同一 AppShell 内的完整产品工作区。
-- 运行中不可改变本轮产品范围；控件 disabled 并说明下一 Turn 可调整。
-- `loading` 保留稳定尺寸；`empty` 明确“尚无已归一产品”；`syncing/stale/source_error` 保留上次已验证产品并显示来源状态；`permission_denied` 显式说明无读取权限，禁止伪装为零结果。
-- Mobile 使用 Radix Dialog/bottom sheet，chips 最多两行后折叠为 `+N`，不得产生页面级横向滚动。创作中心 compact rail 最多直接显示两个 ProductRef chip，其余折叠为 `+N`。
-- 所有 Product id 在 BFF 重新执行 workspace RLS 与 `product_catalog.read`；前端选中态不是授权依据。
-
-## ProductLibraryWorkspace
-
-职责：
-
-- 在现有工作台壳内管理 canonical 产品、数据源和导入批次。
-- 展示 Product/SPU、Variant/SKU、来源、同步状态、映射问题和 readback；不展示连接凭据或普通用户不可见的原始记录。
-
-规则：
-
-- 使用轻量列表与行分隔，不做传统后台卡片墙或指标首屏。
-- 首屏使用紧凑“选择接入方式 / 分析并校验 / 发布标准产品”进度条，状态来自当前工作区数据源、最新导入和 canonical readback；普通用户可以从这里直接上传文件、查看其他接入方式，或把待复核批次带入 Harness 对话。
-- 文件接入真实支持 CSV/JSON；同一来源工作区还必须展示应用注册的托管 API、只读数据库和 ERP/PIM Connector 定义。上传、连接测试、检查、映射验证和发布状态必须来自后端，不提供无行为的“连接”按钮。
-- 文件路径直接打开上传分析，不先创建空来源。上传只保留原始记录、创建映射并展示问题，不得写 canonical Product/SKU；只有用户明确点击“发布到产品库”后才调用独立 activation API，并展示权威 Product/SKU readback。
-- 进入或刷新工作区时必须通过受认证、RLS 作用域的最新导入读接口恢复 `needs_review / ready_to_publish / completed`；`ready_to_publish` 的明确发布动作不得只存在于本地 mutation state。Inspect 未提供规范化 Product/SKU 预览时，只展示来源记录数、来源字段元数据和问题，不得宣称已生成产品预览。
-- Connector 选择来自服务端定义目录，不在前端硬编码供应商清单。未安装或未配置的 adapter 保持可见但 disabled，并说明运维缺口；不得显示绿色“已连接”。
-- Disabled API、数据库和 ERP/PIM 条目必须说明安全交接方式：普通用户只提供系统名称、公开文档或字段说明，密钥、Token、DSN 和连接串由管理员/运维写入服务端密钥系统，禁止粘贴到浏览器或 Harness 对话。
-- 普通用户连接表单只接收定义允许的 public config；不得输入或回显 server-owned secret reference、env 名、broker id、密码、Token、完整数据库连接串、任意 SQL、任意 API URL 或执行脚本。未来只有在真实 credential-handle BFF 可用时才能选择管理员已授权凭据；此前所有需要凭据的连接器必须 disabled/fail closed。
-- 只读数据库连接测试必须由服务端确认 read-only session；API 必须使用应用/运维登记的 base URL 与路径；ERP/PIM 必须绑定版本化 adapter。测试成功不等于产品已同步或已发布。
-- `product_catalog.read` 可浏览与选择；`product_catalog.import` 可创建导入；`product_catalog.review` 可审核 mapping；`product_catalog.sources.manage` 才能管理连接来源。
-- 原始记录、AI mapping、验证 dry-run、审批发布和 canonical readback 必须显示为不同阶段。
-- AI 低置信度、身份冲突、缺币种和跨来源合并进入待审核问题，不得自动发布或用绿色成功态掩盖。
-- `needs_review` 批次提供真实“通过对话处理映射”入口并绑定 import id；字段解释与映射提案由 Codex Harness 工具完成，浏览器不得实现本地假映射或直接修改原始记录。
-- 无产品时使用一行标题和一个真实动作；无管理权限时提供可执行的返回/切换工作区动作，不显示假连接入口。
 
 ## ModelAndReasoningControl
 
@@ -342,9 +251,6 @@ type WorkComposerProps = {
 - 运行中的整条活动文本只使用共享的 `cp-running-shimmer` 连续扫光层；状态文字和命令详情禁止各自动画造成多段、快速或错乱的亮片。完成态活动与 disclosure 不显示动画或成功勾选图标。
 - 命令、文件和工具 item 默认汇总为一行 disclosure，例如“运行了命令”或“编辑了文件并运行了命令”。
 - `turn/completed` 后隐藏过程 commentary，只保留最终正文，并把该轮活动归并为一个默认收起的 disclosure。
-- 每条已完成的最终 Agent 回复下方固定显示紧凑的复制、回复优秀、回复不佳、重新尝试四个图标按钮；commentary、streaming 和空回复不显示操作。所有图标必须有 tooltip 与 `aria-label`，好评和差评使用互斥的 `aria-pressed` 状态，选中项的拇指图标必须实心填充，再次点击当前评价表示取消。评价成功落库后在操作行短暂显示“感谢您的反馈！”，失败时不得显示成功提示。重新尝试运行期间刷新图标旋转并禁用全部重试入口。
-- 复制必须复制用户实际看到的回复内容，结构化文案需要展开为标题、正文、行动引导和合规备注，不得复制内部 JSON。评价必须调用真实 BFF，按 Harness `threadId`、`turnId` 和 `agentMessage itemId` 保存；失败时撤销乐观状态并明确提示，刷新历史后必须回显已保存评价。
-- “重新尝试”只提交当前回复的权威 `agentMessage itemId`；BFF 与 Gateway 必须从 Harness 恢复原 `userMessage`，按线程历史模式使用原生 `thread/revert(beforeTurnId)` 或兼容 `thread/rollback(numTurns)`，再接 `turn/start`。浏览器不得提交替代文本、Skill、附件路径、产品 revision、输出 Schema 或回退边界；目标回复之后的 Turns 按 Harness 原生历史编辑语义被移出当前线程历史。
 - completed activity disclosure 必须按 Harness sequence 插回当前 turn 时间线，位于调用前 commentary 与调用后 final answer 之间；禁止固定追加到最终回答下方。运行中仍只显示当前最新 activity 的替换式单行状态，完成后再折叠成一个 disclosure。
 - disclosure 展开后才显示原始 item 明细、状态和耗时；不得把所有工具 item 默认平铺堆积在正文中。
 - disclosure 和展开明细不使用横向分割线，通过缩进与间距表达层级。
@@ -368,18 +274,17 @@ type WorkComposerProps = {
 - 会话切换不得中断其他 thread。运行状态由服务端 thread 索引和 App Server `thread/read` 对账，不能只依赖当前 React 组件状态。
 - Work 模式可以显示右侧输出/来源面板；面板不得遮挡主内容和底部 composer。
 - 生成图片通过登录保护的站内图片路由渲染，不暴露服务器任意文件路径。图片必须按 `sequence + turnId` 渲染在生成它的对话轮次中，不得把历史图片作为全局列表追加到当前 turn 底部。对话中的图片缩略图不显示模型名或独立说明栏；点击缩略图打开无额外卡片文案的全屏预览，支持背景点击、`Escape` 和关闭图标退出，并在关闭后恢复触发按钮焦点。
-- Web Search 来源必须来自 Harness tool item 的结构化 `sources`（MCP `result.structuredContent.sources` 或原生 `web_search_call.action.sources`），不得从最终正文正则猜 URL。搜索活动外层按调用次数与失败数汇总，展开后成功项显示来源数量、失败项显示“搜索未完成”，不得逐行重复“完成了搜索”。每次调用随后显示自己的来源标题、域名和可点击原始链接，不得暴露 `commerce_web.search` 等内部工具标识；右侧“来源”面板自动汇总当前线程最近的结构化来源、按规范化 URL 去重并移除 `utm_*` 跟踪参数。来源为空时显示空状态，不提供无后端语义的“添加来源”按钮。
-- Harness `agentMessage` 继续使用 GFM Markdown；Web 客户端必须把比较型数据渲染为语义 `table/thead/th/td`，提供清晰表头、行分隔、链接和容器内横向滚动，不得把表格压成空格对齐的纯文本。窄屏只允许表格容器内部滚动，不得造成页面级横向溢出；不要为了表格自研新的 Agent 消息或 Turn 生命周期。
+- Web Search 来源必须来自 Harness tool item 的结构化 `sources`（MCP `result.structuredContent.sources` 或原生 `web_search_call.action.sources`），不得从最终正文正则猜 URL。最终正文保留贴近具体结论的可点击引用；右侧“来源”面板自动汇总当前线程最近的结构化来源、按规范化 URL 去重并移除 `utm_*` 跟踪参数。来源为空时显示空状态，不提供无后端语义的“添加来源”按钮。
 - 来源面板默认只展示最近 3 条，超出部分使用一个“查看其余 N 个来源” disclosure；展开内容限制在面板内部滚动，并提供“收起来源”。来源集合因新搜索发生变化时自动恢复折叠状态。折叠不得删除、重新排序或改变正文中的就地引用。
 - 停止按钮只有在真实 `activeTurnId` 可用时才可点击；点击必须经过 BFF 与 Gateway 调用 App Server `turn/interrupt`，并等待 `turn/completed` 的 `interrupted` 状态，禁止只在前端切换为停止态。
-- active turn 期间，普通对话的 Enter 或“加入任务队列”按钮必须调用 App Server `thread/queue/add`；带固定 output schema 的托管工作流使用“调整当前方向”并调用 App Server `turn/steer`，不得进入 queue；Shift+Enter 继续换行。composer 上方普通队列只能渲染 `thread/queue/list` 返回的数据，并通过 `thread/queue/changed` 刷新。队列使用一个统一圆角边框容器，内部为连续、紧凑、无独立边框的 `28px` 行，不得把每条消息做成单独卡片；每行提供真实“调整方向”、垃圾桶删除、三点更多菜单；“关闭排队”删除当前普通队列。
+- active turn 期间 Enter 或“加入任务队列”按钮必须调用 App Server `thread/queue/add`；Shift+Enter 继续换行。composer 上方普通队列只能渲染 `thread/queue/list` 返回的数据，并通过 `thread/queue/changed` 刷新。队列使用一个统一圆角边框容器，内部为连续、紧凑、无独立边框的 `28px` 行，不得把每条消息做成单独卡片；每行提供真实“调整方向”、垃圾桶删除、三点更多菜单；“关闭排队”删除当前普通队列。
 - “编辑消息”禁止在队列条内部渲染输入框。它把原文本放回 composer，自动聚焦并把光标移至末尾，同时通过 `thread/queue/delete` 移除该条排队消息；用户再次提交时才重新执行 `thread/queue/add`。删除失败时恢复编辑前草稿并重新读取 queue，避免同一内容同时存在于 queue 和草稿。
 - 编辑、单条删除和“关闭排队”使用乐观 UI：本地队列立即移除且不显示 loading，后台执行真实 queue delete；失败时重新调用 `thread/queue/list` 回滚并显示错误。编辑时 composer 立即回填，删除失败则恢复编辑前草稿。只有已提交给 `turn/steer`、等待 Harness `userMessage.clientId` 确认的消息显示“正在调整”运行态。
 - 队列更多菜单保持扁平紧凑：宽度约 `156px`、单项高度 `32px`、`10px` 圆角、弱边框与 `--cp-shadow-soft`，不得使用大面积 popover 阴影或为普通队列操作显示 spinner。
 - 点击“调整方向”时，普通队列条立即隐藏并进入独立 `pendingSteers` FIFO；原文本以浅灰用户气泡预览，并在其下方左对齐显示一行共享 `cp-running-shimmer` 的“正在调整”文字。该预览不属于正式 `messages` 时间线，禁止用内容相同推测提交成功。Gateway 必须先持久化 pending state，再从普通 Harness queue 删除、调用 `turn/steer` 并立即 `turn/interrupt`；收到 old turn 的 interrupted completion 后，把未确认 steer 作为下一 Harness turn 提交。只有匹配 `clientUserMessageId` 的权威 `userMessage` 才进入正式时间线。若 Harness 已在 idle 窗口自动启动该 queue item，则以历史中的 client id 判定 `alreadyStarted`，禁止报错、丢失或重复。
 - 队列容器位于免责声明与 composer 之间；单条队列比 composer 左右各缩进 `16px`，底边与 composer 上沿贴合，不得悬浮在对话正文中或在两者之间插入免责声明。
 - SSE 新内容只在用户位于对话底部附近时自动跟随；用户向上滚动后必须暂停自动跟随，禁止把阅读位置强制拖回底部。
-- SSE 是低延迟通道，不是唯一事实来源。active turn 期间前端必须每约 `3s` 通过认证 BFF 调用 App Server `thread/read` 做无 loading 的后台对账：持久化历史出现匹配 `userMessage.clientId` 时移除对应 pending preview，并把权威消息按 sequence 合并到正式时间线；thread 进入 completed/failed/interrupted 时用权威 messages、activities、images、duration 与 status 覆盖本地状态并停止计时，同时撤销任何待回答/待审批卡并把孤儿 running activity 标记为 failed。旧卡提交必须返回终态错误并立即退出等待状态。对账不得把待确认输入提前写入正式 messages，也不得改变滚动位置。这样 Gateway 重启、SSE 断线或漏事件时，运行状态最多延迟一个轮询周期恢复，禁止无限显示“正在处理/正在调整/正在等待回答”。
+- SSE 是低延迟通道，不是唯一事实来源。active turn 期间前端必须每约 `3s` 通过认证 BFF 调用 App Server `thread/read` 做无 loading 的后台对账：持久化历史出现匹配 `userMessage.clientId` 时移除对应 pending preview，并把权威消息按 sequence 合并到正式时间线；thread 进入 completed/failed/interrupted 时用权威 messages、activities、images、duration 与 status 覆盖本地状态并停止计时。对账不得把待确认输入提前写入正式 messages，也不得改变滚动位置。这样 Gateway 重启、SSE 断线或漏事件时，运行状态最多延迟一个轮询周期恢复，禁止无限显示“正在处理/正在调整”。
 - active turn 的 deadline 必须绑定同一个 Harness `turnId + startedAt`。新的 `turn/started`、直接 start、queue 自动启动或 steer 重提交只要产生新 turn id，就必须建立新计时；旧 timeout closure 在身份不匹配时必须无操作退出。新 turn 处于 `connecting` 且 Harness 尚未切换状态时，对账不得用上一轮 completed/failed/interrupted 快照覆盖新计时、状态或乐观用户消息。
 - 首次提交时立即显示的乐观用户消息必须携带发送给 Gateway/App Server 的同一个 `clientUserMessageId`，并标记为 `delivery: pending`。SSE 或 `thread/read` 返回权威 `userMessage` 后必须按该 client id 原位替换为 committed 消息，禁止因 Harness message id 不同而追加第二个相同气泡；不同 client id 的真实重复提交不得被内容去重。
 - 暂停跟随后显示圆形“回到底部”按钮：SSE 运行中使用三点上下跳动状态，回复完成后切换为向下箭头；点击后平滑滚到底部并恢复自动跟随，按钮必须有可访问名称和 tooltip。

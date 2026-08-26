@@ -122,10 +122,8 @@ resources:
 - `ModeSwitch`
 - `WorkComposer`
 - `ProjectSelector`
-- `ProductInsightWorkspace`
-- `CreativeSpaceWorkbench`
-- `ProductLibraryPicker`
-- `ProductLibraryWorkspace`
+- `CreativeSpaceWorkspace`
+- `ContentProjectWorkspace`
 - `AgentEventStream`
 - `ApprovalPanel`
 - `CommerceObjectPreview`
@@ -143,7 +141,6 @@ resources:
 - 需要审批的动作必须有独立审批面板，不能把确认按钮塞进普通 assistant 消息里。
 - 写操作必须呈现四个阶段：草案、待审批、已执行、已读回验证。
 - 长任务必须显示 Codex 事件流和最终结果摘要；不能只有“处理中...”。
-- “商品决策”使用同一个 Harness 工作台承载市场调研、新品开发和产品复盘三个应用托管 Skill；方法选择只改变业务方法、首屏文案和固定 Recipe，不得生成第二套对话或表单流程。
 - 外部系统错误必须区分认证失败、权限不足、限流、上游异常、数据不存在、写入冲突。
 - 涉及客户信息、订单地址、手机号、支付信息等敏感数据时，默认脱敏；只有必要业务上下文中才显示最小字段。
 
