@@ -37,6 +37,8 @@ The chapter index is navigational, not an approval workflow. Users can move free
 
 ## Phase-One Implementation
 
-The browser uses a single typed `CreativeSpaceAdapter` boundary with an in-memory mock implementation. Mock projects, people, tasks, products, inspiration, and creation behavior live behind that adapter instead of inside UI components. No database schema or persistence claim is introduced in this phase.
+The browser uses typed adapter boundaries with in-memory mock implementations. `CreativeSpaceAdapter` owns mock projects, people, products, inspiration, and project creation. `my-creative-adapter` derives the personal dashboard from those projects plus short-video task facts, including production stages, next actions, collaboration activity, and recent outputs. This keeps task-system mapping and future role-based ordering outside page components while the BFF contract is pending. No database schema or persistence claim is introduced in this phase.
+
+`My Work` is presented as a creator dashboard rather than a team or task-system dashboard. Its production track filters the next-action list, its focus area selects the most valuable content to continue, and its activity and recent-output sections link back to existing content projects. Search, time, role, stage, focus switching, and recent-content tabs are client-side interactions over adapter data in this phase.
 
 The existing conversational copywriting Task Recipe remains unchanged and is opened from AI Toolbox. The other toolbox entries are visibly unavailable until their real backend behavior exists.

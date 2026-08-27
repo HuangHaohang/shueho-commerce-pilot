@@ -117,6 +117,8 @@ resources:
 
 组件契约见 [`references/component-contracts.md`](references/component-contracts.md)。首批组件必须覆盖：
 
+创作空间的专属视觉语言见 [`references/creative-space-ui.md`](references/creative-space-ui.md)。该规范优先约束创作空间的背景、色彩、字体、纸张层级、装饰和响应式表现；全局组件无法满足时应提供创作空间专属 Variant。
+
 - `AppShell`
 - `Sidebar`
 - `ModeSwitch`

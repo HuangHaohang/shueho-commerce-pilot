@@ -18,6 +18,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { MyCreativeDashboardPage } from "@/components/creative/my-creative-dashboard";
 import {
   creativeProjectChapters,
   creativeSpaceAdapter,
@@ -98,7 +99,7 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywritin
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {route.kind === "section" && route.section === "my-work" ? (
-          <MyCreativeWork projects={snapshot.projects} onOpenProject={(projectId) => setRoute({ kind: "project", projectId })} />
+          <MyCreativeDashboardPage projects={snapshot.projects} onOpenProject={(projectId) => setRoute({ kind: "project", projectId })} />
         ) : null}
         {route.kind === "section" && route.section === "projects" ? (
           <ContentProjectList
@@ -134,77 +135,6 @@ function PageIntro({ eyebrow, title, description, action }: { eyebrow?: string; 
       </div>
       {action}
     </div>
-  );
-}
-
-function MyCreativeWork({ projects, onOpenProject }: { projects: CreativeProject[]; onOpenProject: (projectId: string) => void }) {
-  const focusProject = projects[0];
-  return (
-    <section className="mx-auto w-full max-w-[1040px] px-5 py-10 md:px-10 md:py-14">
-      <PageIntro title="我的创作" description="从你参与的内容项目中，继续最近的创作和需要推进的内容。当前为任务系统接入前的示例视图。" />
-
-      {focusProject ? (
-        <section className="grid gap-6 border-b border-[var(--cp-border-subtle)] py-9 md:grid-cols-[180px_minmax(0,1fr)]">
-          <div>
-            <p className="m-0 text-xs font-medium text-[var(--cp-text-muted)]">继续创作</p>
-            <p className="mb-0 mt-2 text-xs text-[var(--cp-text-faint)]">上次停在「{focusProject.currentChapter}」</p>
-          </div>
-          <button type="button" className="group min-w-0 text-left focus-visible:outline-none" onClick={() => onOpenProject(focusProject.id)}>
-            <h3 className="m-0 text-xl font-semibold leading-snug group-hover:underline">{focusProject.name}</h3>
-            <p className="mb-0 mt-3 max-w-[680px] text-sm leading-relaxed text-[var(--cp-text-muted)]">{focusProject.coreDirection}</p>
-            <span className="mt-5 inline-flex items-center gap-2 text-sm font-medium">
-              回到创作 <ArrowRight className="size-4 transition-transform group-hover:translate-x-0.5" />
-            </span>
-          </button>
-        </section>
-      ) : null}
-
-      <div className="grid gap-x-12 md:grid-cols-2">
-        <CreativeWorkSection title="待我推进" description="依据当前阶段与协作角色形成">
-          {projects.slice(0, 2).map((project) => (
-            <ProjectTextRow key={project.id} project={project} detail={`继续完善「${project.currentChapter}」`} onOpen={onOpenProject} />
-          ))}
-        </CreativeWorkSection>
-        <CreativeWorkSection title="最近编辑" description="按最近创作行为排列">
-          {projects.slice(1).map((project) => (
-            <ProjectTextRow key={project.id} project={project} detail={`${project.updatedBy} · ${project.updatedAt}`} onOpen={onOpenProject} />
-          ))}
-        </CreativeWorkSection>
-        <CreativeWorkSection title="最近产出" description="仍保留在项目历史中">
-          {projects.filter((project) => project.recentOutput).map((project) => (
-            <ProjectTextRow key={project.id} project={project} detail={project.recentOutput ?? ""} onOpen={onOpenProject} />
-          ))}
-        </CreativeWorkSection>
-      </div>
-    </section>
-  );
-}
-
-function CreativeWorkSection({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
-  return (
-    <section className="py-9">
-      <div className="mb-4 flex items-baseline justify-between gap-3">
-        <h3 className="m-0 text-sm font-semibold">{title}</h3>
-        <span className="text-xs text-[var(--cp-text-faint)]">{description}</span>
-      </div>
-      <div className="border-t border-[var(--cp-border-subtle)]">{children}</div>
-    </section>
-  );
-}
-
-function ProjectTextRow({ project, detail, onOpen }: { project: CreativeProject; detail: string; onOpen: (projectId: string) => void }) {
-  return (
-    <button
-      type="button"
-      className="group flex w-full items-start justify-between gap-5 border-b border-[var(--cp-border-subtle)] py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-      onClick={() => onOpen(project.id)}
-    >
-      <span className="min-w-0">
-        <span className="block truncate text-sm font-medium group-hover:underline">{project.name}</span>
-        <span className="mt-1 block text-xs text-[var(--cp-text-faint)]">{detail}</span>
-      </span>
-      <ArrowRight className="mt-1 size-4 shrink-0 text-[var(--cp-text-faint)] transition-transform group-hover:translate-x-0.5" />
-    </button>
   );
 }
 
