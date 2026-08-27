@@ -3,13 +3,20 @@
 import {
   ArrowLeft,
   ArrowRight,
+  Camera,
   CalendarCheck2,
+  CalendarClock,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   CircleAlert,
   Clock3,
+  Lightbulb,
+  ListTodo,
   Search,
+  Scissors,
+  Send,
+  ShieldCheck,
   Sparkles,
   TriangleAlert,
 } from "lucide-react";
@@ -91,7 +98,7 @@ export function MyCreativeDashboardPage({ projects, onOpenProject }: MyCreativeD
 
   return (
     <div className="min-h-full bg-[var(--cp-bg)] text-[var(--cp-text)]">
-      <section className="mx-auto w-full max-w-[1160px] px-5 py-8 md:px-8 md:py-10">
+      <section className="w-full px-5 py-7 md:px-7 md:py-8 xl:px-8">
         <MyCreativeHeader
           headline={dashboard.headline}
           query={query}
@@ -102,7 +109,7 @@ export function MyCreativeDashboardPage({ projects, onOpenProject }: MyCreativeD
 
         <MyWorkOverview summaries={overviewSummaries} stages={overviewStages} onOpenStage={setDetailStage} />
 
-        <div className="mt-5 grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+        <div className="mt-5 grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="min-w-0">
             <MyTaskList actions={visible.actions} onOpenProject={onOpenProject} />
             <MyRecentTabs activeTab={recentTab} items={recent} onTabChange={setRecentTab} onOpenProject={onOpenProject} />
@@ -170,35 +177,56 @@ function MyWorkOverview({ summaries, stages, onOpenStage }: {
   stages: ReturnType<typeof getMockMyCreativeDashboard>["stages"];
   onOpenStage: (stage: MyCreativeStage) => void;
 }) {
-  const pending = summaries.find((item) => item.id === "pending") ?? summaries[0];
-  const supporting = summaries.filter((item) => item.id !== "pending");
+  const summaryStyles = {
+    pending: { icon: ListTodo, className: "bg-[var(--cp-info-bg)] text-[var(--cp-info)]" },
+    today: { icon: CalendarClock, className: "bg-[var(--cp-warning-bg)] text-[var(--cp-warning)]" },
+    overdue: { icon: CheckCircle2, className: "bg-[var(--cp-success-bg)] text-[var(--cp-success)]" },
+    risk: { icon: TriangleAlert, className: "bg-[var(--cp-danger-bg)] text-[var(--cp-danger)]" },
+  } as const;
+  const stageStyles: Record<MyCreativeStage, { icon: typeof Lightbulb; className: string }> = {
+    策划: { icon: Lightbulb, className: "bg-[var(--cp-warning-bg)] text-[var(--cp-warning)]" },
+    拍摄: { icon: Camera, className: "bg-[var(--cp-info-bg)] text-[var(--cp-info)]" },
+    剪辑: { icon: Scissors, className: "bg-[#f3f0ff] text-[#6750a4]" },
+    审核: { icon: ShieldCheck, className: "bg-[var(--cp-success-bg)] text-[var(--cp-success)]" },
+    待发布: { icon: Send, className: "bg-[#fff2eb] text-[#b54708]" },
+  };
   return (
-    <section className="mt-8 overflow-hidden rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg)]" aria-labelledby="my-work-overview-title">
-      <div className="grid md:grid-cols-[1.2fr_2fr]">
-        <div className="border-b border-[var(--cp-border-subtle)] px-5 py-5 md:border-b-0 md:border-r md:px-6">
-          <p className="m-0 text-[10px] font-medium tracking-[0.08em] text-[var(--cp-text-faint)]">{pending.eyebrow}</p>
-          <div className="mt-3 flex items-end gap-3"><span className="text-[40px] font-semibold leading-none tracking-[-0.04em]">{pending.value}</span><span className="pb-1 text-sm text-[var(--cp-text-muted)]">{pending.unit}{pending.label}</span></div>
-          <p className="mb-0 mt-3 text-xs text-[var(--cp-text-muted)]">{pending.note}</p>
-        </div>
-        <dl className="grid grid-cols-3 divide-x divide-[var(--cp-border-subtle)]">
-          {supporting.map((item) => <div key={item.id} className="px-4 py-5 sm:px-5"><dt className="text-[10px] text-[var(--cp-text-faint)]">{item.label}</dt><dd className="mb-0 ml-0 mt-2 text-[26px] font-semibold leading-none">{item.value}<span className="ml-1 text-[10px] font-normal text-[var(--cp-text-faint)]">{item.unit}</span></dd><p className="mb-0 mt-3 hidden text-[10px] leading-4 text-[var(--cp-text-muted)] sm:block">{item.note}</p></div>)}
-        </dl>
+    <section className="mt-7" aria-labelledby="my-work-overview-title">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {summaries.map((item) => {
+          const style = summaryStyles[item.id];
+          const Icon = style.icon;
+          return (
+            <article key={item.id} className="flex min-h-[96px] items-center gap-3 rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg)] px-4 py-4 sm:gap-4 sm:px-5">
+              <span className={cn("flex size-10 shrink-0 items-center justify-center rounded-[var(--cp-radius-item)]", style.className)}><Icon className="size-[18px]" /></span>
+              <div className="min-w-0"><p className="m-0 text-xs text-[var(--cp-text-muted)]">{item.label}</p><p className="mb-0 mt-1 flex items-baseline gap-1"><span className="text-[30px] font-semibold leading-none tracking-[-0.04em]">{item.value}</span><span className="text-xs text-[var(--cp-text-faint)]">{item.unit}</span></p></div>
+            </article>
+          );
+        })}
       </div>
-      <div className="border-t border-[var(--cp-border-subtle)] px-5 py-4 md:px-6">
-        <div className="flex items-center justify-between gap-4"><div><h3 id="my-work-overview-title" className="m-0 text-sm font-semibold">按负责环节查看</h3><p className="mb-0 mt-1 text-[10px] text-[var(--cp-text-muted)]">进入对应环节的任务清单</p></div><span className="hidden text-[10px] text-[var(--cp-text-faint)] sm:block">点击进入二级工作视图</span></div>
-        <div className="cp-hidden-scrollbar mt-4 flex gap-2 overflow-x-auto pb-1">
-          {stages.map((item) => <button key={item.stage} type="button" className="group min-w-[150px] flex-1 rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-subtle)] px-4 py-3 text-left transition-colors hover:bg-[var(--cp-bg-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => onOpenStage(item.stage)} aria-label={`查看我的${item.stage}任务，共 ${item.count} 件`}><span className="flex items-center justify-between text-xs font-semibold"><span>{item.stage}</span><ArrowRight className="size-3.5 text-[var(--cp-text-faint)] transition-transform group-hover:translate-x-0.5" /></span><span className="mt-3 block text-2xl font-semibold">{item.count}<span className="ml-1 text-[10px] font-normal text-[var(--cp-text-faint)]">件</span></span><span className="mt-1 block truncate text-[10px] text-[var(--cp-text-muted)]">{item.note}</span></button>)}
+
+      <div className="mt-4 rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg)] px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <h3 id="my-work-overview-title" className="m-0 text-base font-semibold">负责环节</h3>
+          <span className="text-xs text-[var(--cp-text-faint)]">点击查看全部任务</span>
+        </div>
+        <div className="cp-hidden-scrollbar mt-3 flex gap-2 overflow-x-auto pb-1">
+          {stages.map((item) => {
+            const style = stageStyles[item.stage];
+            const Icon = style.icon;
+            return <button key={item.stage} type="button" className="group flex min-w-[156px] flex-1 items-center gap-3 rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-subtle)] px-3.5 py-3 text-left transition-colors hover:bg-[var(--cp-bg-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => onOpenStage(item.stage)} aria-label={`查看我的${item.stage}任务，共 ${item.count} 件`}><span className={cn("flex size-9 shrink-0 items-center justify-center rounded-[var(--cp-radius-item)]", style.className)}><Icon className="size-4" /></span><span className="min-w-0 flex-1"><span className="block text-xs font-semibold">{item.stage}</span><span className="mt-0.5 block text-xs text-[var(--cp-text-muted)]">{item.count} 件</span></span><ArrowRight className="size-3.5 shrink-0 text-[var(--cp-text-faint)] transition-transform group-hover:translate-x-0.5" /></button>;
+          })}
         </div>
       </div>
     </section>
   );
 }
 
-function MyTaskList({ actions, onOpenProject, title = "待办任务", description = "按截止时间排列，点击直接进入需要处理的内容位置。" }: { actions: MyCreativeAction[]; onOpenProject: OpenCreativeProject; title?: string; description?: string }) {
+function MyTaskList({ actions, onOpenProject, title = "待办任务", description = "" }: { actions: MyCreativeAction[]; onOpenProject: OpenCreativeProject; title?: string; description?: string }) {
   const groups = (["今天", "明天", "之后"] as const).map((label) => ({ label, items: actions.filter((item) => item.group === label) })).filter((group) => group.items.length);
   return (
     <section className="overflow-hidden rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg)]" aria-labelledby="my-task-list-title">
-      <header className="flex items-start justify-between gap-4 px-5 py-5 sm:px-6"><div><h3 id="my-task-list-title" className="m-0 text-lg font-semibold">{title}</h3><p className="mb-0 mt-1 text-xs text-[var(--cp-text-muted)]">{description}</p></div><span className="shrink-0 rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] px-2.5 py-1 text-[11px] font-medium text-[var(--cp-text-muted)]">{actions.length} 件</span></header>
+      <header className="flex items-start justify-between gap-4 px-5 py-4 sm:px-6"><div><h3 id="my-task-list-title" className="m-0 text-lg font-semibold">{title}</h3>{description ? <p className="mb-0 mt-1 text-xs text-[var(--cp-text-muted)]">{description}</p> : null}</div><span className="shrink-0 rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] px-2.5 py-1 text-[11px] font-medium text-[var(--cp-text-muted)]">{actions.length} 件</span></header>
       <div className="border-t border-[var(--cp-border-subtle)]">
         {groups.map((group) => <section key={group.label} aria-label={`${group.label}的任务`}><p className="m-0 flex items-center gap-2 border-b border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] px-5 py-2 text-[10px] font-semibold text-[var(--cp-text-muted)] sm:px-6"><span className={cn("size-1.5 rounded-full", group.label === "今天" ? "bg-[var(--cp-danger)]" : "bg-[var(--cp-text-faint)]")} />{group.label}</p>{group.items.map((action) => <button key={action.id} type="button" className="group grid w-full gap-2 border-b border-[var(--cp-border-subtle)] px-5 py-4 text-left transition-colors hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--cp-focus)] sm:px-6 md:grid-cols-[86px_minmax(0,1fr)_120px] md:items-center" onClick={() => onOpenProject(action.projectId, action.chapter)}><span className="w-fit rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] px-2.5 py-1 text-[10px] font-medium text-[var(--cp-text-soft)]">{action.stage}</span><span className="min-w-0"><span className="block text-sm font-semibold leading-relaxed group-hover:underline">{action.title}</span><span className="mt-1 block truncate text-xs text-[var(--cp-text-muted)]">{action.projectName} · {action.status}</span></span><span className="flex items-center justify-between gap-3 text-xs text-[var(--cp-text-muted)] md:justify-end"><Clock3 className="size-3.5 text-[var(--cp-text-faint)]" /><span>{action.schedule}</span><ChevronRight className="size-4 text-[var(--cp-text-faint)] transition-transform group-hover:translate-x-0.5" /></span></button>)}</section>)}
         {!actions.length ? <div className="px-6 py-12"><p className="m-0 text-sm font-medium">当前没有需要处理的任务</p><p className="mb-0 mt-2 text-xs text-[var(--cp-text-muted)]">调整时间范围或搜索条件后再查看。</p></div> : null}
@@ -211,13 +239,13 @@ function MyFocusPanel({ focus, total, index, onPrevious, onNext, onOpenProject }
   return (
     <aside className="overflow-hidden rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)]" aria-labelledby="today-focus-title">
       <header className="flex items-center justify-between border-b border-[var(--cp-border)] px-5 py-4"><div className="flex items-center gap-2"><CalendarCheck2 className="size-4 text-[var(--cp-text-muted)]" /><h3 id="today-focus-title" className="m-0 text-sm font-semibold">今天先做这件</h3></div><div className="flex items-center gap-1"><span className="mr-1 text-[10px] text-[var(--cp-text-faint)]">{total ? `${(index % total) + 1} / ${total}` : "0 / 0"}</span><button type="button" className="flex size-7 items-center justify-center rounded-full hover:bg-[var(--cp-bg-muted)] disabled:opacity-30" onClick={onPrevious} disabled={total < 2} aria-label="上一个今日重点"><ChevronLeft className="size-4" /></button><button type="button" className="flex size-7 items-center justify-center rounded-full hover:bg-[var(--cp-bg-muted)] disabled:opacity-30" onClick={onNext} disabled={total < 2} aria-label="下一个今日重点"><ChevronRight className="size-4" /></button></div></header>
-      {focus ? <div className="p-5"><span className="text-[10px] text-[var(--cp-text-faint)]">{focus.stage} · {focus.versionLabel}</span><p className="mb-0 mt-3 text-lg font-semibold leading-snug">{focus.projectName}</p><p className="mb-0 mt-4 text-sm font-medium leading-relaxed text-[var(--cp-text-soft)]">{focus.todayGoal}</p><p className="mb-0 mt-3 flex items-center gap-2 text-xs text-[var(--cp-text-muted)]"><Clock3 className="size-3.5 text-[var(--cp-text-faint)]" />{focus.deadline}</p><div className="mt-5 border-t border-[var(--cp-border)] pt-4"><p className="m-0 text-[10px] text-[var(--cp-text-faint)]">下一步</p><p className="mb-0 mt-1 text-xs text-[var(--cp-text-muted)]">{focus.nextStep}</p><Button type="button" className="mt-4 w-full" onClick={() => onOpenProject(focus.projectId, focus.chapter)}>继续处理 <ArrowRight className="size-4" /></Button></div></div> : <div className="p-5 text-xs text-[var(--cp-text-muted)]">当前筛选下没有今日重点。</div>}
+      {focus ? <div className="p-5"><span className="text-[10px] text-[var(--cp-text-faint)]">{focus.stage} · {focus.versionLabel}</span><p className="mb-0 mt-3 text-lg font-semibold leading-snug">{focus.projectName}</p><p className="mb-0 mt-4 text-sm font-medium leading-relaxed text-[var(--cp-text-soft)]">{focus.todayGoal}</p><p className="mb-0 mt-3 flex items-center gap-2 text-xs text-[var(--cp-text-muted)]"><Clock3 className="size-3.5 text-[var(--cp-text-faint)]" />{focus.deadline}</p><Button type="button" className="mt-5 w-full" onClick={() => onOpenProject(focus.projectId, focus.chapter)}>继续处理 <ArrowRight className="size-4" /></Button></div> : <div className="p-5 text-xs text-[var(--cp-text-muted)]">当前筛选下没有今日重点。</div>}
     </aside>
   );
 }
 
 function MyAttentionPanel({ risks, aiReminders }: { risks: string[]; aiReminders: string[] }) {
-  return <aside className="rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg)] p-5" aria-labelledby="attention-title"><h3 id="attention-title" className="m-0 flex items-center gap-2 text-base font-semibold"><TriangleAlert className="size-4 text-[var(--cp-danger)]" />需要留意</h3><ul className="mb-0 mt-4 space-y-3 pl-4 text-xs leading-5 text-[var(--cp-text-muted)] marker:text-[var(--cp-danger)]">{risks.map((item) => <li key={item}>{item}</li>)}</ul><details className="mt-4 border-t border-[var(--cp-border-subtle)] pt-4"><summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-[var(--cp-text-muted)]" />查看创作提示</summary><ul className="mb-0 mt-3 space-y-2 pl-4 text-xs leading-5 text-[var(--cp-text-muted)]">{aiReminders.map((item) => <li key={item}>{item}</li>)}</ul></details></aside>;
+  return <aside className="rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-danger-bg)] p-5" aria-labelledby="attention-title"><h3 id="attention-title" className="m-0 flex items-center gap-2 text-base font-semibold"><TriangleAlert className="size-4 text-[var(--cp-danger)]" />需要留意</h3><ul className="mb-0 mt-4 space-y-3 pl-4 text-xs leading-5 text-[var(--cp-text-muted)] marker:text-[var(--cp-danger)]">{risks.map((item) => <li key={item}>{item}</li>)}</ul><details className="mt-4 border-t border-[color:rgba(217,45,32,0.14)] pt-4"><summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium"><Sparkles className="size-3.5 text-[var(--cp-text-muted)]" />创作提示</summary><ul className="mb-0 mt-3 space-y-2 pl-4 text-xs leading-5 text-[var(--cp-text-muted)]">{aiReminders.map((item) => <li key={item}>{item}</li>)}</ul></details></aside>;
 }
 
 function MyActivityFeed({ activities, onOpenProject }: { activities: ReturnType<typeof getMockMyCreativeDashboard>["activities"]; onOpenProject: OpenCreativeProject }) {
@@ -227,7 +255,7 @@ function MyActivityFeed({ activities, onOpenProject }: { activities: ReturnType<
 function MyRecentTabs({ activeTab, items, onTabChange, onOpenProject }: { activeTab: MyCreativeRecentTab; items: ReturnType<typeof getMockMyCreativeDashboard>["recent"]; onTabChange: (tab: MyCreativeRecentTab) => void; onOpenProject: OpenCreativeProject }) {
   return (
     <section className="mt-5 rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-bg)] px-5 py-5" aria-labelledby="recent-content-title">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h3 id="recent-content-title" className="m-0 text-base font-semibold">最近处理</h3><p className="mb-0 mt-1 text-xs text-[var(--cp-text-muted)]">回到刚刚编辑或产出的内容</p></div><div className="cp-hidden-scrollbar flex gap-5 overflow-x-auto border-b border-[var(--cp-border)]" role="tablist" aria-label="最近内容类型">{recentTabs.map((tab) => <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className={cn("relative h-8 shrink-0 text-xs text-[var(--cp-text-muted)]", activeTab === tab && "font-medium text-[var(--cp-text)] after:absolute after:inset-x-0 after:bottom-[-1px] after:h-px after:bg-[var(--cp-text)]")} onClick={() => onTabChange(tab)}>{tab}</button>)}</div></div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><h3 id="recent-content-title" className="m-0 text-base font-semibold">最近处理</h3><div className="cp-hidden-scrollbar flex gap-5 overflow-x-auto border-b border-[var(--cp-border)]" role="tablist" aria-label="最近内容类型">{recentTabs.map((tab) => <button key={tab} type="button" role="tab" aria-selected={activeTab === tab} className={cn("relative h-8 shrink-0 text-xs text-[var(--cp-text-muted)]", activeTab === tab && "font-medium text-[var(--cp-text)] after:absolute after:inset-x-0 after:bottom-[-1px] after:h-px after:bg-[var(--cp-text)]")} onClick={() => onTabChange(tab)}>{tab}</button>)}</div></div>
       <div className="mt-4 grid gap-3 md:grid-cols-2">{items.map((item) => <button key={item.id} type="button" className="group min-w-0 rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-subtle)] p-4 text-left transition-colors hover:bg-[var(--cp-bg-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => onOpenProject(item.projectId, item.chapter)}><span className="flex items-center justify-between gap-3"><span className="text-[10px] text-[var(--cp-text-faint)]">{item.kind}</span><ArrowRight className="size-3.5 text-[var(--cp-text-faint)] transition-transform group-hover:translate-x-0.5" /></span><span className="mt-3 block truncate text-sm font-semibold group-hover:underline">{item.title}</span><span className="mt-1.5 block truncate text-xs text-[var(--cp-text-muted)]">{item.projectName}</span><span className="mt-3 block text-[10px] text-[var(--cp-text-muted)]">{item.meta}</span></button>)}</div>
       {!items.length ? <div className="py-8"><p className="m-0 text-xs font-medium">这里还没有内容</p><p className="mb-0 mt-2 text-[11px] text-[var(--cp-text-muted)]">调整时间范围后再查看。</p></div> : null}
     </section>
