@@ -53,8 +53,17 @@ npm run jobs:thread-deletion
 - Browser -> Next.js BFF -> private Gateway -> App Server is mandatory.
 - Browser input cannot control runtime policy, paths, provider identity, Tools, Hooks, Skills, or tenant scope.
 - Commerce writes require authorization, approval, idempotency, audit, and downstream readback.
+- Paid external reads require separate provider credentials, budget reservation, approval or priced policy evidence, exact-once dispatch, audit settlement, and no automatic retry after an uncertain result.
+- JustOneAPI platforms, paths, permissions, and official prices come from `enterprise:import-justoneapi-pricing`; never add them as frontend or policy constants. Workspace rate cards are optional customer-pricing overrides.
+- JustOneAPI methods, request schemas, parameter locations, pagination and documentation status come from `external-data:import-catalog`. The import must retain immutable sitemap/OpenAPI/normalized-contract hashes and intersect with the immutable pricing snapshot; do not hand-code endpoint branches.
+- Marketplace country/site choices come from OpenAPI enums imported into `provider_market_option`. Agent instructions, Gateway code and frontend components must never own or copy those option lists.
+- Model questions use only App Server `item/tool/requestUserInput`; application approvals hold the original `item/tool/call` and use `commerce/approval/*`. Never fabricate a Codex server request or duplicate its answer with `thread/inject_items`.
 - New integrations use application Tools or managed MCP boundaries.
 - Database migrations are append-only under `apps/web/migrations` and must be registered in `apps/web/scripts/migrate-auth.ts`.
+- Per-message quality feedback is application data keyed to authoritative Harness thread, Turn, and `agentMessage` item ids. Do not use App Server `feedback/upload` for thumbs ratings, trust browser-supplied reply text/model metadata, or persist a second copy of the reply body in feedback tables.
+- Harness receives only business-level external-data tools. Provider endpoint discovery, Schema inspection and raw parameter mapping stay in the private SHUEHO control plane. A business-contract or capability failure returns `success: false` with actionable `contentItems`; never relax dates or metrics, expose or synthesize an endpoint, substitute Web Search after a governed failure, or mark a failed tool call successful.
+- Provider-ID dependency chains belong in the SQL `provider_business_workflow` catalog. Harness supplies keyword and business filters, never `itemId`, `ASIN`, `shopId`, or similar provider identifiers. A downstream step may use only an identifier resolved from quality-promoted source evidence and recorded in `research_workflow_binding_evidence`; every actual provider request still receives a separate reservation, approval decision, raw archive and settlement.
+- Complete JustOneAPI REST requests/responses belong only in the independent external-data service's SQL raw layer. Commerce Pilot keeps a governance receipt and opaque warehouse ids. Do not expose either raw store through browser UI, BFF read/download routes, public MCP tools, logs, Hooks or ordinary audit events; thread deletion must never cascade into the warehouse.
 - Frontend work follows `designs/` and uses the shared workbench components.
 
 ## Required Validation
@@ -63,6 +72,8 @@ Run the checks relevant to every code pull request:
 
 ```bash
 npm run check
+npm run external-data:check
+npm run external-data:test
 npm run web:check
 npm run test:gateway
 npm run web:test
@@ -76,6 +87,11 @@ Database/RLS or migration changes also require:
 ```bash
 npm run auth:migrate
 npm run enterprise:verify-isolation
+npm run enterprise:verify-external-data
+npm run external-data:migrate
+npm run external-data:import-catalog
+npm run external-data:verify:catalog
+npm run external-data:verify
 ```
 
 Web Search changes require `npm run smoke:web-search`. Provider changes require `npm run smoke:provider`. App Server lifecycle changes require `npm run smoke:codex` and focused restart/resume verification.

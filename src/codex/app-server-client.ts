@@ -99,6 +99,7 @@ export class CodexAppServerClient extends EventEmitter {
 
     this.child.once("exit", (code, signal) => {
       this.initialized = false;
+      this.pendingServerRequests.clear();
       this.emitEvent({
         type: "process",
         event: "exit",
@@ -142,26 +143,28 @@ export class CodexAppServerClient extends EventEmitter {
     });
   }
 
-  respondToServerRequest(id: JsonRpcId, result: unknown): void {
+  respondToServerRequest(id: JsonRpcId, result: unknown): boolean {
+    if (!this.pendingServerRequests.delete(String(id))) return false;
     this.ensureProcess();
-    this.pendingServerRequests.delete(String(id));
     this.writeJson({ id, result });
     this.emitEvent({
       type: "server_request_resolved",
       id,
       at: new Date().toISOString(),
     });
+    return true;
   }
 
-  rejectServerRequest(id: JsonRpcId, error: JsonRpcError): void {
+  rejectServerRequest(id: JsonRpcId, error: JsonRpcError): boolean {
+    if (!this.pendingServerRequests.delete(String(id))) return false;
     this.ensureProcess();
-    this.pendingServerRequests.delete(String(id));
     this.writeJson({ id, error });
     this.emitEvent({
       type: "server_request_resolved",
       id,
       at: new Date().toISOString(),
     });
+    return true;
   }
 
   private async initialize(): Promise<void> {
@@ -239,6 +242,25 @@ export class CodexAppServerClient extends EventEmitter {
     }
 
     if ("method" in message && typeof message.method === "string") {
+      if (message.method === "serverRequest/resolved" && isObject(message.params)) {
+        const requestId = message.params.requestId;
+        if (typeof requestId === "string" || typeof requestId === "number") {
+          this.pendingServerRequests.delete(String(requestId));
+        }
+      }
+      if (message.method === "turn/completed" && isObject(message.params)) {
+        const threadId = typeof message.params.threadId === "string" ? message.params.threadId : null;
+        const turn = isObject(message.params.turn) ? message.params.turn : null;
+        const turnId = turn && typeof turn.id === "string" ? turn.id : null;
+        if (threadId && turnId) {
+          for (const [requestId, pending] of this.pendingServerRequests) {
+            if (!isObject(pending.params)) continue;
+            if (pending.params.threadId === threadId && pending.params.turnId === turnId) {
+              this.pendingServerRequests.delete(requestId);
+            }
+          }
+        }
+      }
       this.emitEvent({
         type: "notification",
         method: message.method,
@@ -273,21 +295,20 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private handleServerRequest(request: JsonRpcRequest): void {
-    if (request.method === "currentTime/read") {
-      this.respondToServerRequest(request.id, {
-        currentTimeAt: Math.floor(Date.now() / 1000),
-      });
-      return;
-    }
-
     const pendingRequest: PendingServerRequest = {
       id: request.id,
       method: request.method,
       params: request.params,
       receivedAt: new Date().toISOString(),
     };
-
     this.pendingServerRequests.set(String(request.id), pendingRequest);
+
+    if (request.method === "currentTime/read") {
+      this.respondToServerRequest(request.id, {
+        currentTimeAt: Math.floor(Date.now() / 1000),
+      });
+      return;
+    }
     this.emitEvent({
       type: "server_request",
       id: request.id,

@@ -155,6 +155,62 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260825_017_task_category_correction",
       path: resolve(process.cwd(), "migrations/017_task_category_correction.sql"),
     },
+    {
+      version: "20260826_018_external_data_governance",
+      path: resolve(process.cwd(), "migrations/018_external_data_governance.sql"),
+    },
+    {
+      version: "20260826_019_mcp_token_auth_function_fix",
+      path: resolve(process.cwd(), "migrations/019_mcp_token_auth_function_fix.sql"),
+    },
+    {
+      version: "20260826_020_external_data_retention",
+      path: resolve(process.cwd(), "migrations/020_external_data_retention.sql"),
+    },
+    {
+      version: "20260826_021_external_data_turn_limits",
+      path: resolve(process.cwd(), "migrations/021_external_data_turn_limits.sql"),
+    },
+    {
+      version: "20260826_022_justoneapi_pricing_catalog",
+      path: resolve(process.cwd(), "migrations/022_justoneapi_pricing_catalog.sql"),
+    },
+    {
+      version: "20260826_023_provider_unavailable_price",
+      path: resolve(process.cwd(), "migrations/023_provider_unavailable_price.sql"),
+    },
+    {
+      version: "20260826_024_provider_catalog_policy_defaults",
+      path: resolve(process.cwd(), "migrations/024_provider_catalog_policy_defaults.sql"),
+    },
+    {
+      version: "20260826_025_provider_catalog_read_only",
+      path: resolve(process.cwd(), "migrations/025_provider_catalog_read_only.sql"),
+    },
+    {
+      version: "20260826_026_agent_message_feedback",
+      path: resolve(process.cwd(), "migrations/026_agent_message_feedback.sql"),
+    },
+    {
+      version: "20260826_027_external_data_archive",
+      path: resolve(process.cwd(), "migrations/027_external_data_archive.sql"),
+    },
+    {
+      version: "20260826_028_external_data_archive_sql_only",
+      path: resolve(process.cwd(), "migrations/028_external_data_archive_sql_only.sql"),
+    },
+    {
+      version: "20260826_029_external_data_search_v1_sql_view",
+      path: resolve(process.cwd(), "migrations/029_external_data_search_v1_sql_view.sql"),
+    },
+    {
+      version: "20260826_030_external_data_archive_provider_metadata",
+      path: resolve(process.cwd(), "migrations/030_external_data_archive_provider_metadata.sql"),
+    },
+    {
+      version: "20260826_031_external_data_warehouse_receipt",
+      path: resolve(process.cwd(), "migrations/031_external_data_warehouse_receipt.sql"),
+    },
   ];
 
   for (const migration of migrations) {

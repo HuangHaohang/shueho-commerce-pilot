@@ -25,7 +25,8 @@ export function AgentRequestUserInputPanel({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const question = questions[index];
   if (!question) return null;
-  const selected = selections[question.id] ?? "";
+  const freeformOnly = question.options.length === 0;
+  const selected = freeformOnly ? "__other__" : selections[question.id] ?? "";
   const note = notes[question.id] ?? "";
   const canContinue = Boolean(selected && (selected !== "__other__" || note.trim()));
   const last = index === questions.length - 1;
@@ -34,7 +35,8 @@ export function AgentRequestUserInputPanel({
     const answers: UserInputAnswers = {};
     const summary: string[] = [];
     for (const item of questions) {
-      const selection = selections[item.id];
+      const itemFreeformOnly = item.options.length === 0;
+      const selection = itemFreeformOnly ? "__other__" : selections[item.id];
       const itemNote = notes[item.id]?.trim() ?? "";
       if (!selection || (selection === "__other__" && !itemNote)) return;
       const selectedLabel = selection === "__other__" ? itemNote : selection;
@@ -86,7 +88,7 @@ export function AgentRequestUserInputPanel({
             );
           })}
 
-          {question.isOther ? (
+          {question.isOther && !freeformOnly ? (
             <button
               type="button"
               className={cn(
@@ -103,13 +105,24 @@ export function AgentRequestUserInputPanel({
           ) : null}
         </div>
 
-        <textarea
-          value={note}
-          onChange={(event) => setNotes((current) => ({ ...current, [question.id]: event.target.value }))}
-          rows={1}
-          className="mt-2 max-h-20 min-h-10 w-full resize-y rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2 text-sm leading-6 outline-none placeholder:text-[var(--cp-text-faint)] focus:border-[var(--cp-text-muted)]"
-          placeholder={selected === "__other__" ? "填写你的答案" : "补充说明（可选）"}
-        />
+        {question.isSecret ? (
+          <input
+            type="password"
+            value={note}
+            onChange={(event) => setNotes((current) => ({ ...current, [question.id]: event.target.value }))}
+            className="mt-2 h-10 w-full rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 text-sm outline-none placeholder:text-[var(--cp-text-faint)] focus:border-[var(--cp-text-muted)]"
+            placeholder="填写你的答案"
+            autoComplete="off"
+          />
+        ) : (
+          <textarea
+            value={note}
+            onChange={(event) => setNotes((current) => ({ ...current, [question.id]: event.target.value }))}
+            rows={1}
+            className="mt-2 max-h-20 min-h-10 w-full resize-y rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2 text-sm leading-6 outline-none placeholder:text-[var(--cp-text-faint)] focus:border-[var(--cp-text-muted)]"
+            placeholder={selected === "__other__" ? "填写你的答案" : "补充说明（可选）"}
+          />
+        )}
 
         <div className="mt-3 flex items-center justify-between gap-3">
           <Button type="button" variant="ghost" className="h-9" disabled={index === 0 || submitting} onClick={() => setIndex((current) => current - 1)}>

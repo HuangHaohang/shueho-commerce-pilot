@@ -52,7 +52,7 @@ Codex Harness 必须继续负责：
 - streamed item / Turn events；
 - Tool 调用生命周期；
 - Skill 调用；
-- request_user_input 和审批暂停；
+- 原生 request_user_input、Harness 权限审批及其 server-request 生命周期；
 - interrupt、steer、queue、continue、recovery；
 - context compaction；
 - multi-agent。
@@ -63,6 +63,8 @@ Codex Harness 必须继续负责：
 - 托管 MCP server；
 - Codex Skill；
 - 小范围 App Server protocol adapter。
+
+应用侧付费或写操作审批只能挂在原始 `item/tool/call` 内，并使用明确的 Commerce 事件；禁止伪造 `item/tool/requestUserInput`。
 
 如果需求看起来需要“自己写一个 Agent 循环”，立即停止，重新设计成以上边界，不要继续实现。
 
@@ -77,6 +79,12 @@ Codex Harness 必须继续负责：
 - 禁止把 shell、任意宿主文件系统、进程控制或任意网络访问暴露给终端用户。
 - Unknown Tool 和 Unknown App Server request 必须 fail closed。
 - 外部电商写操作必须包含授权、审批、幂等、审计和下游 readback。
+- Commerce Pilot 只能作为 MCP 客户端连接 SHUEHO External Data Service，禁止直接接入 JustOneAPI MCP。JustOneAPI REST Token 只属于独立数据服务；收费调用必须经过 `reserved -> approved/not_required -> dispatched -> terminal` 状态机，结果不确定时禁止自动重试。
+- 已 dispatch 的 JustOneAPI 完整业务请求、原始响应文本和 JSON 必须写入独立服务的 SQL-only 原始层，线程删除不得级联；所有已知返回列表首期完整规范化，未知字段保留在 raw/extra JSON；禁止新增前端、普通 BFF 或公共 MCP 原始数据入口。
+- 独立数据服务使用 PostgreSQL + pgvector + Elasticsearch，以及本机/专用节点上的 Qwen3 Embedding 4B（1024 维）和 Qwen3 Reranker 4B。模型只处理限长原子记录，AI 判断必须版本化且不能删除原始数据。
+- 用户只描述业务目标；Harness 必须自主判断 JustOneAPI 外部数据是否能实质改善结果，不要求用户点名供应商、接口或工具，也不得因工具可用就无意义地产生费用。真正准备调用收费接口时再应用 composer 的逐次询问、当前任务授权或企业长期策略。
+- “按企业策略自动调用”必须由企业设置中的平台/接口白名单、有效费率、调用/金额预算和单次自动批准上限共同放行，不能只做前端开关。
+- JustOneAPI 平台、接口路径、权限和官方单价必须来自 `enterprise:import-justoneapi-pricing` 导入的数据库主数据；禁止在前端、Skill、Gateway 或迁移默认值中新增供应商目录常量。
 - 不得记录或提交密钥、token、PII、prompt 正文、附件正文、Tool 参数/结果。
 
 五、开发方式

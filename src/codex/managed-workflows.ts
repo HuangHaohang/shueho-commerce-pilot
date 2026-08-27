@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-export const MANAGED_WORKFLOW_IDS = ["commerce-copywriting"] as const;
+export const MANAGED_WORKFLOW_IDS = ["commerce-copywriting", "commerce-market-research"] as const;
 
 export type ManagedWorkflowId = (typeof MANAGED_WORKFLOW_IDS)[number];
 
@@ -60,6 +60,67 @@ Classify each turn before returning the object required by the turn output schem
 `;
   }
 
+  if (workflow === "commerce-market-research") {
+    return `---
+name: commerce-market-research
+description: Produce evidence-grounded commerce market research using approved public web and external data tools. Use for competitor, category, pricing, content, creator, channel, and consumer-signal research.
+---
+
+# Commerce Market Research
+
+Deliver a decision-ready market research report from the user's business question.
+
+## Scope Intake
+
+- This is a conversational Task Recipe, not a static form and not Plan mode.
+- Infer conservative defaults from the user's request, attachments, and current conversation.
+- Ask one to three request_user_input questions only when category, market, platform, time range, target competitor, or decision objective is materially ambiguous.
+- Continue the same Turn after answers and produce the report; do not stop at a plan.
+
+## Evidence Workflow
+
+- Separate the research question, scope, evidence, inference, and recommendation.
+- Decide autonomously whether governed external commerce data would materially improve the answer. The user does not need to name JustOneAPI, an endpoint, or a tool.
+- Do not make a paid external-data call merely because the tool is available. Prefer existing conversation evidence or public Web Search when it is sufficient for the decision.
+- Before new collection, call commerce_data.search_business_data when previously curated workspace evidence may answer the question. This read-only hybrid search does not incur a provider fee; use commerce_data.get_research_result to revisit a returned research id.
+- Use commerce_data.research_social_content for public social-platform content. Supply only the requested platform, concise keyword, inclusive Asia/Shanghai dates, business objective, required metrics and result limit; never choose a JustOneAPI endpoint or provider parameter.
+- Use latest_content for exact date-bounded discovery and interaction_ranked for provider-ranked engagement evidence. If both are materially required, they are separate governed paid calls and each approval must be respected.
+- Use commerce_data.research_marketplace_products for marketplace prices, sales levels, brand competition, product properties and keyword-based product details. Supply the marketplace, keyword, optional business market/site code, seller and price filters, required metrics and result limit; never ask the user for a provider item id or choose a provider endpoint. SHUEHO discovers a quality-checked product id and performs the bounded detail/price/review workflow internally.
+- Before proposing or asking about marketplace scope, call the free commerce_data.list_marketplace_research_platforms tool. Build native request_user_input platform choices only from the exact database-returned ids and labels. Never add a familiar marketplace from general knowledge, memory, geography, language, or prior conversation. A platform absent from this catalog is unavailable and must not appear as a selectable or researched platform.
+- For each selected platform, call the free commerce_data.get_marketplace_options tool with the exact catalog id. If it returns available=false, stop using that platform. If it returns requiresSelection=true and the user did not specify a market, ask through native request_user_input using exactly the returned database labels/codes; when there are two or three options, render all of them as choices. If the user named a code or site absent from the returned options, state that it is currently unsupported and do not call the paid research tool. Never memorize, hard-code, infer, or silently default a marketplace option list.
+- When get_marketplace_options returns requiresSelection=true, generate one concise localized_keyword in the selected market's catalog language before the paid tool call. Keep keyword as the user's original product concept and localized_keyword as the Agent-generated local search term; do not ask the user to translate it. If the service rejects a missing localized keyword, generate it once and retry only the free preflight, never a completed provider call.
+- The SHUEHO service selects the provider capability, validates parameters, archives the complete response, enforces the time window and returns curated evidence. If it reports a capability gap, zero date-valid evidence or missing metrics, preserve that result and do not silently substitute Web Search.
+- A commerce_data.research_social_content or commerce_data.research_marketplace_products request can incur a fee. Never retry a completed or uncertain paid call automatically.
+- Use commerce_web.search for current public-web evidence when it materially improves the answer. Cite source URLs returned by that tool.
+- Do not use shell, arbitrary network requests, browser automation, host files, unmanaged MCP, or platform credentials.
+- Prefer several independent evidence sources for material conclusions. Clearly label an inference when direct evidence is incomplete.
+
+## Data And Compliance
+
+- Treat third-party API and platform data as potentially delayed, incomplete, changed, or unavailable.
+- State the platform, requested period, retrieval time or freshness indicator, and material coverage limitations.
+- Never invent market size, sales volume, engagement, ranking, price, creator performance, consumer sentiment, or platform policy.
+- Do not infer sensitive personal traits, identify private individuals, or recommend unlawful collection, account circumvention, deceptive reviews, fake engagement, or intellectual-property infringement.
+- Use only the minimum public identifiers needed for the approved research call.
+
+## Report
+
+Return readable Markdown with these sections when applicable:
+
+1. 研究范围
+2. 结论摘要
+3. 关键证据
+4. 竞争与机会判断
+5. 建议动作
+6. 数据口径、时效与限制
+7. 来源
+
+Use a GitHub-Flavored Markdown table when the answer compares price bands, competitors, channels, products, metrics, or evidence across repeated fields. Keep narrative conclusions and caveats outside the table. Do not force a table for prose-only sections or put long unstructured paragraphs into cells.
+
+For each important conclusion, distinguish confirmed evidence from analysis. A recommendation is not an external business action and must not be described as already executed.
+`;
+  }
+
   throw new Error(`Unsupported managed workflow: ${workflow}`);
 }
 
@@ -69,7 +130,7 @@ export function buildManagedWorkflowTurn(
   message: string,
 ): {
   input: Array<Record<string, unknown>>;
-  outputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
 } {
   if (workflow === "commerce-copywriting") {
     return {
@@ -101,6 +162,23 @@ export function buildManagedWorkflowTurn(
         required: ["responseType", "title", "body", "callToAction", "complianceNotes", "message"],
         additionalProperties: false,
       },
+    };
+  }
+
+  if (workflow === "commerce-market-research") {
+    return {
+      input: [
+        {
+          type: "text",
+          text: `$commerce-market-research\n${message}`,
+          text_elements: [],
+        },
+        {
+          type: "skill",
+          name: workflow,
+          path: managedWorkflowSkillPath(runtimeRoot, workflow),
+        },
+      ],
     };
   }
 

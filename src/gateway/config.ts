@@ -23,6 +23,8 @@ export type GatewayConfig = {
   defaultModel?: string;
   defaultModelProvider?: string;
   titleModel: string;
+  externalDataService: ExternalDataServiceMcpConfig;
+  externalDataControlUrl?: string;
 };
 
 export type CommerceProviderConfig = {
@@ -32,10 +34,18 @@ export type CommerceProviderConfig = {
   apiKeyEnvName: string;
   apiKey?: string;
   imageModel: string;
+  webSearchModel: string;
   agentModelSelectors: string[];
   modelCacheTtlMs: number;
   webSearchTimeoutMs: number;
   webSearchMaxAttempts: number;
+};
+
+export type ExternalDataServiceMcpConfig = {
+  url: string;
+  token?: string;
+  timeoutMs: number;
+  maxResultBytes: number;
 };
 
 export function readGatewayConfig(): GatewayConfig {
@@ -46,7 +56,9 @@ export function readGatewayConfig(): GatewayConfig {
   const agentEventSinkUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_EVENT_SINK_URL);
   const agentAuthorizationUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_AUTHORIZATION_URL);
   const agentAdmissionUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_ADMISSION_URL);
+  const externalDataControlUrl = parseOptionalHttpUrl(process.env.COMMERCE_EXTERNAL_DATA_CONTROL_URL);
   const runtimeTenantId = emptyToUndefined(process.env.COMMERCE_RUNTIME_TENANT_ID);
+  const externalDataService = readExternalDataServiceMcpConfig();
   if (process.env.NODE_ENV === "production" && (!internalToken || internalToken.length < 32)) {
     throw new Error("COMMERCE_GATEWAY_INTERNAL_TOKEN must contain at least 32 characters in production.");
   }
@@ -58,6 +70,9 @@ export function readGatewayConfig(): GatewayConfig {
   }
   if (process.env.NODE_ENV === "production" && !agentAdmissionUrl) {
     throw new Error("COMMERCE_AGENT_ADMISSION_URL is required in production.");
+  }
+  if (process.env.NODE_ENV === "production" && externalDataService.token && !externalDataControlUrl) {
+    throw new Error("COMMERCE_EXTERNAL_DATA_CONTROL_URL is required when external data is enabled in production.");
   }
   if (runtimeTenantId && !isUuid(runtimeTenantId)) {
     throw new Error("COMMERCE_RUNTIME_TENANT_ID must be a UUID.");
@@ -104,6 +119,31 @@ export function readGatewayConfig(): GatewayConfig {
     defaultModel: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL),
     defaultModelProvider: emptyToUndefined(process.env.CODEX_DEFAULT_MODEL_PROVIDER) ?? provider.id,
     titleModel: process.env.COMMERCE_TITLE_MODEL?.trim() || "gpt-5.3-codex-spark",
+    externalDataService,
+    externalDataControlUrl,
+  };
+}
+
+function readExternalDataServiceMcpConfig(): ExternalDataServiceMcpConfig {
+  const url = new URL(process.env.EXTERNAL_DATA_SERVICE_MCP_URL || "http://127.0.0.1:8791/mcp");
+  if (url.protocol !== "https:" && !(process.env.NODE_ENV !== "production" && url.protocol === "http:")) {
+    throw new Error("EXTERNAL_DATA_SERVICE_MCP_URL must use HTTPS outside local development.");
+  }
+  return {
+    url: url.toString(),
+    token: emptyToUndefined(process.env.EXTERNAL_DATA_SERVICE_MCP_TOKEN),
+    timeoutMs: parseBoundedInteger(
+      process.env.EXTERNAL_DATA_SERVICE_MCP_TIMEOUT_MS || "300000",
+      "EXTERNAL_DATA_SERVICE_MCP_TIMEOUT_MS",
+      60_000,
+      300_000,
+    ),
+    maxResultBytes: parseBoundedInteger(
+      process.env.EXTERNAL_DATA_SERVICE_MCP_MAX_RESULT_BYTES || "1048576",
+      "EXTERNAL_DATA_SERVICE_MCP_MAX_RESULT_BYTES",
+      65_536,
+      2_097_152,
+    ),
   };
 }
 
@@ -120,17 +160,18 @@ function readCommerceProviderConfig(): CommerceProviderConfig {
     apiKeyEnvName: "COMMERCE_PROVIDER_API_KEY",
     apiKey: emptyToUndefined(process.env.COMMERCE_PROVIDER_API_KEY),
     imageModel: process.env.COMMERCE_IMAGE_MODEL?.trim() || "gpt-image-2",
+    webSearchModel: process.env.COMMERCE_WEB_SEARCH_MODEL?.trim() || "gpt-5.6-luna",
     agentModelSelectors: parseCsv(
       process.env.COMMERCE_AGENT_MODEL_SELECTORS ||
         "gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-5.6-sol,gemini-3.7-flash*,claude-sonnet-4-6,claude-opus-4-6-thinking",
     ),
     modelCacheTtlMs: parsePositiveInteger(process.env.COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS || "60000", "COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS"),
     webSearchTimeoutMs: parsePositiveInteger(
-      process.env.COMMERCE_WEB_SEARCH_TIMEOUT_MS || "90000",
+      process.env.COMMERCE_WEB_SEARCH_TIMEOUT_MS || "30000",
       "COMMERCE_WEB_SEARCH_TIMEOUT_MS",
     ),
     webSearchMaxAttempts: parseBoundedInteger(
-      process.env.COMMERCE_WEB_SEARCH_MAX_ATTEMPTS || "2",
+      process.env.COMMERCE_WEB_SEARCH_MAX_ATTEMPTS || "1",
       "COMMERCE_WEB_SEARCH_MAX_ATTEMPTS",
       1,
       3,

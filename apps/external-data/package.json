@@ -1,0 +1,35 @@
+{
+  "name": "@shueho-commerce-pilot/external-data",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "migrate": "tsx src/migrate.ts",
+    "import:catalog": "tsx src/import-justoneapi-catalog.ts",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "evaluate": "tsx src/evaluate.ts",
+    "verify:sql": "tsx src/verify-sql.ts",
+    "verify:catalog": "tsx src/verify-catalog.ts",
+    "verify": "tsx src/verify.ts",
+    "repair:research": "tsx src/reprocess-research-request.ts"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "^9.5.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ajv": "^8.20.0",
+    "dotenv": "^17.2.2",
+    "pg": "^8.23.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

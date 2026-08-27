@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
 import { recordAgentUserInputAnswer } from "@/lib/agent/user-input-answers";
+import { REQUEST_USER_INPUT_ENDED_CODE } from "@/lib/agent/request-user-input-lifecycle";
+import { shouldDisplayRequestUserInputAnswer } from "@/lib/agent/request-user-input-visibility";
 import { requireEnterpriseTenantPermission } from "@/lib/enterprise/context";
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
@@ -36,8 +38,14 @@ export async function POST(
       (value): value is Record<string, unknown> =>
         Boolean(value && typeof value === "object" && !Array.isArray(value) && (value as Record<string, unknown>).requestId === requestId),
     );
-    if (!pendingResponse.ok || !pending) {
-      return NextResponse.json({ error: "待确认请求不存在或已经结束。" }, { status: 404 });
+    if (!pendingResponse.ok) {
+      return NextResponse.json(
+        { error: "无法确认待回答请求状态。" },
+        { status: pendingResponse.status },
+      );
+    }
+    if (!pending) {
+      return endedRequestResponse();
     }
     if (pending.action === "skill.publish") {
       const tenantDenied = requireEnterpriseTenantPermission(access.context, "tenant.manage");
@@ -56,9 +64,14 @@ export async function POST(
       },
     );
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    if (response.status === 404 || response.status === 409 || response.status === 410) {
+      return endedRequestResponse();
+    }
+    const displayAnswer = shouldDisplayRequestUserInputAnswer(pending.origin);
     let answerIndexed = false;
     if (
       response.ok &&
+      displayAnswer &&
       payload &&
       typeof payload.answerMessage === "string" &&
       typeof pending.turnId === "string" &&
@@ -75,11 +88,32 @@ export async function POST(
         () => false,
       );
     }
-    return NextResponse.json(
-      payload ? { ...payload, answerIndexed } : { error: "Agent Gateway 返回了无效响应。" },
-      { status: response.status },
-    );
+    if (!payload) {
+      return NextResponse.json(
+        { error: "Agent Gateway 返回了无效响应。" },
+        { status: response.status },
+      );
+    }
+    const browserPayload = { ...payload };
+    if (displayAnswer) {
+      browserPayload.answerIndexed = answerIndexed;
+    } else {
+      delete browserPayload.answerMessage;
+    }
+    return NextResponse.json(browserPayload, { status: response.status });
   } catch {
     return NextResponse.json({ error: "无法提交答案。" }, { status: 503 });
   }
+}
+
+function endedRequestResponse() {
+  return NextResponse.json(
+    {
+      error: "待回答请求已经结束，当前任务无法继续。请重新发送任务。",
+      code: REQUEST_USER_INPUT_ENDED_CODE,
+      requestEnded: true,
+      retryable: true,
+    },
+    { status: 410, headers: { "Cache-Control": "no-store" } },
+  );
 }

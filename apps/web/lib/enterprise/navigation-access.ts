@@ -18,6 +18,9 @@ const ENTERPRISE_ADMIN_NAVIGATION_PERMISSIONS = new Set<EnterprisePermission>([
   "usage.export",
   "audit.read",
   "audit.export",
+  "external_data.policy.manage",
+  "external_data.usage.read",
+  "mcp.access_token.manage",
 ]);
 
 export function canAccessEnterpriseAdmin(permissions: Iterable<string>): boolean {
@@ -25,6 +28,13 @@ export function canAccessEnterpriseAdmin(permissions: Iterable<string>): boolean
     if (ENTERPRISE_ADMIN_NAVIGATION_PERMISSIONS.has(permission as EnterprisePermission)) {
       return true;
     }
+  }
+  return false;
+}
+
+export function canManageExternalDataPolicy(permissions: Iterable<string>): boolean {
+  for (const permission of permissions) {
+    if (permission === "external_data.policy.manage") return true;
   }
   return false;
 }

@@ -89,6 +89,18 @@ const auditActionLabels: Record<string, string> = {
   "quota.denied": "额度门禁拒绝",
   "agent.turn.reserve": "任务额度门禁",
   "api.rate_limit": "接口限流门禁",
+  "external_data.policy.update": "更新外部数据策略",
+  "external_data.rate_card.set": "设置外部数据费率",
+  "external_data.rate_card.retire": "停用外部数据费率",
+  "external_data.call.reserve": "预占外部数据调用",
+  "external_data.call.approve": "批准外部数据调用",
+  "external_data.call.dispatch": "发送外部数据调用",
+  "external_data.call.settle": "结算外部数据调用",
+  "external_data.call.cancel": "取消外部数据调用",
+  "external_data.catalog.authorize": "外部数据目录授权拒绝",
+  "external_data.retention.purge": "清理到期外部数据审计",
+  "mcp.access_token.create": "创建 MCP 访问令牌",
+  "mcp.access_token.revoke": "撤销 MCP 访问令牌",
 };
 
 const fieldClassName =

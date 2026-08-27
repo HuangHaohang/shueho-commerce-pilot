@@ -40,13 +40,17 @@ export function selectVisibleWebSources(
 function normalizeWebSources(value: unknown): WebSource[] {
   if (!Array.isArray(value)) return [];
   const sources: WebSource[] = [];
+  const seen = new Set<string>();
   for (const item of value) {
     if (!isRecord(item) || typeof item.url !== "string") continue;
     const normalized = normalizeSource({
       url: item.url,
       title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : null,
     });
-    if (normalized) sources.push(normalized);
+    if (normalized && !seen.has(normalized.url)) {
+      seen.add(normalized.url);
+      sources.push(normalized);
+    }
   }
   return sources;
 }

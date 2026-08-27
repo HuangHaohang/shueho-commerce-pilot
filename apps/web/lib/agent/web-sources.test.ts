@@ -17,6 +17,10 @@ describe("web search sources", () => {
                 url: "https://www.google.com/?hl=us&utm_source=openai&utm_campaign=test",
                 title: "Google",
               },
+              {
+                url: "https://www.google.com/?hl=us&utm_medium=duplicate",
+                title: "Duplicate Google",
+              },
             ],
           },
         },

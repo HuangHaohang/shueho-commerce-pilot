@@ -31,6 +31,8 @@ The project must preserve Codex harness ownership of the agent-runtime concerns 
 
 Do not replace these concerns with a from-scratch agent loop, a generic third-party orchestration framework, or ad hoc prompt chaining. Other libraries may be used only when they serve the commerce product, UI, persistence, integrations, evaluation, or tool layer without displacing the Codex harness.
 
+Protocol identity is part of this boundary. Model questions must come from App Server `item/tool/requestUserInput`, Harness permission approvals must retain their native request types, and MCP elicitation must remain `mcpServer/elicitation/request`. An application-owned paid-call or commerce-write approval may hold the original `item/tool/call` while policy is evaluated, but it must use an explicit `commerce/approval/*` event and must never fabricate a Codex server request or inject a duplicate answer into model history.
+
 ## Non-Negotiable Runtime Isolation
 
 Commerce Pilot is a hosted e-commerce agent, not a browser-accessible local coding agent. Codex App Server may perform reasoning, thread/turn lifecycle, streaming, interruption, compaction, and application-registered tool orchestration, but end users must never receive general access to the deployment host.
@@ -48,6 +50,12 @@ Commerce Pilot is a hosted e-commerce agent, not a browser-accessible local codi
 - Every persisted Codex thread must be bound to the authenticated Commerce Pilot tenant/user/workspace, and every event, turn, interrupt, resume, and artifact read must re-check that ownership.
 
 Future tools belong in an explicit Commerce Pilot tool registry or allowlisted MCP server configuration. Side-effecting commerce tools must implement application-owned authorization, approval, idempotency, audit, and readback; they may not escape to shell commands as an implementation shortcut.
+
+JustOneAPI is mediated by the independent SHUEHO External Data Service. Commerce Pilot is that service's MCP client and must not connect to JustOneAPI MCP or hold the JustOneAPI REST Token. The service must persist complete raw requests/responses before normalization, store every returned known list in endpoint-specific source tables, retain unknown fields in raw JSON, and expose only quality-checked business evidence through MCP. Its retrieval stack is PostgreSQL + pgvector + Elasticsearch with locally hosted Qwen3 Embedding/Reranker models; AI decisions annotate data and may never delete or overwrite raw records.
+
+Paid external reads are side effects even when they do not mutate the source platform. JustOneAPI and similar providers must use service-owned credentials that are never passed to users or browsers. Every paid call must enforce live RBAC, platform/endpoint policy, budget reservation, approval evidence or a priced enterprise auto-approval ceiling, exact-once dispatch, audit/billing settlement, and no automatic retry after an uncertain result. Commerce Pilot's public MCP credentials and an upstream provider credential are separate audiences and must never be passed through.
+
+Supplier platforms, endpoint paths, market/site options, permissions, and official unit prices are provider master data. Maintain them through validated, immutable import receipts and database rows, not frontend constants, Skill text, Gateway allowlists, migration defaults, or copied price literals. JustOneAPI pricing updates use `enterprise:import-justoneapi-pricing`; workspace rate cards are optional customer-pricing overrides only.
 
 ## Preferred Integration Shape
 

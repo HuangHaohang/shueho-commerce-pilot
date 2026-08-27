@@ -29,7 +29,7 @@ This repository is designed for humans collaborating with coding agents. Before 
 - Uses the Codex host-tool protocol to expose `gpt-image-2` image generation inside agent turns.
 - Disables shell, unified exec, arbitrary local-path file tools, process network access, connectors, unmanaged MCP, plugins, and unmanaged Hooks.
 - Exposes provider-backed Web Search through the application-owned `commerce_web.search` MCP server, with real Harness `mcpToolCall` lifecycle events and cited source URLs. This remains available when old threads are resumed because it is managed runtime configuration rather than a `thread/start` dynamic-tool snapshot.
-- Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog instead of a configured-only flag, and transient provider timeouts receive one bounded MCP-internal retry.
+- Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog and dedicated search model instead of a configured-only flag. Search failures return structured reasons to the Harness; any retry is a visible, shorter follow-up tool call rather than a hidden repeat of the same expensive query.
 - Allows bounded multi-agent collaboration; subagents inherit the same restricted runtime policy.
 - Keeps arbitrary local-path `view_image` disabled. Tenant-owned photos use the authenticated thread attachment pipeline and native App Server `localImage` inputs; browser events never receive host paths.
 - Enables an application-generated managed Hook runner for prompt, tool, compaction, stop, session, and subagent lifecycle policy/audit events; users cannot provide Hook commands.
@@ -46,6 +46,14 @@ This repository is designed for humans collaborating with coding agents. Before 
 - Supports tenant/thread/request-bound photos and bounded PDF, DOCX, XLSX, CSV, JSON, Markdown, and text attachments. Photos use native `localImage`; documents are safely extracted into bounded context. See [Thread Attachments](./docs/architecture/thread-attachments.md).
 - Permanently deletes tasks through a durable PostgreSQL background queue. App Server thread-tree deletion completes before generated images, uploads, extracted text, and application indexes are removed. See [Thread Deletion](./docs/architecture/thread-deletion.md).
 - Generates outcome-oriented titles with `gpt-5.3-codex-spark` and applies deterministic business-category correction before grouping recent tasks.
+- Connects Codex Harness to the independent SHUEHO External Data MCP service; the Gateway never connects to JustOneAPI MCP. The service calls allowlisted JustOneAPI REST APIs, while Commerce Pilot retains approval, RBAC, quota, audit and billing ownership. Paid calls remain exact-once and uncertain results are never retried automatically.
+- Persists complete provider response text and JSON in the independent SQL-only raw warehouse, normalizes every returned Taobao item/brand/property/value/page/trace record, and promotes only quality-checked, locally scored evidence to the business layer. See [SHUEHO External Data Service](./docs/architecture/external-data-service.md).
+- Imports the complete official JustOneAPI documentation/OpenAPI catalog into immutable SQL receipts, joins it to the official pricing snapshot, and drives all GET/POST query/form calls through one database-configured adapter. Generic source collections and records preserve every returned list/item for endpoints without a specialized normalizer.
+- Runs a separate bearer-authenticated Commerce Pilot Streamable HTTP MCP server for external clients. Customer MCP Tokens are hashed, workspace-bound and intersected with live RBAC; customers never receive the JustOneAPI Token. See [External Data MCP And Governance](./docs/architecture/external-data-mcp.md).
+- Provides a dedicated market-research Task Recipe and workbench that keeps public Web Search and approved external-data evidence as distinct lineages while preserving sources, freshness, metric coverage and limitations; one never silently substitutes for a failed governed call.
+- Exposes only `list_marketplace_research_platforms`, `get_marketplace_options`, `research_social_content`, `research_marketplace_products`, `search_business_data` and `get_research_result` to Harness. The platform directory is derived exclusively from active database business workflows, and the Gateway requires a same-Turn directory read before site lookup or paid marketplace research. Marketplace and site choices therefore cannot come from model memory. Provider endpoint discovery, OpenAPI inspection and raw parameter mapping remain inside the private SHUEHO service. Per-call confirmation, current-task authorization and enterprise policy automation remain separate choices under the same hard allowlist, quota, budget, audit and no-retry controls.
+- Resolves marketplace identifiers inside database-driven business workflows. For example, one JD keyword research tool call becomes search -> quality-checked item-id binding -> detail -> price, while every paid provider step keeps its own reservation, approval, exact-once dispatch, raw archive and billing settlement. The same catalog currently defines bounded workflows for JD, Taobao/Tmall, 1688, Amazon, Douyin E-commerce, TikTok Shop, Shopee and Xianyu.
+- Places copy, positive, and negative actions below every completed final Agent reply. Ratings are revalidated against authoritative Harness message ids, stored under Enterprise RLS as current state plus append-only events, and never routed through Codex's diagnostic `feedback/upload` API.
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
 
@@ -56,6 +64,8 @@ Commerce Pilot is currently an Enterprise-only B2B product. One customer company
 - Node.js 20.16+
 - npm
 - Docker with Compose for the provided local PostgreSQL environment, or an externally managed PostgreSQL database
+- `uv` and Python 3.11-3.13 for the local Qwen3 retrieval service
+- Apple Silicon with Metal/MPS for the provided local Qwen3 setup; production may use a dedicated compatible GPU worker
 - OpenAI/Codex credentials or a compatible custom provider configured for the deployed app runtime
 
 The app uses the dependency-managed Codex binary by default:
@@ -80,6 +90,23 @@ npm run smoke:codex
 
 ## Run The Gateway
 
+Start and migrate the independent external-data infrastructure, then run the local retrieval models and SHUEHO MCP in separate terminals:
+
+```bash
+npm run external-data:infra:up
+npm run external-data:migrate
+npm run external-data:import-catalog
+npm run external-data:models:sync
+npm run external-data:models:download
+npm run external-data:models
+npm run external-data:dev
+```
+
+The JustOneAPI REST Token belongs only in ignored `apps/external-data/.env`. Gateway `.env` receives only `EXTERNAL_DATA_SERVICE_MCP_URL` and the separate internal MCP token.
+`external-data:import-catalog` is a one-shot operator job: it requires the independent warehouse migration credential and read access to the immutable Commerce Pilot pricing catalog. The long-running external-data service must not receive the Commerce Pilot migration credential.
+
+Then run the Gateway:
+
 ```bash
 npm run dev
 ```
@@ -100,6 +127,7 @@ Configure the runtime credential from `apps/web/.env.example` and the job-only o
 npm run db:up
 npm run auth:migrate
 npm run enterprise:verify-isolation
+npm run enterprise:verify-external-data
 ```
 
 `DATABASE_URL` is the non-superuser, non-`BYPASSRLS` web role. `MIGRATION_DATABASE_URL` lives only in `.env.migration` or a migration/provisioning job secret; it must not exist in the long-running Web environment. Production fails closed when these boundaries are not satisfied.
@@ -123,11 +151,37 @@ Copy `apps/web/.env.example` to an ignored `apps/web/.env` and `apps/web/.env.mi
 npm run web:dev
 ```
 
+Run the separate public MCP listener when testing an external MCP client:
+
+```bash
+npm run dev:mcp
+```
+
+It listens on `http://127.0.0.1:8790/mcp` by default and requires a Commerce Pilot MCP Access Token created in Enterprise settings. It remains unavailable until the BFF control callbacks and private SHUEHO external-data MCP credential are configured; no vendor Token is accepted from browser or MCP tool arguments.
+
 Run the durable deletion worker in a third terminal. A web-process callback is not a replacement for this worker:
 
 ```bash
 npm run jobs:thread-deletion
 ```
+
+Run the tenant-pinned external-data retention worker when JustOneAPI governance is enabled:
+
+```bash
+npm run jobs:external-data-retention
+```
+
+It removes only expired terminal call-ledger rows, preserves unresolved calls and legal holds, and writes a summary audit event.
+
+Import a complete official JustOneAPI pricing export before enabling monetary budgets. The import is SHA-256 idempotent, validates the exact workbook schema, derives stable `endpoint_id` values from official REST paths, and replaces the active provider snapshot without editing application code:
+
+```bash
+npm run enterprise:import-justoneapi-pricing -- \
+  --file=/absolute/path/justoneapi-pricing.xlsx \
+  --actor-email=owner@example.com
+```
+
+Official provider prices become the default vendor and customer unit price. Workspace rate cards are optional customer-pricing overrides.
 
 Default URL:
 
@@ -153,12 +207,25 @@ Full pull-request validation:
 
 ```bash
 npm run check
+npm run external-data:check
+npm run external-data:test
+npm run external-data:verify:catalog
 npm run web:check
 npm run test:gateway
 npm run web:test
 npm run security:runtime
 npm run web:build
+npm run enterprise:verify-isolation
+npm run enterprise:verify-external-data
+npm run external-data:migrate
+npm run external-data:verify
 git diff --check
+```
+
+To repair only the normalization or enrichment stage of an already archived provider response, without dispatching another provider call:
+
+```bash
+npm run external-data:repair:research -- --research-request-id=<warehouse-research-uuid>
 ```
 
 Production registration is Enterprise invitation-only and requires the exact invited work email. Invite bearer tokens use `/invite#token=...`; the browser moves the fragment into memory and immediately removes it from the address bar. `COMMERCE_ALLOW_PUBLIC_REGISTRATION=true` works only outside production for bootstrap/E2E. Email/SMS delivery interfaces remain disabled until explicitly configured, and the application never logs verification codes. See [docs/architecture/authentication.md](./docs/architecture/authentication.md).
@@ -250,7 +317,7 @@ Generated-image artifact metadata is stored separately under `$CODEX_HOME/genera
 
 Web Search is the application-owned `commerce_web.search` MCP tool. App Server launches the fixed stdio server from app-owned config, exposes only its read-only `search(query)` contract, and receives normal `mcpToolCall` events. The MCP server calls the configured provider's OpenAI-compatible `/v1/responses` Web Search capability and returns cited sources. Because MCP configuration is loaded by the runtime when a thread is resumed, conversations created before Web Search was added receive it without history migration. Native `web_search = "live"` remains enabled when the provider supports it, and the old dynamic-tool handler remains compatibility-only for threads that already persisted that definition.
 
-Gateway calls App Server `config/mcpServer/reload` at startup, then requires `mcpServerStatus/list` to contain `commerce_web.search`; startup and thread operations fail closed otherwise. Configure provider retry bounds with `COMMERCE_WEB_SEARCH_TIMEOUT_MS` and `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS`. `npm run smoke:web-search` verifies the complete Gateway → App Server → model → MCP → provider → cited-answer path.
+Gateway calls App Server `config/mcpServer/reload` at startup, then requires `mcpServerStatus/list` to contain `commerce_web.search`; startup and thread operations fail closed otherwise. `COMMERCE_WEB_SEARCH_MODEL` selects the dedicated sourced-search model (`gpt-5.6-luna` by default); the default 30-second provider timeout and one attempt keep failures bounded and visible to the Harness. `npm run smoke:web-search` verifies the complete Gateway → App Server → model → MCP → provider → cited-answer path.
 
 See [docs/config/custom-model-provider.md](./docs/config/custom-model-provider.md) for details.
 

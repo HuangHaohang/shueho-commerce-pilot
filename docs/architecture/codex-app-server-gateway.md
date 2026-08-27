@@ -6,6 +6,25 @@ The product UI is browser-based. Do not convert this architecture into Electron,
 
 Deployment must be self-contained at the application layer. A target server may have only Node.js, npm, environment variables, mounted secrets, and persistent volumes. It must not be required to have a preinstalled global Codex CLI or a developer-owned `~/.codex` directory.
 
+## Source Conformance Baseline
+
+The runtime dependency is pinned to `@openai/codex` `0.149.0`. The matching upstream source baseline is `openai/codex` tag `rust-v0.149.0`, commit `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`. Runtime changes must be checked against `codex-rs/app-server`, `codex-rs/app-server-protocol`, and their tests before local abstractions are introduced.
+
+| Concern | Required Codex-owned path | Commerce Pilot responsibility |
+|---|---|---|
+| Conversation | `thread/start`, `thread/resume`, `thread/read`, `thread/delete` | Authentication, tenant binding, safe projection |
+| Work cycle | `turn/start`, `turn/steer`, `turn/interrupt`, `turn/completed` | Admission, deadlines, authenticated commands |
+| Streaming | `item/started`, deltas, `item/completed` | Sanitization and SSE fan-out |
+| Model questions | `item/tool/requestUserInput`, client response, `serverRequest/resolved` | Authenticated presentation and answer validation |
+| Client-hosted tools | `dynamicTools` plus `item/tool/call` request/response | Tool implementation, RBAC, business approval, audit, readback |
+| Managed MCP | App Server MCP catalog and `mcpToolCall` items | App-owned server config and provider adapter |
+| Queue | `thread/queue/*` and `thread/queue/changed` | Capacity, product ordering commands, authorization |
+| Context | `thread/tokenUsage/updated`, `thread/compact/start`, `contextCompaction` | Threshold and quota admission only |
+| Skills | `skills/list`, native `skill` input item | Safe catalog projection and managed publication |
+| Multi-agent | Codex collaboration tools and child-thread events | Inherited tenant policy and concurrency cap |
+
+Direct model calls are limited to non-agent product utilities such as title generation and image/provider adapters. They must not own thread state, iterate tool calls, summarize conversation state, or continue user Turns. There is no application-authored agent loop.
+
 ## Boundary
 
 The gateway owns:
@@ -32,6 +51,8 @@ Codex App Server still owns:
 - sandbox and permission policy
 - persisted Codex history/state
 - application-registered dynamic tool call lifecycle
+- model-originated `request_user_input` and `serverRequest/resolved`
+- thread queue, interruption, steering, compaction, and multi-agent lifecycle
 
 The gateway must not replace App Server with a custom agent loop.
 
@@ -61,7 +82,9 @@ Threads run from `$CODEX_HOME/workspaces/default`, not `/app`, the source reposi
 
 For the custom CPA provider, Web Search is served by an application-owned stdio MCP server named `commerce_web`. Its only enabled tool is the read-only `search(query)` contract; the process path, cwd, forwarded environment-variable names, tool allowlist, automatic approval mode, startup timeout, and tool timeout are generated under application-owned `$CODEX_HOME`. App Server owns selection and `mcpToolCall` lifecycle, while the MCP server calls the provider's OpenAI-compatible `/v1/responses` Web Search capability and returns cited sources. This MCP boundary is used because App Server currently fixes `dynamicTools` at `thread/start`; resumed older threads cannot acquire a new dynamic tool, but they do load current managed MCP configuration. Native `web_search = "live"` stays enabled where the provider/runtime can use it, and the former dynamic handler remains fail-closed compatibility code for already-persisted definitions.
 
-Gateway does not infer MCP readiness from generated config. Before listening, it calls App Server `config/mcpServer/reload`, which refreshes loaded threads, and requires `mcpServerStatus/list(detail=toolsAndAuthOnly)` to expose `commerce_web.search`. The same guard runs before thread start/resume after an App Server restart. `/health` returns the current App Server MCP state, tool names, check time, and sanitized error; unavailable required MCP makes health and thread operations fail closed. Provider timeout/5xx/429 failures receive one bounded internal retry, and the generated MCP `tool_timeout_sec` covers the configured total attempt budget.
+Gateway does not infer MCP readiness from generated config. Before listening, it calls App Server `config/mcpServer/reload`, which refreshes loaded threads, and requires `mcpServerStatus/list(detail=toolsAndAuthOnly)` to expose `commerce_web.search`. The same guard runs before thread start/resume after an App Server restart. `/health` returns the current App Server MCP state, tool names, dedicated search model, check time, and sanitized error; unavailable required MCP makes health and thread operations fail closed. The default sourced-search path uses `gpt-5.6-luna`, one 30-second provider attempt, and a generated MCP protocol margin. A timeout is returned as a structured failed `mcpToolCall`; the Harness may issue at most one new, shorter query instead of the MCP server invisibly repeating the same expensive request.
+
+Agent answers remain App Server `agentMessage` Markdown. Codex 0.149 does not define a generic table ThreadItem; its TUI enables GFM table parsing and performs width-aware table layout in the client. Commerce Pilot follows that boundary: the browser renders semantic GFM tables and responsive overflow while App Server remains the owner of message and Turn lifecycle. Domain-specific structured `outputSchema` remains available for true product artifacts, not as a replacement for ordinary research Markdown.
 
 The built-in arbitrary local-path `view_image` tool remains disabled. Image understanding uses the tenant-scoped attachment pipeline: the browser submits only files and later artifact ids, Gateway stores them below `$CODEX_HOME/thread_artifacts/<threadId>`, rechecks tenant/thread/request ownership, and sends App Server a native `localImage` path from the dedicated artifact volume. Browser events strip that path before SSE fan-out. Production App Server must mount only the tenant runtime/artifact volume, never the deployment host filesystem.
 
@@ -133,4 +156,18 @@ Different root jobs may have active turns concurrently. Gateway tracks loaded th
 
 ## Approval And Server Requests
 
-When Codex sends `item/tool/call`, the Gateway dispatches it only if its namespace and tool name exist in the Commerce Pilot dynamic-tool compatibility registry. The current handler is `commerce_image.generate`; the former `commerce_web.search` handler is retained for persisted legacy definitions. Each host-tool call reauthorizes its root scope before provider access. Current Web Search calls use the managed MCP server and arrive as `mcpToolCall` items, whose provider usage metadata is recorded separately. Unknown tools are rejected. Other App Server requests are rejected unless explicitly implemented by application code. Commerce write operations need dedicated approval endpoints, tenant authorization, idempotency, audit, and downstream readback; a generic server-request response API is prohibited.
+When Codex sends `item/tool/call`, the Gateway dispatches it only if its namespace and tool name exist in the Commerce Pilot dynamic-tool registry. The current handlers are `commerce_image.generate`, `commerce_skill.publish`, and the governed `commerce_data` namespace when configured; the former `commerce_web.search` handler is retained only for persisted legacy definitions. Each host-tool call reauthorizes its root scope before provider access. Current Web Search calls use the managed MCP server and arrive as `mcpToolCall` items, whose provider usage metadata is recorded separately. Unknown tools are rejected.
+
+App Server `item/tool/requestUserInput` is reserved for a question actually emitted by Codex. Gateway answers that exact JSON-RPC request and treats `serverRequest/resolved` as lifecycle authority. It does not accept the removed `tool/requestUserInput` alias and does not inject a second copy of the answer into model history.
+
+Commerce write or paid-call approval is application policy inside an existing dynamic-tool request. Gateway emits `commerce/approval/requested` to the authenticated browser, leaves the original `item/tool/call` pending, and eventually returns exactly one dynamic-tool response. `commerce/approval/resolved` clears other browser sessions. This UI may reuse the question-panel component, but it must never be encoded as a fabricated App Server request or echoed as a user conversation message; the decision remains available through the application approval, audit and billing records. Turn completion, interruption, deletion, and authorization revocation clear pending state; un-dispatched external-data reservations are cancelled when the control plane is reachable. App Server process exit clears volatile UI state but leaves a durable reserved ledger row for operator reconciliation rather than replaying or guessing an outcome.
+
+MCP `mcpServer/elicitation/request` is a third, distinct App Server protocol. No currently managed Commerce Pilot MCP server requires elicitation, so it remains fail-closed until a dedicated typed form/URL UI and server allowlist are implemented. It must not be translated into either of the two channels above. Other App Server requests are rejected unless explicitly implemented by application code. A generic server-request response API is prohibited.
+
+## Per-Message Feedback Boundary
+
+Codex App Server `feedback/upload` is a diagnostic product-report API: its protocol accepts a classification, optional reason and thread id, optional logs, extra log files, and tags. It is not a per-message thumbs-up/thumbs-down state API and must not be invoked for Commerce Pilot reply ratings, because doing so would mix user quality signals with diagnostic uploads and could include runtime logs.
+
+Commerce Pilot owns per-message quality feedback in the BFF and Enterprise database while keeping Harness identity authoritative. Before accepting a rating, the BFF re-reads the owned thread from Gateway and verifies that the supplied id identifies a non-commentary `agentMessage` in a terminal Turn. The browser submits only `positive`, `negative`, or `null`; the server derives the Turn id, SHA-256 content hash, and, when a matching root Harness usage event exists, the recorded provider model. PostgreSQL stores one current rating and one append-only event per change under forced tenant/workspace/user RLS. Feedback rows do not duplicate reply text, and thread deletion cascades to both current and historical feedback records.
+
+Sources: [Codex feedback protocol](https://github.com/openai/codex/blob/rust-v0.149.0/codex-rs/app-server-protocol/src/protocol/v2/feedback.rs) and [App Server feedback processor](https://github.com/openai/codex/blob/rust-v0.149.0/codex-rs/app-server/src/request_processors/feedback_processor.rs).

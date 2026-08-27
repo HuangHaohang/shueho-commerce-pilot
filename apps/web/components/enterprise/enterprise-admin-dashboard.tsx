@@ -22,6 +22,7 @@ import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import { EnterpriseOperations } from "@/components/enterprise/enterprise-operations";
+import { ExternalDataGovernance } from "@/components/enterprise/external-data-governance";
 import { cn } from "@/lib/utils";
 
 type EnterpriseContract = {
@@ -180,6 +181,7 @@ export function EnterpriseAdminDashboard() {
                 error={usageQuery.error}
                 onRetry={() => void usageQuery.refetch()}
               />
+              <ExternalDataGovernance permissions={contextQuery.data.permissions} />
               <EnterpriseOperations
                 tenantPermissions={contextQuery.data.tenantPermissions}
                 currentWorkspaceId={contextQuery.data.workspace.id}
@@ -204,6 +206,7 @@ function EnterpriseAdminSidebar({ tenantName }: { tenantName?: string }) {
   const items = [
     { href: "#overview", label: "企业概览", icon: Building2 },
     { href: "#usage", label: "用量与额度", icon: BarChart3 },
+    { href: "#external-data", label: "外部数据", icon: Gauge },
     { href: "#workspaces", label: "工作区", icon: Workflow },
     { href: "#members", label: "企业成员", icon: Users },
     { href: "#invitations", label: "成员邀请", icon: MailPlus },

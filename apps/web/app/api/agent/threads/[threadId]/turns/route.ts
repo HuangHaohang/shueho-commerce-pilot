@@ -10,7 +10,8 @@ import {
 import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
 
 const effortValues = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
-const workflowValues = new Set(["commerce-copywriting"]);
+const workflowValues = new Set(["commerce-copywriting", "commerce-market-research"]);
+const externalDataApprovalModes = new Set(["always_ask", "task", "policy"]);
 const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const attachmentIdPattern = /^[0-9a-f-]{36}$/i;
 
@@ -31,6 +32,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     workflow?: unknown;
     skillName?: unknown;
     attachmentIds?: unknown;
+    externalDataApprovalMode?: unknown;
   } | null;
   const attachmentIds = readAttachmentIds(body?.attachmentIds);
   if (!attachmentIds) {
@@ -52,6 +54,19 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   const effort = typeof body.effort === "string" && effortValues.has(body.effort) ? body.effort : undefined;
   const workflow = typeof body.workflow === "string" && workflowValues.has(body.workflow) ? body.workflow : undefined;
   const skillName = typeof body.skillName === "string" && skillNamePattern.test(body.skillName) ? body.skillName : undefined;
+  const externalDataApprovalMode =
+    typeof body.externalDataApprovalMode === "string" && externalDataApprovalModes.has(body.externalDataApprovalMode)
+      ? body.externalDataApprovalMode
+      : "always_ask";
+  if (body.externalDataApprovalMode !== undefined && !externalDataApprovalModes.has(String(body.externalDataApprovalMode))) {
+    return NextResponse.json({ error: "外部数据授权模式无效。" }, { status: 400 });
+  }
+  if (
+    externalDataApprovalMode !== "always_ask" &&
+    !enterpriseContext.permissions.has("external_data.call")
+  ) {
+    return NextResponse.json({ error: "当前角色不能预先授权外部付费数据调用。" }, { status: 403 });
+  }
   if (workflow && skillName) {
     return NextResponse.json({ error: "工作流与显式技能不能同时选择。" }, { status: 400 });
   }
@@ -88,6 +103,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
         workflow,
         skillName,
         attachmentIds,
+        externalDataApprovalMode,
         clientRequestId,
       }),
       cache: "no-store",

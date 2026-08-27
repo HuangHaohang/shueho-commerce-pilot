@@ -2,8 +2,6 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
   ArrowDown,
   ArrowUp,
@@ -57,10 +55,21 @@ import {
   Video,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  startTransition,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 
 import { AgentRequestUserInputPanel } from "@/components/agent/request-user-input-panel";
+import { AssistantMessageActions } from "@/components/agent/assistant-message-actions";
+import { AssistantMarkdown } from "@/components/agent/assistant-markdown";
 import {
   ComposerAddMenu,
   SelectedSkillChip,
@@ -68,12 +77,14 @@ import {
 } from "@/components/agent/skill-selector";
 import { CopywritingWorkspace } from "@/components/creative/copywriting-workspace";
 import { PluginDirectory } from "@/components/plugins/plugin-directory";
+import { MarketResearchWorkspace } from "@/components/research/market-research-workspace";
 import { SkillsDirectory } from "@/components/skills/skills-directory";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   useAgentThread,
   type AgentActivity,
+  type AgentMessageFeedbackRating,
   type AgentThreadSummary,
   type ConversationAttachment,
   type ConversationMessage,
@@ -95,9 +106,17 @@ import {
   selectVisibleWebSources,
   type WebSource,
 } from "@/lib/agent/web-sources";
-import { canAccessEnterpriseAdmin } from "@/lib/enterprise/navigation-access";
+import {
+  canAccessEnterpriseAdmin,
+  canManageExternalDataPolicy as hasExternalDataPolicyManagement,
+} from "@/lib/enterprise/navigation-access";
+import { approvalModeAfterTaskBoundary } from "@/lib/enterprise/external-data-policy";
 import { resolveTaskCategory, type TaskCategory } from "@/lib/agent/task-category";
 import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "@/lib/agent/skill-invocation";
+import {
+  searchActivityLabel,
+  summarizeSearchActivities,
+} from "@/lib/agent/search-activity-presentation";
 import { getSkills, sortSkillInventory, type SkillInventoryItem } from "@/lib/agent/skills";
 import { getPluginInventory, type CommercePluginInventoryItem } from "@/lib/plugins/catalog";
 import {
@@ -110,7 +129,7 @@ import {
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
-type WorkbenchView = "workbench" | "plugins" | "skills" | "copywriting";
+type WorkbenchView = "workbench" | "plugins" | "skills" | "copywriting" | "research";
 type AuthMode = "login" | "register";
 type AuthIdentifierType = "email" | "phone";
 
@@ -140,6 +159,7 @@ type ThreadDeletionJobView = {
 };
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+type ExternalDataApprovalMode = "always_ask" | "task" | "policy";
 
 type ProviderModelSummary = {
   id: string;
@@ -178,6 +198,15 @@ type GatewayHealthResponse = {
     available?: boolean;
     serverName?: string;
     tools?: string[];
+    checkedAt?: string | null;
+    error?: string | null;
+  } | null;
+  externalData: {
+    provider?: string;
+    configured?: boolean;
+    connected?: boolean;
+    controlConfigured?: boolean;
+    businessTools?: string[];
     checkedAt?: string | null;
     error?: string | null;
   } | null;
@@ -244,6 +273,7 @@ export function CommerceWorkbenchShell({
   initialView?: WorkbenchView;
 }) {
   const [activeView, setActiveView] = useState<WorkbenchView>(initialView);
+  const [freshTaskEntry, setFreshTaskEntry] = useState<"research" | null>(null);
   const [mode, setMode] = useState<WorkMode>("work");
   const [draft, setDraft] = useState("");
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
@@ -251,6 +281,7 @@ export function CommerceWorkbenchShell({
   const [authDialogMode, setAuthDialogMode] = useState<AuthMode>("login");
   const [selectedModel, setSelectedModel] = useState("gpt-5.6-sol");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("low");
+  const [externalDataApprovalMode, setExternalDataApprovalMode] = useState<ExternalDataApprovalMode>("always_ask");
   const [selectedSkill, setSelectedSkill] = useState<SkillInventoryItem | null>(null);
   const [composerAttachments, setComposerAttachments] = useState<PendingAttachmentUpload[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -299,6 +330,10 @@ export function CommerceWorkbenchShell({
     enterpriseNavigationQuery.isSuccess &&
     !enterpriseNavigationQuery.isFetching &&
     canAccessEnterpriseAdmin(enterpriseNavigationQuery.data.permissions);
+  const canManageExternalDataPolicy =
+    isAuthenticated &&
+    enterpriseNavigationQuery.isSuccess &&
+    hasExternalDataPolicyManagement(enterpriseNavigationQuery.data.permissions);
 
   const modelsQuery = useQuery({
     queryKey: ["provider-models"],
@@ -447,6 +482,7 @@ export function CommerceWorkbenchShell({
       previousAuthUserIdRef.current !== currentUserId
     ) {
       agentThread.resetThread();
+      setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
       setSelectedSkill(null);
       clearComposerAttachments();
       autoRestoreAttemptedRef.current = false;
@@ -469,6 +505,8 @@ export function CommerceWorkbenchShell({
     if (!agentThread.threadId && latestThread) {
       if (isCopywritingThread(latestThread)) {
         setActiveView("copywriting");
+      } else if (isResearchThread(latestThread)) {
+        setActiveView("research");
       }
       void agentThread.loadThread(latestThread);
     }
@@ -510,7 +548,9 @@ export function CommerceWorkbenchShell({
         setDraft("");
         const submitted = await agentThread.submit(buildCopywritingAdjustmentPrompt(value || "请结合附件继续处理。"), {
           workflow: "commerce-copywriting",
+          displaySkillName: "commerce-copywriting",
           attachments: attachmentsForSubmit,
+          externalDataApprovalMode,
         });
         if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
         else {
@@ -519,20 +559,23 @@ export function CommerceWorkbenchShell({
         }
       } else {
         const attachmentsForSubmit = takeComposerAttachments();
+        const skillForSubmit = selectedSkill;
         setDraft("");
+        setSelectedSkill(null);
         const submitted = await agentThread.submit(
           value,
           {
-            ...(selectedSkill ? { skillName: selectedSkill.name } : {}),
+            ...(skillForSubmit ? { skillName: skillForSubmit.name } : {}),
             attachments: attachmentsForSubmit,
+            externalDataApprovalMode,
           },
         );
         if (submitted) {
-          setSelectedSkill(null);
           finalizeSubmittedAttachments(attachmentsForSubmit);
         } else {
           restoreComposerAttachments(attachmentsForSubmit);
           setDraft(value);
+          setSelectedSkill(skillForSubmit);
         }
       }
     } else {
@@ -548,6 +591,7 @@ export function CommerceWorkbenchShell({
 
   async function logout() {
     agentThread.resetThread();
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     autoRestoreAttemptedRef.current = false;
     await fetch("/api/account/logout", { method: "POST" });
@@ -559,8 +603,10 @@ export function CommerceWorkbenchShell({
       return;
     }
     setDraft("");
+    setFreshTaskEntry(null);
     setSubmittedDraft(null);
     setSelectedSkill(null);
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     setActiveView("workbench");
     autoRestoreAttemptedRef.current = true;
@@ -573,11 +619,17 @@ export function CommerceWorkbenchShell({
       return;
     }
     setDraft("");
+    setFreshTaskEntry(null);
     setSelectedSkill(null);
     clearComposerAttachments();
-    const threadView = isCopywritingThread(thread) ? "copywriting" : "workbench";
+    const threadView = isCopywritingThread(thread)
+      ? "copywriting"
+      : isResearchThread(thread)
+        ? "research"
+        : "workbench";
     setActiveView(threadView);
     if (thread.threadId === agentThread.threadId) return;
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     void agentThread.loadThread(thread);
   }
 
@@ -636,8 +688,10 @@ export function CommerceWorkbenchShell({
       return;
     }
     setDraft("");
+    setFreshTaskEntry(null);
     setSubmittedDraft(null);
     setSelectedSkill(null);
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     agentThread.resetThread();
     setActiveView("copywriting");
@@ -645,12 +699,58 @@ export function CommerceWorkbenchShell({
 
   async function executeCopywritingRecipe(goal: string) {
     const attachmentsForSubmit = takeComposerAttachments();
+    const skillForSubmit = selectedSkill;
+    setSelectedSkill(null);
     const submitted = await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal), {
       workflow: "commerce-copywriting",
+      displaySkillName: "commerce-copywriting",
       attachments: attachmentsForSubmit,
+      externalDataApprovalMode,
     });
     if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
-    else restoreComposerAttachments(attachmentsForSubmit);
+    else {
+      restoreComposerAttachments(attachmentsForSubmit);
+      setSelectedSkill(skillForSubmit);
+    }
+  }
+
+  function openMarketResearch() {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return;
+    }
+    if (navigationLocked) return;
+    setDraft("");
+    setSubmittedDraft(null);
+    setSelectedSkill(null);
+    clearComposerAttachments();
+    setActiveView("research");
+    setFreshTaskEntry("research");
+    startTransition(() => {
+      setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
+      agentThread.resetThread();
+      setFreshTaskEntry(null);
+    });
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>("[data-composer-input]")?.focus();
+    });
+  }
+
+  async function executeMarketResearch(goal: string) {
+    const attachmentsForSubmit = takeComposerAttachments();
+    const skillForSubmit = selectedSkill;
+    setSelectedSkill(null);
+    const submitted = await agentThread.submit(goal, {
+      workflow: "commerce-market-research",
+      displaySkillName: "commerce-market-research",
+      attachments: attachmentsForSubmit,
+      externalDataApprovalMode,
+    });
+    if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
+    else {
+      restoreComposerAttachments(attachmentsForSubmit);
+      setSelectedSkill(skillForSubmit);
+    }
   }
 
   function useSkill(skill: SkillInventoryItem) {
@@ -660,8 +760,10 @@ export function CommerceWorkbenchShell({
     }
     if (navigationLocked) return;
     setDraft("");
+    setFreshTaskEntry(null);
     setSubmittedDraft(null);
     setSelectedSkill(skill);
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     setActiveView("workbench");
     autoRestoreAttemptedRef.current = true;
@@ -777,6 +879,7 @@ export function CommerceWorkbenchShell({
         onToggleSelectionMode={toggleThreadSelectionMode}
         onToggleThreadSelection={toggleThreadSelection}
         onRequestThreadDeletion={requestThreadDeletion}
+        onOpenMarketResearch={openMarketResearch}
         onOpenCopywriting={openCopywriting}
         onOpenPlugins={() => {
           setSelectedPluginDetailName(null);
@@ -794,6 +897,62 @@ export function CommerceWorkbenchShell({
           <PluginDirectory initialSelectedPluginName={selectedPluginDetailName} />
         ) : activeView === "skills" ? (
           <SkillsDirectory onUseSkill={useSkill} />
+        ) : activeView === "research" && (!agentThread.threadId || freshTaskEntry === "research") ? (
+          <MarketResearchWorkspace
+            error={agentThread.error}
+            composerValue={draft}
+            onComposerChange={setDraft}
+            externalDataAvailable={
+              healthQuery.data?.externalData?.connected === true &&
+              healthQuery.data?.externalData?.controlConfigured === true
+            }
+            modelLabel={`${formatModelName(selectedModel)} · ${
+              reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
+            }`}
+            onExecute={executeMarketResearch}
+            renderComposer={({ placeholder, disabled, onSubmit }) => (
+              <AgentComposer
+                value={draft}
+                placeholder={placeholder}
+                running={agentThread.status === "connecting" || agentThread.status === "running"}
+                canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
+                interrupting={agentThread.interrupting}
+                compacting={agentThread.compacting}
+                queueSubmitting={agentThread.queueSubmitting}
+                queuedMessages={agentThread.queuedMessages}
+                queueOperationId={agentThread.queueOperationId}
+                models={modelsQuery.data?.agentModels ?? []}
+                modelsLoading={modelsQuery.isLoading}
+                selectedModel={selectedModel}
+                reasoningEffort={reasoningEffort}
+                externalDataAvailable={healthQuery.data?.externalData?.connected === true}
+                externalDataApprovalMode={externalDataApprovalMode}
+                canManageExternalDataPolicy={canManageExternalDataPolicy}
+                plugins={enabledPlugins}
+                pluginsLoading={pluginsQuery.isLoading}
+                skills={enabledSkills}
+                skillsLoading={skillsQuery.isLoading}
+                selectedSkill={selectedSkill}
+                attachments={composerAttachments}
+                attachmentError={attachmentError}
+                disabled={disabled}
+                onChange={setDraft}
+                onSubmit={onSubmit}
+                onInterrupt={agentThread.interrupt}
+                onQueueDelete={agentThread.deleteQueuedMessage}
+                onQueueSteer={agentThread.steerQueuedMessage}
+                onQueueClear={agentThread.clearQueuedMessages}
+                onModelChange={setSelectedModel}
+                onReasoningEffortChange={setReasoningEffort}
+                onExternalDataApprovalModeChange={setExternalDataApprovalMode}
+                onOpenPlugin={openPluginFromComposer}
+                onSkillSelect={setSelectedSkill}
+                onSkillClear={() => setSelectedSkill(null)}
+                onAddFiles={addComposerFiles}
+                onRemoveAttachment={removeComposerAttachment}
+              />
+            )}
+          />
         ) : activeView === "copywriting" && !agentThread.threadId ? (
           <CopywritingWorkspace
             error={agentThread.error}
@@ -818,6 +977,9 @@ export function CommerceWorkbenchShell({
                 modelsLoading={modelsQuery.isLoading}
                 selectedModel={selectedModel}
                 reasoningEffort={reasoningEffort}
+                externalDataAvailable={healthQuery.data?.externalData?.connected === true}
+                externalDataApprovalMode={externalDataApprovalMode}
+                canManageExternalDataPolicy={canManageExternalDataPolicy}
                 plugins={enabledPlugins}
                 pluginsLoading={pluginsQuery.isLoading}
                 skills={enabledSkills}
@@ -841,6 +1003,7 @@ export function CommerceWorkbenchShell({
                 onQueueClear={agentThread.clearQueuedMessages}
                 onModelChange={setSelectedModel}
                 onReasoningEffortChange={setReasoningEffort}
+                onExternalDataApprovalModeChange={setExternalDataApprovalMode}
                 onOpenPlugin={openPluginFromComposer}
                 onSkillSelect={setSelectedSkill}
                 onSkillClear={() => setSelectedSkill(null)}
@@ -878,16 +1041,20 @@ export function CommerceWorkbenchShell({
             pendingSteers={agentThread.pendingSteers}
             queueSubmitting={agentThread.queueSubmitting}
             queueOperationId={agentThread.queueOperationId}
+            feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
             canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
             interrupting={agentThread.interrupting}
             durationMs={agentThread.durationMs}
             startedAt={agentThread.startedAt}
-            error={agentThread.error}
+            error={agentThread.feedbackError ?? agentThread.error}
             value={draft}
             models={modelsQuery.data?.agentModels ?? []}
             modelsLoading={modelsQuery.isLoading}
             selectedModel={selectedModel}
             reasoningEffort={reasoningEffort}
+            externalDataAvailable={healthQuery.data?.externalData?.connected === true}
+            externalDataApprovalMode={externalDataApprovalMode}
+            canManageExternalDataPolicy={canManageExternalDataPolicy}
             skills={enabledSkills}
             skillsLoading={skillsQuery.isLoading}
             plugins={enabledPlugins}
@@ -899,11 +1066,13 @@ export function CommerceWorkbenchShell({
             onSubmit={submitDraft}
             onInterrupt={agentThread.interrupt}
             onAnswerUserInput={agentThread.respondToUserInput}
+            onMessageFeedback={agentThread.setMessageFeedback}
             onQueueDelete={agentThread.deleteQueuedMessage}
             onQueueSteer={agentThread.steerQueuedMessage}
             onQueueClear={agentThread.clearQueuedMessages}
             onModelChange={setSelectedModel}
             onReasoningEffortChange={setReasoningEffort}
+            onExternalDataApprovalModeChange={setExternalDataApprovalMode}
             onSkillSelect={setSelectedSkill}
             onSkillClear={() => setSelectedSkill(null)}
             onOpenPlugin={openPluginFromComposer}
@@ -939,6 +1108,9 @@ export function CommerceWorkbenchShell({
                 modelsLoading={modelsQuery.isLoading}
                 selectedModel={selectedModel}
                 reasoningEffort={reasoningEffort}
+                externalDataAvailable={healthQuery.data?.externalData?.connected === true}
+                externalDataApprovalMode={externalDataApprovalMode}
+                canManageExternalDataPolicy={canManageExternalDataPolicy}
                 skills={enabledSkills}
                 skillsLoading={skillsQuery.isLoading}
                 plugins={enabledPlugins}
@@ -950,6 +1122,7 @@ export function CommerceWorkbenchShell({
                 onSubmit={submitDraft}
                 onModelChange={setSelectedModel}
                 onReasoningEffortChange={setReasoningEffort}
+                onExternalDataApprovalModeChange={setExternalDataApprovalMode}
                 onSkillSelect={setSelectedSkill}
                 onSkillClear={() => setSelectedSkill(null)}
                 onOpenPlugin={openPluginFromComposer}
@@ -972,6 +1145,24 @@ export function CommerceWorkbenchShell({
         </>
         )}
       </main>
+
+      {threadDeletionError && !deleteDialogThreadIds ? (
+        <div
+          className="fixed bottom-5 left-1/2 z-[80] flex w-[min(420px,calc(100vw-32px))] -translate-x-1/2 items-center gap-2 rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-2.5 text-sm text-[var(--cp-text)] shadow-[var(--cp-shadow-popover)]"
+          role="alert"
+        >
+          <CircleAlert className="size-4 shrink-0 text-[var(--cp-danger)]" strokeWidth={1.8} />
+          <span className="min-w-0 flex-1">{threadDeletionError}</span>
+          <button
+            type="button"
+            className="flex size-7 shrink-0 items-center justify-center rounded-[var(--cp-radius-xs)] text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)]"
+            aria-label="关闭删除错误提示"
+            onClick={() => setThreadDeletionError(null)}
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ) : null}
 
       {authDialogOpen ? (
         <AuthDialog
@@ -1008,6 +1199,10 @@ function isCopywritingThread(thread: AgentThreadSummary): boolean {
   );
 }
 
+function isResearchThread(thread: AgentThreadSummary): boolean {
+  return thread.recipeId === "market_research" || thread.category === "research";
+}
+
 function ComplianceFooter() {
   return (
     <footer className="shrink-0 px-4 pb-2 pt-4 md:px-8 md:pb-3" aria-label="法律与 AI 使用说明">
@@ -1020,7 +1215,7 @@ function ComplianceFooter() {
         <Link className="mx-0.5 underline underline-offset-2 hover:text-[var(--cp-text-muted)]" href="/privacy">
           隐私政策
         </Link>
-        。聊天内容可能会被审核，并用于改进我们的 AI 模型。
+        。任务内容可能按隐私政策进行必要的安全与质量审核；未经另行告知和适用授权，不会当然用于模型改进。
         <Link className="ml-0.5 underline underline-offset-2 hover:text-[var(--cp-text-muted)]" href="/ai-notice">
           了解更多
         </Link>
@@ -1065,6 +1260,7 @@ function ConversationWorkspace({
   pendingSteers,
   queueSubmitting,
   queueOperationId,
+  feedbackSubmittingIds,
   canInterrupt,
   interrupting,
   durationMs,
@@ -1075,6 +1271,9 @@ function ConversationWorkspace({
   modelsLoading,
   selectedModel,
   reasoningEffort,
+  externalDataAvailable,
+  externalDataApprovalMode,
+  canManageExternalDataPolicy,
   plugins,
   pluginsLoading,
   skills,
@@ -1086,11 +1285,13 @@ function ConversationWorkspace({
   onSubmit,
   onInterrupt,
   onAnswerUserInput,
+  onMessageFeedback,
   onQueueDelete,
   onQueueSteer,
   onQueueClear,
   onModelChange,
   onReasoningEffortChange,
+  onExternalDataApprovalModeChange,
   onOpenPlugin,
   onSkillSelect,
   onSkillClear,
@@ -1110,6 +1311,7 @@ function ConversationWorkspace({
   pendingSteers: QueuedMessage[];
   queueSubmitting: boolean;
   queueOperationId: string | null;
+  feedbackSubmittingIds: ReadonlySet<string>;
   canInterrupt: boolean;
   interrupting: boolean;
   durationMs: number | null;
@@ -1120,6 +1322,9 @@ function ConversationWorkspace({
   modelsLoading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  externalDataAvailable: boolean;
+  externalDataApprovalMode: ExternalDataApprovalMode;
+  canManageExternalDataPolicy: boolean;
   plugins: CommercePluginInventoryItem[];
   pluginsLoading: boolean;
   skills: SkillInventoryItem[];
@@ -1131,11 +1336,16 @@ function ConversationWorkspace({
   onSubmit: () => void | Promise<void>;
   onInterrupt: () => void | Promise<void>;
   onAnswerUserInput: (answers: Record<string, { answers: string[] }>) => Promise<boolean>;
+  onMessageFeedback: (
+    messageId: string,
+    rating: AgentMessageFeedbackRating | null,
+  ) => Promise<boolean>;
   onQueueDelete: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueSteer: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueClear: () => Promise<void>;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onExternalDataApprovalModeChange: (mode: ExternalDataApprovalMode) => void;
   onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
   onSkillSelect: (skill: SkillInventoryItem) => void;
   onSkillClear: () => void;
@@ -1340,7 +1550,13 @@ function ConversationWorkspace({
           <div className="space-y-6">
             {timelineBeforeStatus.map((entry) =>
               entry.type === "message" ? (
-                <ConversationTimelineMessage key={entry.message.id} message={entry.message} skills={skills} />
+                <ConversationTimelineMessage
+                  key={entry.message.id}
+                  message={entry.message}
+                  skills={skills}
+                  feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
+                  onMessageFeedback={onMessageFeedback}
+                />
               ) : (
                 <GeneratedImageCard key={entry.image.id} image={entry.image} />
               ),
@@ -1359,7 +1575,13 @@ function ConversationWorkspace({
               <div className="space-y-4">
                 {activeTimeline.map((entry) =>
                   entry.type === "message" ? (
-                    <ConversationTimelineMessage key={entry.message.id} message={entry.message} skills={skills} />
+                    <ConversationTimelineMessage
+                      key={entry.message.id}
+                      message={entry.message}
+                      skills={skills}
+                      feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
+                      onMessageFeedback={onMessageFeedback}
+                    />
                   ) : entry.type === "image" ? (
                     <GeneratedImageCard key={entry.image.id} image={entry.image} />
                   ) : entry.type === "activity" ? (
@@ -1440,6 +1662,9 @@ function ConversationWorkspace({
               modelsLoading={modelsLoading}
               selectedModel={selectedModel}
               reasoningEffort={reasoningEffort}
+              externalDataAvailable={externalDataAvailable}
+              externalDataApprovalMode={externalDataApprovalMode}
+              canManageExternalDataPolicy={canManageExternalDataPolicy}
               skills={skills}
               skillsLoading={skillsLoading}
               plugins={plugins}
@@ -1455,6 +1680,7 @@ function ConversationWorkspace({
               onQueueClear={onQueueClear}
               onModelChange={onModelChange}
               onReasoningEffortChange={onReasoningEffortChange}
+              onExternalDataApprovalModeChange={onExternalDataApprovalModeChange}
               onSkillSelect={onSkillSelect}
               onSkillClear={onSkillClear}
               onOpenPlugin={onOpenPlugin}
@@ -1482,6 +1708,9 @@ function AgentComposer({
   modelsLoading,
   selectedModel,
   reasoningEffort,
+  externalDataAvailable = false,
+  externalDataApprovalMode = "always_ask",
+  canManageExternalDataPolicy = false,
   plugins = [],
   pluginsLoading = false,
   skills = [],
@@ -1498,6 +1727,7 @@ function AgentComposer({
   onQueueClear,
   onModelChange,
   onReasoningEffortChange,
+  onExternalDataApprovalModeChange = () => undefined,
   onOpenPlugin = () => undefined,
   onSkillSelect = () => undefined,
   onSkillClear = () => undefined,
@@ -1517,6 +1747,9 @@ function AgentComposer({
   modelsLoading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  externalDataAvailable?: boolean;
+  externalDataApprovalMode?: ExternalDataApprovalMode;
+  canManageExternalDataPolicy?: boolean;
   plugins?: CommercePluginInventoryItem[];
   pluginsLoading?: boolean;
   skills?: SkillInventoryItem[];
@@ -1533,6 +1766,7 @@ function AgentComposer({
   onQueueClear: () => Promise<void>;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onExternalDataApprovalModeChange?: (mode: ExternalDataApprovalMode) => void;
   onOpenPlugin?: (plugin: CommercePluginInventoryItem) => void;
   onSkillSelect?: (skill: SkillInventoryItem) => void;
   onSkillClear?: () => void;
@@ -1541,10 +1775,8 @@ function AgentComposer({
 }) {
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const leadingActionRef = useRef<HTMLDivElement>(null);
-  const trailingActionsRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [activeComposerPopover, setActiveComposerPopover] = useState<"access" | "model" | null>(null);
   const skillSelector = useComposerSkillSelector({
     value,
     skills,
@@ -1555,43 +1787,15 @@ function AgentComposer({
     onChange,
     onSelect: onSkillSelect,
   });
-  const multiline = expanded || Boolean(selectedSkill) || attachments.length > 0;
-
-  const updateExpandedState = useCallback(() => {
-    const form = formRef.current;
-    const input = inputRef.current;
-    const leadingAction = leadingActionRef.current;
-    const trailingActions = trailingActionsRef.current;
-    if (!form || !input || !leadingAction || !trailingActions) return;
-    setExpanded(
-      shouldExpandComposer({
-        form,
-        input,
-        leadingAction,
-        trailingActions,
-        value,
-      }),
-    );
-  }, [value]);
-
-  useLayoutEffect(() => {
-    updateExpandedState();
-  }, [canInterrupt, disabled, modelsLoading, queueSubmitting, reasoningEffort, running, selectedModel, updateExpandedState]);
 
   useEffect(() => {
-    const form = formRef.current;
-    const trailingActions = trailingActionsRef.current;
-    if (!form || !trailingActions) return;
-    const observer = new ResizeObserver(updateExpandedState);
-    observer.observe(form);
-    observer.observe(trailingActions);
-    return () => observer.disconnect();
-  }, [updateExpandedState]);
+    if (skillSelector.open) setActiveComposerPopover(null);
+  }, [skillSelector.open]);
 
   useLayoutEffect(() => {
     if (!inputRef.current) return;
-    resizeTextarea(inputRef.current, 32, 120);
-  }, [multiline, value]);
+    resizeTextarea(inputRef.current, 60, 120);
+  }, [value]);
 
   function returnQueuedMessageToComposer(message: QueuedMessage): void {
     const previousValue = value;
@@ -1621,10 +1825,7 @@ function AgentComposer({
       ) : null}
       <form
         ref={formRef}
-        className={cn(
-          "relative mx-auto grid w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] gap-x-1 rounded-[28px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)] transition-[height,border-radius] duration-[var(--cp-duration-base)]",
-          multiline ? "max-h-[220px] grid-rows-[auto_36px] items-end gap-y-1" : "min-h-[56px] items-center",
-        )}
+        className="relative mx-auto grid min-h-[92px] max-h-[260px] w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[auto_36px] items-end gap-x-1 gap-y-1 rounded-[24px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)]"
         onSubmit={(event) => {
           event.preventDefault();
           if (!disabled && (!running || canInterrupt)) void onSubmit();
@@ -1660,10 +1861,7 @@ function AgentComposer({
             event.target.value = "";
           }}
         />
-        <div
-          ref={leadingActionRef}
-          className={cn("flex items-center", multiline && "col-start-1 row-start-2")}
-        >
+        <div className="col-start-1 row-start-2 flex items-center gap-0.5">
           <IconTooltip label="添加">
             <Button
               type="button"
@@ -1673,13 +1871,31 @@ function AgentComposer({
               aria-label="添加"
               aria-expanded={skillSelector.open}
               disabled={disabled || running}
-              onClick={skillSelector.toggleMenu}
+              onClick={() => {
+                setActiveComposerPopover(null);
+                skillSelector.toggleMenu();
+              }}
             >
               <Plus className="size-5" />
             </Button>
           </IconTooltip>
+          <ExternalDataAccessControl
+            value={externalDataApprovalMode}
+            available={externalDataAvailable}
+            showEnterpriseSettings={canManageExternalDataPolicy}
+            open={activeComposerPopover === "access"}
+            disabled={disabled || running}
+            placement="top"
+            onChange={onExternalDataApprovalModeChange}
+            onOpenChange={(nextOpen) => {
+              if (nextOpen) skillSelector.closeMenu();
+              setActiveComposerPopover((current) =>
+                nextOpen ? "access" : current === "access" ? null : current,
+              );
+            }}
+          />
         </div>
-        <div className={cn("min-w-0", multiline ? "col-span-3 col-start-1 row-start-1 px-3" : "col-start-2 row-start-1")}>
+        <div className="col-span-3 col-start-1 row-start-1 min-w-0 px-3 pt-1">
           {selectedSkill ? (
             <div className="mb-1.5 flex min-w-0">
               <SelectedSkillChip skill={selectedSkill} onRemove={onSkillClear} />
@@ -1713,21 +1929,28 @@ function AgentComposer({
               }
             }}
             placeholder={placeholder}
-            className="cp-composer-textarea block min-h-8 max-h-[120px] w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
+            className="cp-composer-textarea block min-h-[60px] max-h-[120px] w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
             aria-label={placeholder}
             disabled={disabled}
           />
         </div>
-        <div ref={trailingActionsRef} className={cn("flex items-center gap-1", multiline ? "col-start-3 row-start-2" : "col-start-3 row-start-1")}>
+        <div className="col-start-3 row-start-2 flex items-center gap-1">
           <ModelAndReasoningControl
             models={models}
             loading={modelsLoading}
             selectedModel={selectedModel}
             reasoningEffort={reasoningEffort}
+            open={activeComposerPopover === "model"}
             disabled={running || disabled}
             placement="top"
             onModelChange={onModelChange}
             onReasoningEffortChange={onReasoningEffortChange}
+            onOpenChange={(nextOpen) => {
+              if (nextOpen) skillSelector.closeMenu();
+              setActiveComposerPopover((current) =>
+                nextOpen ? "model" : current === "model" ? null : current,
+              );
+            }}
           />
           <IconTooltip label="语音输入">
             <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="语音输入" disabled={disabled}>
@@ -2011,57 +2234,6 @@ function clampPercent(value: number): number {
   return Math.min(Math.max(value, 0), 100);
 }
 
-function shouldExpandComposer({
-  form,
-  input,
-  leadingAction,
-  trailingActions,
-  value,
-}: {
-  form: HTMLFormElement;
-  input: HTMLTextAreaElement;
-  leadingAction: HTMLElement;
-  trailingActions: HTMLDivElement;
-  value: string;
-}): boolean {
-  if (value.includes("\n")) return true;
-  const formStyle = window.getComputedStyle(form);
-  const inputStyle = window.getComputedStyle(input);
-  const horizontalPadding = numericCssValue(formStyle.paddingLeft) + numericCssValue(formStyle.paddingRight);
-  const inputPadding = numericCssValue(inputStyle.paddingLeft) + numericCssValue(inputStyle.paddingRight);
-  const columnGap = numericCssValue(formStyle.columnGap);
-  const availableTextWidth = Math.max(
-    80,
-    form.clientWidth -
-      horizontalPadding -
-      leadingAction.getBoundingClientRect().width -
-      trailingActions.getBoundingClientRect().width -
-      columnGap * 2 -
-      inputPadding,
-  );
-  const canvas = document.createElement("canvas");
-  const context = canvas.getContext("2d");
-  if (!context) return input.scrollHeight > 32;
-  context.font = [
-    inputStyle.fontStyle,
-    inputStyle.fontVariant,
-    inputStyle.fontWeight,
-    inputStyle.fontSize,
-    inputStyle.fontFamily,
-  ].filter(Boolean).join(" ");
-  const letterSpacing = numericCssValue(inputStyle.letterSpacing);
-  const textWidth = value.split("\n").reduce((maximum, line) => {
-    const measured = context.measureText(line).width + Math.max(0, Array.from(line).length - 1) * letterSpacing;
-    return Math.max(maximum, measured);
-  }, 0);
-  return textWidth + 4 > availableTextWidth;
-}
-
-function numericCssValue(value: string): number {
-  const parsed = Number.parseFloat(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
 function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight: number): number {
   node.style.height = "0px";
   const nextHeight = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight);
@@ -2073,9 +2245,16 @@ function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight:
 function ConversationTimelineMessage({
   message,
   skills,
+  feedbackSubmitting,
+  onMessageFeedback,
 }: {
   message: ConversationMessage;
   skills: SkillInventoryItem[];
+  feedbackSubmitting: boolean;
+  onMessageFeedback: (
+    messageId: string,
+    rating: AgentMessageFeedbackRating | null,
+  ) => Promise<boolean>;
 }) {
   const preview = readConversationMessagePreview(message);
   return (
@@ -2087,6 +2266,18 @@ function ConversationTimelineMessage({
       data-minimap-preview={preview}
     >
       <ConversationMessageView message={message} skills={skills} />
+      {message.role === "assistant" &&
+      message.phase !== "commentary" &&
+      message.status === "completed" &&
+      message.content.trim() ? (
+        <AssistantMessageActions
+          messageId={message.id}
+          copyText={readAssistantResponseText(message)}
+          feedback={message.feedback ?? null}
+          feedbackSubmitting={feedbackSubmitting}
+          onFeedback={onMessageFeedback}
+        />
+      ) : null}
     </div>
   );
 }
@@ -2243,26 +2434,7 @@ function ConversationMessageView({
         message.phase === "commentary" && "text-[13px] font-medium leading-5 text-[var(--cp-text)]",
       )}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => <p className="mb-4 mt-0 last:mb-0">{children}</p>,
-          ul: ({ children }) => <ul className="my-4 list-disc space-y-2 pl-6">{children}</ul>,
-          ol: ({ children }) => <ol className="my-4 list-decimal space-y-2 pl-6">{children}</ol>,
-          code: ({ children }) => (
-            <code className="rounded-[var(--cp-radius-xs)] bg-[var(--cp-bg-muted)] px-1.5 py-0.5 font-mono text-[12px] text-[var(--cp-text)]">
-              {children}
-            </code>
-          ),
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="underline underline-offset-4">
-              {children}
-            </a>
-          ),
-        }}
-      >
-        {content}
-      </ReactMarkdown>
+      <AssistantMarkdown content={content} />
     </div>
   );
 }
@@ -2307,16 +2479,7 @@ function CopywritingDraftResponse({ draft }: { draft: CopywritingDraft }) {
   return (
     <article className="text-[14px] leading-6 text-[var(--cp-text)]" data-copywriting-delivery>
       <h2 className="mb-4 mt-0 text-[19px] font-semibold leading-7">{draft.title}</h2>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          p: ({ children }) => <p className="mb-4 mt-0 last:mb-0">{children}</p>,
-          ul: ({ children }) => <ul className="my-4 list-disc space-y-2 pl-6">{children}</ul>,
-          ol: ({ children }) => <ol className="my-4 list-decimal space-y-2 pl-6">{children}</ol>,
-        }}
-      >
-        {draft.body}
-      </ReactMarkdown>
+      <AssistantMarkdown content={draft.body} />
       {draft.callToAction ? (
         <div className="mt-5 border-t border-[var(--cp-border-subtle)] pt-4">
           <div className="mb-1 text-xs font-medium text-[var(--cp-text-muted)]">行动引导</div>
@@ -2342,6 +2505,21 @@ function readConversationMessagePreview(message: ConversationMessage): string {
   return tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
 }
 
+function readAssistantResponseText(message: ConversationMessage): string {
+  const draft = tryParseStructuredCopywritingDraft(message.content);
+  if (draft) {
+    return [
+      draft.title,
+      draft.body,
+      draft.callToAction ? `行动引导\n${draft.callToAction}` : "",
+      draft.complianceNotes.length
+        ? `合规备注\n${draft.complianceNotes.join("\n")}`
+        : "",
+    ].filter(Boolean).join("\n\n");
+  }
+  return tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
+}
+
 function readConversationUserContent(content: string): string {
   const followup = content.match(/用户后续消息：([\s\S]+)$/)?.[1]?.trim();
   if (followup) return followup;
@@ -2354,25 +2532,54 @@ function readConversationUserContent(content: string): string {
 
 function ActivityRow({ activity }: { activity: AgentActivity }) {
   const running = activity.status === "running";
+  const sources = activity.kind === "search" ? activity.sources ?? [] : [];
+  const displayLabel = searchActivityLabel(activity) ?? activity.label;
+  const previewDetail = sources.length
+    ? sources.map((source) => source.title || sourceHostname(source.url)).join("、")
+    : activity.detail;
   return (
     <div
       data-agent-activity
       data-conversation-minimap-anchor
       data-minimap-id={`activity-${activity.id}`}
       data-minimap-kind="activity"
-      data-minimap-preview={`${activity.label}${activity.detail ? ` ${activity.detail}` : ""}`}
+      data-minimap-preview={`${displayLabel}${previewDetail ? ` ${previewDetail}` : ""}`}
       data-activity-status={activity.status}
-      className="flex min-h-8 items-center gap-2 py-1 text-[13px] text-[var(--cp-text-faint)]"
+      className="min-h-8 py-1 text-[13px] text-[var(--cp-text-faint)]"
     >
-      {activity.status === "failed" ? (
-        <CircleAlert className="size-4 shrink-0 text-[var(--cp-danger)]" />
-      ) : null}
-      <span className={cn("flex min-w-0 items-center gap-2 overflow-hidden", running && "cp-running-shimmer")}>
-        <span className="shrink-0">{activity.label}</span>
-        {activity.detail ? <code className="min-w-0 truncate font-mono text-[11px]">{activity.detail}</code> : null}
-      </span>
-      {activity.durationMs ? (
-        <span className="ml-auto shrink-0 text-[11px]">{formatCompactDuration(activity.durationMs)}</span>
+      <div className="flex min-h-7 items-center gap-2">
+        {activity.status === "failed" ? (
+          <CircleAlert className="size-4 shrink-0 text-[var(--cp-danger)]" />
+        ) : null}
+        <span className={cn("flex min-w-0 items-center gap-2 overflow-hidden", running && "cp-running-shimmer")}>
+          <span className="shrink-0">{displayLabel}</span>
+          {activity.detail ? <span className="min-w-0 truncate text-[11px]">{activity.detail}</span> : null}
+        </span>
+        {activity.durationMs ? (
+          <span className="ml-auto shrink-0 text-[11px]">{formatCompactDuration(activity.durationMs)}</span>
+        ) : null}
+      </div>
+      {sources.length ? (
+        <div className="mt-0.5 space-y-0.5">
+          {sources.map((source) => (
+            <a
+              key={source.url}
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+              title={source.url}
+              className="flex min-h-7 min-w-0 items-center gap-2 rounded-[var(--cp-radius-item)] px-1.5 text-[12px] text-[var(--cp-text-muted)] hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+            >
+              <ExternalLink className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
+              <span className="min-w-0 flex-1 truncate">{source.title || sourceHostname(source.url)}</span>
+              {source.title ? (
+                <span className="max-w-[34%] shrink-0 truncate text-[11px] text-[var(--cp-text-faint)]">
+                  {sourceHostname(source.url)}
+                </span>
+              ) : null}
+            </a>
+          ))}
+        </div>
       ) : null}
     </div>
   );
@@ -2431,6 +2638,8 @@ function summarizeActivities(activities: AgentActivity[], running: boolean): str
     if (activities.some((activity) => activity.kind === "compact" && activity.status === "running")) {
       return "正在整理上下文";
     }
+    const searchSummary = summarizeSearchActivities(activities);
+    if (searchSummary) return searchSummary;
     return "正在调用工具";
   }
   if (kinds.has("file") && kinds.has("command")) {
@@ -2446,7 +2655,7 @@ function summarizeActivities(activities: AgentActivity[], running: boolean): str
     return "生成了图片";
   }
   if (kinds.has("search")) {
-    return "完成了搜索";
+    return summarizeSearchActivities(activities) ?? "完成了搜索";
   }
   if (kinds.has("compact")) {
     return "已整理上下文";
@@ -2877,6 +3086,7 @@ function Sidebar({
   onToggleSelectionMode,
   onToggleThreadSelection,
   onRequestThreadDeletion,
+  onOpenMarketResearch,
   onOpenCopywriting,
   onOpenPlugins,
   onOpenSkills,
@@ -2897,6 +3107,7 @@ function Sidebar({
   onToggleSelectionMode: () => void;
   onToggleThreadSelection: (threadId: string) => void;
   onRequestThreadDeletion: (threadIds: string[]) => void;
+  onOpenMarketResearch: () => void;
   onOpenCopywriting: () => void;
   onOpenPlugins: () => void;
   onOpenSkills: () => void;
@@ -2999,6 +3210,7 @@ function Sidebar({
       <nav className="shrink-0 space-y-1 px-2" aria-label="主要导航">
         {primaryNavItems.map((item) => {
           const isNewTask = item.label === "新任务";
+          const isMarketResearch = item.label === "市场调研";
           const isCreativeSpace = item.label === "创作空间";
           const creativeOpen = isCreativeSpace && openSidebarFlyout === "creative";
           return (
@@ -3017,7 +3229,15 @@ function Sidebar({
               aria-expanded={isCreativeSpace ? creativeOpen : undefined}
               aria-haspopup={isCreativeSpace ? "menu" : undefined}
               aria-controls={isCreativeSpace ? "sidebar-creative-navigation" : undefined}
-              onClick={isNewTask ? onNewTask : isCreativeSpace ? () => toggleSidebarFlyout("creative") : undefined}
+              onClick={
+                isNewTask
+                  ? onNewTask
+                  : isMarketResearch
+                    ? onOpenMarketResearch
+                    : isCreativeSpace
+                      ? () => toggleSidebarFlyout("creative")
+                      : undefined
+              }
             >
               <item.icon className="size-[var(--cp-sidebar-icon-size)] shrink-0" strokeWidth={1.8} />
               <span className="truncate">{item.label}</span>
@@ -3900,6 +4120,9 @@ function WorkComposer({
   modelsLoading,
   selectedModel,
   reasoningEffort,
+  externalDataAvailable,
+  externalDataApprovalMode,
+  canManageExternalDataPolicy,
   plugins,
   pluginsLoading,
   skills,
@@ -3911,6 +4134,7 @@ function WorkComposer({
   onSubmit,
   onModelChange,
   onReasoningEffortChange,
+  onExternalDataApprovalModeChange,
   onOpenPlugin,
   onSkillSelect,
   onSkillClear,
@@ -3925,6 +4149,9 @@ function WorkComposer({
   modelsLoading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  externalDataAvailable: boolean;
+  externalDataApprovalMode: ExternalDataApprovalMode;
+  canManageExternalDataPolicy: boolean;
   plugins: CommercePluginInventoryItem[];
   pluginsLoading: boolean;
   skills: SkillInventoryItem[];
@@ -3936,6 +4163,7 @@ function WorkComposer({
   onSubmit: () => void;
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onExternalDataApprovalModeChange: (mode: ExternalDataApprovalMode) => void;
   onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
   onSkillSelect: (skill: SkillInventoryItem) => void;
   onSkillClear: () => void;
@@ -3947,6 +4175,7 @@ function WorkComposer({
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const composerRootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [activeComposerPopover, setActiveComposerPopover] = useState<"access" | "model" | null>(null);
   const skillSelector = useComposerSkillSelector({
     value,
     skills,
@@ -3957,6 +4186,10 @@ function WorkComposer({
     onChange,
     onSelect: onSkillSelect,
   });
+
+  useEffect(() => {
+    if (skillSelector.open) setActiveComposerPopover(null);
+  }, [skillSelector.open]);
 
   useEffect(() => {
     if (composerInputRef.current) {
@@ -4041,11 +4274,28 @@ function WorkComposer({
                 size="composerIcon"
                 aria-label="添加"
                 aria-expanded={skillSelector.open}
-                onClick={skillSelector.toggleMenu}
+                onClick={() => {
+                  setActiveComposerPopover(null);
+                  skillSelector.toggleMenu();
+                }}
               >
                 <Plus className="size-5" />
               </Button>
             </IconTooltip>
+            <ExternalDataAccessControl
+              value={externalDataApprovalMode}
+              available={externalDataAvailable}
+              showEnterpriseSettings={canManageExternalDataPolicy}
+              open={activeComposerPopover === "access"}
+              placement="bottom"
+              onChange={onExternalDataApprovalModeChange}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) skillSelector.closeMenu();
+                setActiveComposerPopover((current) =>
+                  nextOpen ? "access" : current === "access" ? null : current,
+                );
+              }}
+            />
           </div>
 
           <div className="flex items-center gap-1">
@@ -4054,8 +4304,15 @@ function WorkComposer({
               loading={modelsLoading}
               selectedModel={selectedModel}
               reasoningEffort={reasoningEffort}
+              open={activeComposerPopover === "model"}
               onModelChange={onModelChange}
               onReasoningEffortChange={onReasoningEffortChange}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) skillSelector.closeMenu();
+                setActiveComposerPopover((current) =>
+                  nextOpen ? "model" : current === "model" ? null : current,
+                );
+              }}
             />
 
             <IconTooltip label="语音输入">
@@ -4105,26 +4362,170 @@ function WorkComposer({
   );
 }
 
+const externalDataApprovalOptions: Array<{
+  value: ExternalDataApprovalMode;
+  label: string;
+  shortLabel: string;
+  description: string;
+  icon: typeof LockKeyhole;
+}> = [
+  {
+    value: "always_ask",
+    label: "每次调用前询问",
+    shortLabel: "请求访问",
+    description: "每次收费调用都先确认",
+    icon: CircleAlert,
+  },
+  {
+    value: "task",
+    label: "本任务内允许",
+    shortLabel: "任务访问",
+    description: "当前任务按企业上限自动调用",
+    icon: CheckCircle2,
+  },
+  {
+    value: "policy",
+    label: "按企业策略自动调用",
+    shortLabel: "策略访问",
+    description: "按平台、接口、费率和单次上限执行",
+    icon: LockKeyhole,
+  },
+];
+
+function ExternalDataAccessControl({
+  value,
+  available,
+  showEnterpriseSettings,
+  open,
+  disabled = false,
+  placement,
+  onChange,
+  onOpenChange,
+}: {
+  value: ExternalDataApprovalMode;
+  available: boolean;
+  showEnterpriseSettings: boolean;
+  open: boolean;
+  disabled?: boolean;
+  placement: "top" | "bottom";
+  onChange: (mode: ExternalDataApprovalMode) => void;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = externalDataApprovalOptions.find((option) => option.value === value) ?? externalDataApprovalOptions[0];
+
+  useEffect(() => {
+    if (!open) return;
+    function closeOnPointer(event: PointerEvent) {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) onOpenChange(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onOpenChange(false);
+    }
+    document.addEventListener("pointerdown", closeOnPointer);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointer);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onOpenChange, open]);
+
+  useEffect(() => {
+    if (disabled) onOpenChange(false);
+  }, [disabled, onOpenChange]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        type="button"
+        className="flex h-9 items-center gap-1.5 rounded-full px-2.5 text-xs text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:opacity-50 sm:px-3"
+        aria-label={`外部 API 调用权限：${available ? selected.label : "外部数据待配置"}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => onOpenChange(!open)}
+      >
+        <selected.icon className="size-4 shrink-0" strokeWidth={1.8} />
+        <span className="whitespace-nowrap">{available ? selected.shortLabel : "访问"}</span>
+        <ChevronDown className="size-3.5 shrink-0" strokeWidth={1.8} />
+      </button>
+
+      {open ? (
+        <div
+          role="menu"
+          aria-label="外部 API 调用权限"
+          className={cn(
+            "absolute left-0 z-50 w-[min(328px,calc(100vw-32px))] rounded-[12px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-1.5 shadow-[0_6px_18px_rgba(0,0,0,0.08)] max-sm:-left-12",
+            placement === "top" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
+          )}
+        >
+          <div className="flex h-8 items-center justify-between gap-4 px-2">
+            <span className="text-xs font-medium text-[var(--cp-text)]">外部 API 调用权限</span>
+            {showEnterpriseSettings ? (
+              <Link
+                href="/enterprise/admin#external-data"
+                className="text-[11px] text-[var(--cp-text-muted)] underline decoration-[var(--cp-border-strong)] underline-offset-4 hover:text-[var(--cp-text)]"
+              >
+                企业设置
+              </Link>
+            ) : null}
+          </div>
+          {externalDataApprovalOptions.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="menuitemradio"
+              aria-checked={value === option.value}
+              disabled={!available}
+              className={cn(
+                "grid min-h-[46px] w-full grid-cols-[20px_minmax(0,1fr)_18px] items-center gap-2 rounded-[6px] px-2 py-1.5 text-left hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:opacity-45",
+                value === option.value && available && "bg-[var(--cp-bg-subtle)]",
+              )}
+              onClick={() => {
+                onChange(option.value);
+                onOpenChange(false);
+              }}
+            >
+              <option.icon className="size-4 text-[var(--cp-text-muted)]" strokeWidth={1.8} />
+              <span className="min-w-0">
+                <span className="block text-[13px] font-medium leading-5 text-[var(--cp-text)]">{option.label}</span>
+                <span className="block truncate whitespace-nowrap text-[11px] leading-4 text-[var(--cp-text-muted)]">{option.description}</span>
+              </span>
+              {value === option.value && available ? <Check className="size-4" strokeWidth={2} /> : null}
+            </button>
+          ))}
+          <p className="mb-0 mt-1 truncate whitespace-nowrap border-t border-[var(--cp-border-subtle)] px-2 pt-1.5 text-[10px] leading-4 text-[var(--cp-text-faint)]">
+            任何模式都不授权电脑控制、本机文件访问或任意网络请求。
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ModelAndReasoningControl({
   models,
   loading,
   selectedModel,
   reasoningEffort,
+  open,
   disabled = false,
   placement = "bottom",
   onModelChange,
   onReasoningEffortChange,
+  onOpenChange,
 }: {
   models: ProviderModelSummary[];
   loading: boolean;
   selectedModel: string;
   reasoningEffort: ReasoningEffort;
+  open: boolean;
   disabled?: boolean;
   placement?: "top" | "bottom";
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  onOpenChange: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [panel, setPanel] = useState<"quick" | "advanced">("quick");
   const [submenu, setSubmenu] = useState<"model" | "effort" | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -4138,10 +4539,14 @@ function ModelAndReasoningControl({
 
   useEffect(() => {
     if (disabled) {
-      setOpen(false);
+      onOpenChange(false);
       setSubmenu(null);
     }
-  }, [disabled]);
+  }, [disabled, onOpenChange]);
+
+  useEffect(() => {
+    if (!open) setSubmenu(null);
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -4149,13 +4554,13 @@ function ModelAndReasoningControl({
     }
     function closeOnOutsidePointer(event: PointerEvent) {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        setOpen(false);
+        onOpenChange(false);
         setSubmenu(null);
       }
     }
     function closeOnEscape(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setOpen(false);
+        onOpenChange(false);
         setSubmenu(null);
       }
     }
@@ -4165,13 +4570,13 @@ function ModelAndReasoningControl({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [open]);
+  }, [onOpenChange, open]);
 
   function toggleControl() {
     if (disabled) {
       return;
     }
-    setOpen((current) => !current);
+    onOpenChange(!open);
     setPanel(reasoningSupported ? "quick" : "advanced");
     setSubmenu(reasoningSupported ? null : "model");
   }

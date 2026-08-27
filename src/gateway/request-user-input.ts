@@ -1,5 +1,9 @@
 import type { AppServerEvent, JsonRpcId } from "../codex/protocol.js";
 
+export const CODEX_REQUEST_USER_INPUT_METHOD = "item/tool/requestUserInput";
+export const COMMERCE_APPROVAL_REQUESTED_METHOD = "commerce/approval/requested";
+export const COMMERCE_APPROVAL_RESOLVED_METHOD = "commerce/approval/resolved";
+
 export type PendingRequestUserInput = {
   id: JsonRpcId;
   requestId: string;
@@ -9,12 +13,14 @@ export type PendingRequestUserInput = {
   questions: unknown[];
   isBlocking: boolean;
   receivedAt: string;
-  action?: "skill.publish";
+  origin: "codex_app_server" | "commerce_approval";
+  action?: "skill.publish" | "external_data.call";
 };
 
 export function readPendingRequestUserInput(
   event: Extract<AppServerEvent, { type: "server_request" }>,
 ): PendingRequestUserInput | null {
+  if (event.method !== CODEX_REQUEST_USER_INPUT_METHOD) return null;
   if (!isRecord(event.params)) return null;
   const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
   const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
@@ -32,6 +38,7 @@ export function readPendingRequestUserInput(
     questions,
     isBlocking: event.params.isBlocking !== false,
     receivedAt: event.at,
+    origin: "codex_app_server",
   };
 }
 
@@ -44,6 +51,7 @@ export function serializePendingRequestUserInput(request: PendingRequestUserInpu
     questions: request.questions,
     isBlocking: request.isBlocking,
     receivedAt: request.receivedAt,
+    origin: request.origin,
     ...(request.action ? { action: request.action } : {}),
   };
 }
@@ -55,7 +63,7 @@ export function normalizeRequestUserInputAnswers(
   if (!isRecord(value)) return null;
   const normalized: Record<string, { answers: string[] }> = {};
   for (const question of questions) {
-    if (!isRecord(question) || typeof question.id !== "string" || !/^[a-z0-9_]{1,64}$/.test(question.id)) {
+    if (!isRecord(question) || typeof question.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(question.id)) {
       return null;
     }
     const answer = value[question.id];
@@ -96,6 +104,14 @@ export function formatRequestUserInputAnswerMessage(
     lines.push(`${label}：${value}`);
   }
   return lines.length ? `我的选择：\n${lines.join("\n")}` : null;
+}
+
+export function formatConversationRequestUserInputAnswerMessage(
+  request: Pick<PendingRequestUserInput, "origin" | "questions">,
+  answers: Record<string, { answers: string[] }>,
+): string | null {
+  if (request.origin !== "codex_app_server") return null;
+  return formatRequestUserInputAnswerMessage(request.questions, answers);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

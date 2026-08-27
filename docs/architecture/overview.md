@@ -14,11 +14,11 @@ Codex App Server owns:
 - persisted multi-turn history;
 - streamed item and Turn events;
 - tool-call lifecycle;
-- `request_user_input` and approval pauses;
+- model-originated `request_user_input`, Harness permission approvals, and their server-request lifecycle;
 - interruption, steering, queueing, continuation, recovery, and compaction;
 - Skill invocation and multi-agent collaboration.
 
-Commerce Pilot must not replace these concerns with a custom agent loop, prompt chain, LangChain/LangGraph-style orchestrator, another generic agent framework, or browser-owned state machine. Product code may adapt App Server protocol details behind narrow modules, but the Harness remains authoritative.
+Commerce Pilot must not replace these concerns with a custom agent loop, prompt chain, LangChain/LangGraph-style orchestrator, another generic agent framework, or browser-owned state machine. Product code may adapt App Server protocol details behind narrow modules, but the Harness remains authoritative. Application authorization for a paid or side-effecting dynamic tool may hold the original `item/tool/call`; it must use a Commerce event and must not fabricate a Codex server request.
 
 ## Technology Stack
 
@@ -32,7 +32,10 @@ Commerce Pilot must not replace these concerns with a custom agent loop, prompt 
 | Agent protocol | JSON-RPC over application-owned stdio | Gateway-to-App Server communication only |
 | Authentication | Better Auth | Browser sessions and invitation-only identity |
 | Business database | PostgreSQL 16 | Enterprise identity, RBAC, RLS, thread index, quotas, usage, deletion jobs |
-| External tools | Application-managed MCP and host tools | Web Search, image generation, future commerce systems |
+| External data warehouse | PostgreSQL 16 + pgvector 0.8.6 | Independent request lineage, complete raw responses, normalized source data, vectors and curated business evidence |
+| External search index | Elasticsearch 9.5.2 | Rebuildable BM25 search and aggregations populated through a PostgreSQL Outbox |
+| Local retrieval models | Qwen3 Embedding 4B + Qwen3 Reranker 4B | Local 1024-dimensional semantic retrieval and cross-encoder relevance judgment |
+| External tools | Application-managed MCP and host tools | Web Search, image generation, governed JustOneAPI market data, future commerce systems |
 | Artifact storage | Tenant-dedicated `CODEX_HOME` volumes | Codex state, generated images, uploads, extracted documents, outbox |
 | Document parsing | PDF.js, Mammoth, ExcelJS, file-type | Bounded tenant attachment extraction; never arbitrary host-file access |
 | Tests | Node test runner, Vitest, Testing Library, Playwright/browser QA | Gateway contracts, web logic, UI and runtime verification |
@@ -49,6 +52,21 @@ Browser
   -> commerce systems or provider APIs
 ```
 
+External market data has an additional mediated boundary:
+
+```text
+Codex Harness business-level commerce_data tool or external Commerce Pilot MCP client
+  -> application authorization / approval / quota / audit / billing
+  -> SHUEHO External Data MCP
+  -> service-owned JustOneAPI REST client
+  -> JustOneAPI REST API
+  -> independent raw, normalized and business warehouse
+```
+
+Keyword product research is a bounded business workflow inside that service, not an Agent loop. Harness invokes one business tool; the service plans search and dependent detail/price/review steps from SQL, resolves provider identifiers only from quality-checked source records, and the Gateway applies authorization, approval and settlement separately to every actual paid request.
+
+Inbound Commerce Pilot identities are never passed through as JustOneAPI credentials. See [External Data MCP And Governance](./external-data-mcp.md).
+
 The browser never connects directly to App Server and never supplies `cwd`, provider identity, tool definitions, sandbox policy, developer instructions, Skill paths, host paths, Hook commands, or Enterprise scope headers.
 
 ## Sources Of Truth
@@ -63,6 +81,9 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 | Plugin availability | Application manifests + live Gateway/MCP/provider evidence |
 | Tool permissions | Application runtime registry and server-owned policy |
 | Usage | Exact provider/App Server usage events + idempotent PostgreSQL ledger |
+| Audit, billing, and reply feedback | Transactional append-only PostgreSQL records under Enterprise RLS |
+| Complete JustOneAPI request/response authority | Independent SQL-only `external_api_call_raw`; `commerce_external_data_archive` retains the governance receipt and warehouse ids |
+| Runtime operational logs | Redacted structured JSON, exportable through OpenTelemetry to Elastic or another log backend; never the business source of truth |
 | Uploaded/generated media | Tenant artifact metadata + ownership-checked BFF URL |
 | External write completion | Downstream write receipt followed by readback evidence |
 
@@ -97,6 +118,8 @@ src/codex/                narrow App Server protocol/runtime adapters
 src/gateway/              private Gateway, policy, stores, event handling
 src/provider/             Responses-compatible model/provider client
 apps/web/migrations/      append-only PostgreSQL migrations
+apps/external-data/       independent REST collector, warehouse, local-AI enrichment, search index and internal MCP
+services/local-retrieval-models/ bounded local Qwen3 Embedding/Reranker HTTP process
 scripts/                  smoke, security, reconciliation, backfill tools
 designs/                  mandatory frontend design system
 docs/                     architecture, development, deployment contracts

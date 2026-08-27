@@ -73,7 +73,8 @@ export type TurnStartInput = {
   message?: string;
   model?: string;
   effort?: string;
-  workflow?: "commerce-copywriting";
+  workflow?: "commerce-copywriting" | "commerce-market-research";
   skillName?: string;
   attachmentIds?: string[];
+  externalDataApprovalMode?: "always_ask" | "task" | "policy";
 };

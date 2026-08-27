@@ -15,10 +15,11 @@ export function isTaskCategory(value: unknown): value is TaskCategory {
 
 export function resolveTaskCategory(input: {
   category?: TaskCategory | null;
-  recipeId?: "copywriting" | null;
+  recipeId?: "copywriting" | "market_research" | null;
   title: string;
 }): TaskCategory {
   if (input.recipeId === "copywriting") return "creative";
+  if (input.recipeId === "market_research") return "research";
   return inferTaskCategoryFromTitle(input.title) ?? input.category ?? "general";
 }
 

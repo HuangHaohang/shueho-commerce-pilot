@@ -42,6 +42,7 @@ test("generates structured outcome titles with the configured Spark model", asyn
       apiKeyEnvName: "TEST_API_KEY",
       apiKey: "secret",
       imageModel: "gpt-image-2",
+      webSearchModel: "gpt-5.6-luna",
       agentModelSelectors: ["gpt-5.6-sol"],
       modelCacheTtlMs: 60_000,
       webSearchTimeoutMs: 30_000,

@@ -35,9 +35,6 @@ export function SkillsDirectory({ onUseSkill }: { onUseSkill: (skill: SkillInven
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--cp-bg)] pt-14 md:pt-0">
-      <div className="hidden h-[var(--cp-topbar-height)] shrink-0 items-center justify-center md:flex">
-        <span className="text-sm font-medium">技能</span>
-      </div>
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto w-full max-w-[920px] px-5 pb-20 pt-10 md:px-8 md:pt-14">
           <div>

@@ -13,7 +13,7 @@ export type AgentThreadRecord = {
   durationMs: number | null;
   titleModel: string | null;
   titleGeneratedAt: string | null;
-  recipeId: "copywriting" | null;
+  recipeId: "copywriting" | "market_research" | null;
   category: TaskCategory;
 };
 
@@ -28,7 +28,7 @@ type AgentThreadRow = {
   duration_ms: number | null;
   title_model: string | null;
   title_generated_at: Date | null;
-  recipe_id: "copywriting" | null;
+  recipe_id: "copywriting" | "market_research" | null;
   category: TaskCategory;
 };
 
@@ -36,8 +36,12 @@ export async function registerAgentThreadOwner(
   threadId: string,
   scope: EnterpriseScope,
   title: string,
-  recipeId: "copywriting" | null = null,
-  category: TaskCategory = recipeId === "copywriting" ? "creative" : "general",
+  recipeId: "copywriting" | "market_research" | null = null,
+  category: TaskCategory = recipeId === "copywriting"
+    ? "creative"
+    : recipeId === "market_research"
+      ? "research"
+      : "general",
 ): Promise<void> {
   await withEnterpriseDatabaseContext(scope, async (client) => {
     const result = await client.query<{ created_by_user_id: string }>(

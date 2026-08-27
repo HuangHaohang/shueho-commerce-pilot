@@ -5,19 +5,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 
 import { readGatewayConfig } from "../gateway/config.js";
-import { CommerceProviderClient } from "../provider/commerce-provider-client.js";
+import { CommerceProviderClient, CommerceProviderError } from "../provider/commerce-provider-client.js";
 
 const config = readGatewayConfig();
-if (!config.defaultModel) {
-  throw new Error("Commerce Web Search MCP requires CODEX_DEFAULT_MODEL.");
-}
-
 const provider = new CommerceProviderClient(config.provider);
+await provider.assertAgentModel(config.provider.webSearchModel);
 const server = new McpServer(
   { name: "commerce-web", version: "0.1.0" },
   {
     instructions:
-      "Use search for explicit web requests and facts that may have changed. Search is read-only and returns grounded text plus source URLs. The server retries one bounded transient provider failure internally. If a call still fails, retry once with a shorter, more specific query. Never claim Web Search is unavailable while commerce_web.search appears in the tool catalog.",
+      "Use search for explicit web requests and facts that may have changed. Search is read-only and returns grounded text plus source URLs. If a call fails, issue at most one new tool call with a shorter, more specific query. Never claim Web Search is unavailable while commerce_web.search appears in the tool catalog.",
   },
 );
 
@@ -39,7 +36,7 @@ server.registerTool(
   },
   async ({ query }) => {
     try {
-      const result = await provider.searchWeb({ model: config.defaultModel as string, query });
+      const result = await provider.searchWeb({ model: config.provider.webSearchModel, query });
       const payload = {
         status: "completed",
         answer: result.answer,
@@ -60,20 +57,43 @@ server.registerTool(
         },
       };
     } catch (error) {
+      const failure = normalizeWebSearchFailure(error);
       return {
         isError: true,
-        content: [
-          {
-            type: "text" as const,
-            text: error instanceof Error ? error.message : "Commerce Web Search failed.",
-          },
-        ],
+        content: [{ type: "text" as const, text: failure.error }],
+        structuredContent: failure,
       };
     }
   },
 );
 
 await server.connect(new StdioServerTransport());
+
+function normalizeWebSearchFailure(error: unknown): {
+  status: "failed";
+  code: string;
+  error: string;
+  retryable: boolean;
+  instruction: string;
+} {
+  const message = error instanceof Error ? error.message : "";
+  const timedOut = /timed out|timeout/i.test(message);
+  const missingSources = /no source URL/i.test(message);
+  const retryable = timedOut || (error instanceof CommerceProviderError && (error.upstreamStatus ?? 0) >= 500);
+  return {
+    status: "failed",
+    code: timedOut ? "WEB_SEARCH_TIMEOUT" : missingSources ? "WEB_SEARCH_NO_SOURCES" : "WEB_SEARCH_PROVIDER_FAILED",
+    error: timedOut
+      ? "网页搜索服务超时，请缩短查询范围后重试。"
+      : missingSources
+        ? "网页搜索服务未返回可核验来源，请更换查询词后重试。"
+        : "网页搜索服务暂时不可用。",
+    retryable,
+    instruction: retryable
+      ? "Explain the failure, then retry at most once with a shorter and more specific query."
+      : "Explain the failure reason and do not claim that sources were retrieved.",
+  };
+}
 
 async function shutdown(): Promise<void> {
   await server.close();

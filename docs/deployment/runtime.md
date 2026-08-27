@@ -53,6 +53,9 @@ docker run --rm \
   -e COMMERCE_AGENT_EVENT_SINK_URL="http://commerce-web:3000/api/internal/agent-events" \
   -e COMMERCE_AGENT_AUTHORIZATION_URL="http://commerce-web:3000/api/internal/agent-authorization" \
   -e COMMERCE_AGENT_ADMISSION_URL="http://commerce-web:3000/api/internal/agent-admission" \
+  -e COMMERCE_EXTERNAL_DATA_CONTROL_URL="http://commerce-web:3000/api/internal/external-data" \
+  -e EXTERNAL_DATA_SERVICE_MCP_URL="https://shueho-external-data.internal/mcp" \
+  -e EXTERNAL_DATA_SERVICE_MCP_TOKEN \
   -e COMMERCE_AGENT_AUTHORIZATION_POLL_MS="10000" \
   -e COMMERCE_AGENT_MAX_THREADS_PER_SESSION="4" \
   -e COMMERCE_AGENT_AUTO_COMPACT_THRESHOLD_PERCENT="75" \
@@ -63,6 +66,8 @@ docker run --rm \
 ```
 
 Port `8787` is an internal service port. Connect the correct tenant's Next.js BFF route over the private container network and give it the same `COMMERCE_GATEWAY_INTERNAL_TOKEN`. The BFF callback at `COMMERCE_AGENT_EVENT_SINK_URL` is also internal infrastructure. Do not publish either endpoint to the internet. For local-only diagnostics, bind Gateway explicitly to loopback with `-p 127.0.0.1:8787:8787`.
+
+The optional customer-facing Commerce Pilot MCP process runs separately with `npm run start:mcp` on port `8790` by default. Publish only that listener behind TLS, request-size limits, connection limits and an ingress that preserves `Authorization`; do not expose BFF internal callbacks or port `8787`. It requires `COMMERCE_MCP_AUTH_URL`, `COMMERCE_EXTERNAL_DATA_CONTROL_URL`, and the private SHUEHO external-data MCP credential. It never receives the JustOneAPI REST Token.
 
 The mounted `CODEX_HOME` directory should contain app-owned Codex configuration, including custom provider definitions when needed:
 
@@ -90,6 +95,8 @@ Gateway production requirements:
 - `COMMERCE_AGENT_EVENT_SINK_URL`, a private HTTP(S) BFF callback;
 - `COMMERCE_AGENT_AUTHORIZATION_URL`, the private active-authorization callback;
 - `COMMERCE_AGENT_ADMISSION_URL`, the private compaction-admission/release callback;
+- `COMMERCE_EXTERNAL_DATA_CONTROL_URL`, the private authorization/budget/audit/billing callback when JustOneAPI is enabled;
+- `EXTERNAL_DATA_SERVICE_MCP_URL` and `EXTERNAL_DATA_SERVICE_MCP_TOKEN`, private credentials for the SHUEHO data service;
 - `COMMERCE_AGENT_AUTHORIZATION_POLL_MS`, `5000-60000`, default `10000`;
 - `COMMERCE_AGENT_MAX_THREADS_PER_SESSION`, `1-16`, default `4`, aligned at or below the tenant contract;
 - `COMMERCE_PROVIDER_API_KEY` and the intended provider identity/configuration;
@@ -98,11 +105,21 @@ Gateway production requirements:
 BFF production requirements:
 
 - `DATABASE_URL` using TLS and a least-privilege PostgreSQL role that is neither superuser nor `BYPASSRLS`; production refuses a dangerous role;
+
+External-data service production requirements:
+
+- a dedicated PostgreSQL/pgvector database and separate migration/runtime roles;
+- Elasticsearch on private networking, with the business index rebuildable from PostgreSQL Outbox rows;
+- `JUSTONEAPI_API_TOKEN` only in the external-data service secret set;
+- private `EXTERNAL_DATA_INTERNAL_TOKEN` and `LOCAL_MODEL_INTERNAL_TOKEN` values of at least 32 characters;
+- local Qwen3 Embedding/Reranker inference on a dedicated GPU/Metal worker; fake mode and CPU fallback are forbidden;
+- no browser, public MCP or Commerce Pilot Gateway access to `external_api_call_raw`.
 - `BETTER_AUTH_URL`, a random `BETTER_AUTH_SECRET` of at least 32 characters, and exact `AUTH_TRUSTED_ORIGINS`;
 - `COMMERCE_GATEWAY_URL` pointing to the correct tenant-dedicated internal Gateway;
 - the matching `COMMERCE_GATEWAY_INTERNAL_TOKEN`;
 - `COMMERCE_ALLOW_PUBLIC_REGISTRATION=false`; production ignores a true override and requires an email-matching invitation;
 - an approved secure channel for delivering one-time invitation fragments; add enterprise SSO/SCIM and account recovery before broad external rollout.
+- complete legal-entity and privacy-contact environment values before any public or paid rollout;
 
 Migration/provisioning jobs additionally load `MIGRATION_DATABASE_URL` from a job secret (or local `.env.migration`), distinct from `DATABASE_URL`. Do not mount that file or variable into the long-running web process. Production `auth:migrate` fails if it is absent. `enterprise:verify-isolation` intentionally requires both URLs so it can create temporary fixtures as owner and prove that the runtime role cannot escape forced RLS.
 
@@ -115,6 +132,8 @@ Run one `npm run jobs:thread-deletion` worker beside each tenant-dedicated Gatew
 The worker claims durable deletion jobs with `FOR UPDATE SKIP LOCKED`, invokes Gateway `thread/delete`, waits for application artifact cleanup, and only then removes the Commerce Pilot thread index and marks the item deleted. Monitor queued/running age, partial/failed jobs, worker liveness, and `$CODEX_HOME/thread_artifacts` storage. A web process is not a replacement for this worker; deleting in a detached Next.js callback is not durable.
 
 Uploaded photos and documents are stored below `$CODEX_HOME/thread_artifacts/<threadId>/<artifactId>`. The Gateway image/document parsers are application dependencies and must be installed from the production lockfile. App Server and Gateway need the same dedicated tenant artifact volume; the web process does not need direct filesystem access. Enforce the 5 MB total-per-Turn limit at the edge/BFF and Gateway, and keep the multipart overhead allowance restricted to the authenticated attachment route. Backups and retention must include the artifact volume, while permanent thread deletion removes its complete thread directory.
+
+Run `npm run jobs:external-data-retention` with the least-privilege application database role and the exact `COMMERCE_RUNTIME_TENANT_ID`. It invokes only the tenant-pinned security-definer archive and call-ledger purge functions in bounded batches. Monitor worker liveness and stale eligible rows; unresolved, permanent-policy, and legal-hold rows are intentionally excluded. Backups must include `commerce_external_data_archive`; thread-rollout backup and deletion rules do not cover this independent SQL dataset.
 
 ## Provider Configuration
 
@@ -160,7 +179,7 @@ These controls prevent the model from receiving host-development capabilities. C
 
 ## Database And Rollout Checks
 
-Run `npm run auth:migrate` exactly once per rollout job with its job-only `MIGRATION_DATABASE_URL`; the migration runner serializes migrations `001` through `011` with a PostgreSQL advisory lock. Then run `npm run enterprise:verify-isolation` with distinct migration/runtime URLs. Provision the organization, its one-to-one tenant, and default workspace with `npm run enterprise:bootstrap` only after the intended owner identity exists; production also requires `--identity-verified=true`. Treat bootstrap as a mutating operator action: re-running it changes contract limits and seeded roles.
+Run `npm run auth:migrate` exactly once per rollout job with its job-only `MIGRATION_DATABASE_URL`; the Commerce Pilot migration runner serializes append-only migrations with a PostgreSQL advisory lock. Run `npm run external-data:migrate` separately against the independent pgvector database. Import a current complete JustOneAPI pricing workbook with `npm run enterprise:import-justoneapi-pricing`, then run the one-shot `npm run external-data:import-catalog` job to hash and join the official sitemap/OpenAPI catalog to that pricing snapshot. The catalog job alone may read both migration databases; neither credential belongs in a long-running service. Run `npm run external-data:verify:catalog` before enabling the catalog, then run `npm run enterprise:verify-isolation`, `npm run enterprise:verify-external-data` and `npm run external-data:verify`. The catalog verification compiles and encodes every callable endpoint without dispatching a paid request; the final check imports the existing paid archive without another provider call and verifies raw storage, normalized tables, local models, vectors, business promotion and Elasticsearch.
 
 Before accepting customer traffic, verify:
 
@@ -172,7 +191,8 @@ Before accepting customer traffic, verify:
 6. invitation-only registration/acceptance, role-escalation denial, seat/workspace races, token reservations, manual/auto/Harness compaction admission, turn/steer idempotency, active revocation interrupt/queue clear, terminal lease release, restart/outbox replay/dead-letter, pending-steer restore-without-start, and backup restore paths pass;
 7. load tests cover the customer's negotiated member count and concurrency.
 8. `npm audit` and container/SBOM scans have no unresolved reachable production advisories, or a time-bounded security exception documents reachability and compensating controls. Next image optimization remains disabled because tenant media is served only by the ownership-checked artifact route.
+9. JustOneAPI terms, multi-tenant proxy permission, data-processing region/retention, rate cards, account reconciliation, customer disclosure, MCP Token revocation, approval downgrade and ambiguous-result handling have written operational owners and passing readbacks.
 
-The trusted reverse proxy must reject chunked or declared API bodies above 64 KiB before Next.js parses them. The BFF also applies database-backed mutation/reconnect buckets, at most five SSE streams per user and 300 per tenant, and a 30-minute stream lifetime; proxy connection and request-rate limits remain mandatory defense in depth.
+The trusted reverse proxy must reject chunked or declared public API bodies above 64 KiB before Next.js parses them, except the authenticated attachment route and the private Gateway-only `/api/internal/external-data` callback. New calls send only a bounded SHUEHO warehouse receipt through that callback; the legacy 6.25 MiB allowance remains for previously archived responses and must never be publicly routed. The BFF also applies database-backed mutation/reconnect buckets, at most five SSE streams per user and 300 per tenant, and a 30-minute stream lifetime; proxy connection and request-rate limits remain mandatory defense in depth.
 
 Tenant-wide quota aggregation and queue-steer admission use explicit hardened paths; ordinary database work remains workspace-scoped, and restart recovery cannot start a restored steer without a fresh BFF lease. See [Enterprise Tenancy Foundation](../architecture/enterprise-tenancy.md) for those semantics and the remaining commercial-control limitations.

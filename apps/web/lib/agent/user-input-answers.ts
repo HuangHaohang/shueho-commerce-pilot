@@ -1,6 +1,8 @@
 import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context";
 import type { EnterpriseScope } from "@/lib/enterprise/types";
 
+import { shouldDisplayPersistedRequestUserInputAnswer } from "./request-user-input-visibility";
+
 export type AgentUserInputAnswer = {
   requestId: string;
   threadId: string;
@@ -75,14 +77,16 @@ export async function listAgentUserInputAnswers(
       `,
       [scope.tenantId, scope.workspaceId, scope.userId, threadId],
     );
-    return result.rows.map((row) => ({
-      requestId: row.request_id,
-      threadId: row.thread_id,
-      turnId: row.turn_id,
-      itemId: row.item_id,
-      answerMessage: row.answer_message,
-      createdAt: row.created_at.toISOString(),
-    }));
+    return result.rows
+      .filter((row) => shouldDisplayPersistedRequestUserInputAnswer(row.request_id))
+      .map((row) => ({
+        requestId: row.request_id,
+        threadId: row.thread_id,
+        turnId: row.turn_id,
+        itemId: row.item_id,
+        answerMessage: row.answer_message,
+        createdAt: row.created_at.toISOString(),
+      }));
   });
 }
 

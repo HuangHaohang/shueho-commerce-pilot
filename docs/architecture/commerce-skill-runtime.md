@@ -12,7 +12,7 @@ The implementation follows the current `openai/codex` source behavior:
 - explicit invocation uses both the `$skill-name` marker and a `skill` input item;
 - bundled system Skills include `skill-creator`.
 
-The inspected upstream revision was `339751715c64496cb86246bfb3935f40e309dd3d` from 2026-08-24.
+The inspected runtime baseline is `@openai/codex` `0.149.0`, matching `openai/codex` tag `rust-v0.149.0` at `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`.
 
 ## Hosted Boundary
 
@@ -32,7 +32,7 @@ Skill creation uses the Harness rather than a parallel prompt wizard:
 
 1. The bundled `skill-creator` Skill gathers the purpose, trigger boundaries, and required workflow details. It defaults to instruction-only authoring.
 2. The Agent calls the application-registered dynamic tool `commerce_skill.publish` with a bounded `commerce-*` name, display metadata, description, and Markdown instructions. The tool schema does not accept a path, script, asset, secret, command, or permission setting.
-3. Gateway holds the App Server `item/tool/call` request and emits an application-owned `tool/requestUserInput` approval. The browser renders that request through the same shared Harness question UI used by other turns.
+3. Gateway holds the App Server `item/tool/call` request and emits the application notification `commerce/approval/requested`. The browser renders that business approval through the same visual question panel, but it is not represented as a Codex `request_user_input` server request and its answer is not echoed as a user conversation message.
 4. Only an authenticated approval from the bound tenant, workspace, user, thread, and turn allows publication. Because the current runtime catalog is tenant-shared, the BFF additionally requires `tenant.manage`; cancellation returns a completed cancellation result and writes nothing.
 5. Gateway writes the instruction-only Skill atomically below `$CODEX_HOME/workspaces/default/.agents/skills`, rejects symlink targets and unmanaged collisions, and binds updates to the original Commerce Pilot principal.
 6. Gateway calls `skills/list` with `forceReload: true` and reports success only after the App Server returns the new enabled Skill. `skills/changed` remains the native invalidation signal.
@@ -55,8 +55,8 @@ The product uses `@` as the browser interaction for choosing a Skill while prese
 
 Explicit Skill submissions cannot be downgraded into plain `thread/queue/add` messages behind an active Turn because that queue shape would lose the native Skill item. The user must wait for or interrupt the active Turn before invoking another Skill.
 
-## Native User Input
+## Native User Input And Business Approval
 
-The Gateway accepts only App Server `item/tool/requestUserInput` and `tool/requestUserInput` server requests in addition to the existing application tool-call request. It persists the pending request in process memory, filters it by thread, and exposes authenticated read/respond routes through the BFF. Answers are validated against the original question ids before the Gateway calls `respondToServerRequest`.
+The Gateway accepts the Codex 0.149 App Server method `item/tool/requestUserInput` for model-originated questions. It persists the pending request in process memory, filters it by thread, exposes authenticated read/respond routes through the BFF, validates answers against the original question ids, and calls `respondToServerRequest`. App Server's `serverRequest/resolved` notification is authoritative for lifecycle cleanup. The removed legacy alias `tool/requestUserInput` is not accepted.
 
-Unknown App Server requests still fail closed. Turn completion, interruption, cancellation, or App Server restart clears stale pending input.
+Skill publication is different: it is an application policy decision inside the already-running `item/tool/call`. Commerce Pilot emits `commerce/approval/requested`, keeps the original dynamic-tool request pending, and returns one success, cancellation, or failure response to that original App Server request. It never fabricates a Codex server request. Turn completion, interruption, deletion, or App Server restart clears stale application approvals; unknown App Server requests still fail closed.

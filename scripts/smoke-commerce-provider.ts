@@ -10,6 +10,9 @@ const catalog = await client.listModels(true);
 if (!catalog.agentModels.some((model) => model.id === config.defaultModel)) {
   throw new Error(`Default agent model ${config.defaultModel ?? "<unset>"} is not available.`);
 }
+if (!catalog.agentModels.some((model) => model.id === config.provider.webSearchModel)) {
+  throw new Error(`Web Search model ${config.provider.webSearchModel} is not available.`);
+}
 if (!catalog.imageModels.some((model) => model.id === config.provider.imageModel)) {
   throw new Error(`Configured image model ${config.provider.imageModel} is not available.`);
 }
@@ -23,6 +26,7 @@ console.log(
       imageModelCount: catalog.imageModels.length,
       otherModelCount: catalog.otherModels.length,
       defaultAgentModel: config.defaultModel,
+      webSearchModel: config.provider.webSearchModel,
       configuredImageModel: catalog.configuredImageModel,
     },
     null,

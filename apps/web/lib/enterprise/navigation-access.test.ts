@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { canAccessEnterpriseAdmin } from "./navigation-access";
+import {
+  canAccessEnterpriseAdmin,
+  canManageExternalDataPolicy,
+} from "./navigation-access";
 
 describe("enterprise admin navigation access", () => {
   it("hides navigation without an enterprise permission context", () => {
@@ -18,5 +21,13 @@ describe("enterprise admin navigation access", () => {
 
   it("shows navigation for management permissions", () => {
     expect(canAccessEnterpriseAdmin(["members.manage"])).toBe(true);
+  });
+});
+
+describe("external data policy navigation", () => {
+  it("shows enterprise settings only to the policy manager", () => {
+    expect(canManageExternalDataPolicy(["external_data.policy.manage"])).toBe(true);
+    expect(canManageExternalDataPolicy(["usage.read", "external_data.usage.read"])).toBe(false);
+    expect(canManageExternalDataPolicy(["agent.run", "mcp.access_token.manage"])).toBe(false);
   });
 });

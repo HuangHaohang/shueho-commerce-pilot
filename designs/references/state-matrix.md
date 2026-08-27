@@ -46,9 +46,9 @@
 | `compacting` | Gateway 自动策略或受控接口调用 App Server `thread/compact/start` | 显示“正在整理上下文 X 秒”和原生 `contextCompaction` activity；禁用提交、模型切换和停止按钮；不得生成前端摘要或把 compact 伪装成普通回复 |
 | `waiting_approval` | 需要人工批准 | 展开 ApprovalPanel |
 | `waiting_input` | 需要用户补充信息 | composer 聚焦并显示请求来源 |
-| `interrupted` | 用户停止或系统中断 | 显示继续/重新运行 |
+| `interrupted` | 用户停止、运行时重启或系统中断 | 立即撤销待回答/待审批卡，冻结计时，显示终止原因与重新运行入口 |
 | `completed` | turn 完成 | 耗时冻结为“已处理 X 秒”；只显示最终正文，当前 turn 活动归并为默认收起、可展开的 disclosure |
-| `failed` | turn 失败 | 显示分类错误和重试策略 |
+| `failed` | turn 失败 | 立即撤销待回答/待审批卡，显示分类错误和重试策略 |
 | `history_loading` | 用户刷新或选择历史 thread | 保留 shell 尺寸，读取用户所有权索引并从 App Server 恢复 turns；禁止显示其他用户 thread |
 | `history_missing` | 索引存在但 App Server rollout 已不存在 | 删除失效索引、返回新任务并提示记录不可恢复；不得继续向失效 thread 发送 turn |
 
@@ -79,6 +79,25 @@
 | `permission_denied` | 显示无权限，不隐藏为无数据 |
 | `not_found` | 显示对象不存在或已删除 |
 | `dependency_failed` | 显示外部系统异常和 request id |
+
+## External Market Data
+
+| State | Meaning | UI Rule |
+|---|---|---|
+| `not_configured` | 服务端没有 JustOneAPI Token 或治理回调 | 显示“外部数据待配置”，不展示可执行假按钮；市场调研仍可使用已连接的公开网页来源 |
+| `catalog_ready` | MCP 目录可用且当前角色有读取权限 | 允许检索接口与参数定义，不等于批准收费调用 |
+| `approval_required` | 工作区策略或用户模式要求确认 | 使用 Harness 公共问答面板展示接口、预计金额或未计价警告、参数字段和拒绝动作 |
+| `reserved` | 调用次数/金额额度已预占 | 禁止用同一 call id 重复预占；保持等待或调度状态 |
+| `dispatched` | 已原子地发送一次上游请求 | 禁止自动重试，显示目标接口和计费状态 |
+| `succeeded` | 上游 `code=0` 且账本结算成功 | 显示数据、来源、时间、费用和限制 |
+| `business_failed` | 上游返回明确非成功业务码 | 不计为成功，不显示为已获取数据；仅在用户明确要求时允许新调用 |
+| `unknown` | 发送后超时、网络错误或结果过大 | 显示“待核对”，禁止自动重试，要求供应商用量与审计对账 |
+| `unpriced` | 没有有效费率 | 企业策略自动调用必须降级为逐次询问，企业管理显示异常读数 |
+| `pricing_import_missing` | 尚未导入官方完整定价 Excel | 企业设置不展示硬编码平台或价格；金额预算下拒绝收费调用并给出导入原因 |
+| `provider_unavailable` | 最新导入中接口权限为“未开通” | 接口不可加入白名单、不可形成有效费率、不可调用 |
+| `turn_call_limit` | 当前 Harness Turn 已达到企业配置的收费调用次数 | 停止继续调用，向用户显示明确上限原因，不自动重试 |
+| `permanent_metadata` | 企业选择永久保存 | 仅永久保存调用、审批、审计和计费元数据；不得因此持久化上游结果正文 |
+| `policy_denied` | RBAC、平台、接口、次数或金额策略拒绝 | 显示具体解除条件，不把拒绝伪装为无数据 |
 
 ## Connection And Streaming
 

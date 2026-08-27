@@ -17,6 +17,8 @@ Read documents in this order when joining the project or starting an AI-assisted
 - [`architecture/commerce-plugin-runtime.md`](architecture/commerce-plugin-runtime.md) - application-managed plugin catalog.
 - [`architecture/commerce-skill-runtime.md`](architecture/commerce-skill-runtime.md) - Codex Skills, explicit invocation, and managed Skill publication.
 - [`architecture/commerce-copywriting-workflow.md`](architecture/commerce-copywriting-workflow.md) - conversational copywriting Task Recipe.
+- [`architecture/external-data-mcp.md`](architecture/external-data-mcp.md) - Harness-to-SHUEHO MCP boundary, approval, audit, billing and customer MCP access.
+- [`architecture/external-data-service.md`](architecture/external-data-service.md) - independent JustOneAPI REST collector, raw/normalized/business warehouse, pgvector, local Qwen3 models and Elasticsearch.
 - [`architecture/commerce-thread-titles.md`](architecture/commerce-thread-titles.md) - Spark-generated titles and deterministic category correction.
 - [`architecture/thread-attachments.md`](architecture/thread-attachments.md) - tenant-owned photos and document inputs.
 - [`architecture/thread-deletion.md`](architecture/thread-deletion.md) - durable permanent deletion and artifact cleanup.
@@ -26,6 +28,7 @@ Read documents in this order when joining the project or starting an AI-assisted
 - [`development/ai-collaboration.md`](development/ai-collaboration.md) - shared vibe-coding workflow for humans and coding agents.
 - [`development/agent-bootstrap-prompt.md`](development/agent-bootstrap-prompt.md) - copyable prompt that tells a coding agent how to clone, read rules, branch, implement, verify, and hand off.
 - [`deployment/runtime.md`](deployment/runtime.md) - production runtime, secrets, volumes, workers, callbacks, and deployment gates.
+- [`security/dependency-advisories.md`](security/dependency-advisories.md) - open npm advisory reachability, compensating controls, and review deadlines.
 - [`config/custom-model-provider.md`](config/custom-model-provider.md) - custom Responses-compatible provider configuration.
 - [`../designs/DESIGN.md`](../designs/DESIGN.md) - frontend visual system and UX rules.
 

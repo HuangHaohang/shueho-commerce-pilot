@@ -12,11 +12,15 @@ The browser never waits for filesystem deletion. It creates an RLS-scoped `comme
 
 Job states are `queued`, `running`, `completed`, `partial`, or `failed`. Item states are `queued`, `running`, `deleted`, or `failed`. A failed worker-level operation requeues the job; stale running jobs can be reclaimed after 15 minutes. The browser polls job state and removes a task from the sidebar only after its item reaches `deleted`.
 
+Gateway authentication failures and transient `502/503/504` responses are infrastructure failures, not proof that the user's task cannot be deleted. The worker leaves the item retryable, requeues the Job, waits five seconds, and retries after the service recovers. Codex `thread/delete` is idempotent at the Gateway boundary: if App Server reports that the rollout is already absent, Gateway still completes application artifact cleanup and lets the worker remove the PostgreSQL thread index. Permanent item failures remain visible to the user instead of silently leaving the row unchanged.
+
 ## Application Cascade
 
 After App Server confirms deletion, Gateway deletes all generated image files and image metadata for every thread in the deleted tree. It also recursively removes each app-owned `$CODEX_HOME/thread_artifacts/<threadId>` directory. Attachments, uploaded images, generated or uploaded video, exported files, and future thread-scoped media must be stored under that directory or register an equivalent deletion adapter.
 
 The worker then removes the Commerce Pilot thread record, active leases, turn completions, request-user-input display history, and other database rows covered by thread foreign-key cascades. Non-content usage ledger and minimal enterprise audit facts remain for billing, quota reconciliation, abuse prevention, and proof that deletion occurred; they must never contain prompt text or media payloads.
+
+The SQL-only `commerce_external_data_archive` is an independent business dataset, not a thread artifact. It stores thread and Turn ids only as provenance text and deliberately has no thread foreign key, so deleting a task never deletes complete JustOneAPI requests or responses. Those rows follow their own retention deadline, legal hold and explicit SQL deletion process.
 
 ## Authorization
 

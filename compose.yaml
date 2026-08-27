@@ -18,5 +18,45 @@ services:
       - commerce-pilot-postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
 
+  external-data-postgres:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    container_name: commerce-external-data-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: commerce_external_data
+      POSTGRES_USER: external_data_owner
+      POSTGRES_PASSWORD: external_data_owner_dev
+    ports:
+      - "127.0.0.1:55433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U external_data_owner -d commerce_external_data"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - commerce-external-data-postgres-data:/var/lib/postgresql/data
+      - ./infra/external-data-postgres/init:/docker-entrypoint-initdb.d:ro
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.2
+    container_name: commerce-external-data-elasticsearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      ES_JAVA_OPTS: "-Xms4g -Xmx4g"
+    ports:
+      - "127.0.0.1:59200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+    volumes:
+      - commerce-external-data-elasticsearch-data:/usr/share/elasticsearch/data
+
 volumes:
   commerce-pilot-postgres-data:
+  commerce-external-data-postgres-data:
+  commerce-external-data-elasticsearch-data:

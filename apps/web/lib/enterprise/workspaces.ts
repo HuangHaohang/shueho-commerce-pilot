@@ -102,6 +102,14 @@ export async function createEnterpriseWorkspace(
     );
     await client.query(
       `
+        INSERT INTO commerce_external_data_policy (tenant_id, workspace_id)
+        VALUES ($1, $2)
+        ON CONFLICT (tenant_id, workspace_id, provider) DO NOTHING
+      `,
+      [context.tenantId, workspaceId],
+    );
+    await client.query(
+      `
         INSERT INTO commerce_enterprise_audit_event
           (tenant_id, workspace_id, actor_user_id, action, target_type, target_id, outcome, metadata)
         VALUES ($1, $2::uuid, $3, 'workspace.create', 'workspace', $2::uuid::text, 'succeeded', '{}'::jsonb)

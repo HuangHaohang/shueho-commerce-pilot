@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  formatConversationRequestUserInputAnswerMessage,
   formatRequestUserInputAnswerMessage,
   normalizeRequestUserInputAnswers,
   readPendingRequestUserInput,
@@ -34,7 +35,27 @@ test("accepts a bounded App Server request_user_input server request", () => {
 
   assert.ok(pending);
   assert.equal(pending.requestId, "42");
+  assert.equal(pending.origin, "codex_app_server");
   assert.deepEqual(serializePendingRequestUserInput(pending).questions, questions);
+});
+
+test("does not accept an application-forged legacy request_user_input method", () => {
+  assert.equal(
+    readPendingRequestUserInput({
+      type: "server_request",
+      id: "approval-1",
+      method: "tool/requestUserInput",
+      params: {
+        threadId: "thread_12345678",
+        turnId: "turn_12345678",
+        itemId: "item-1",
+        questions,
+        isBlocking: true,
+      },
+      at: "2026-08-24T00:00:00.000Z",
+    }),
+    null,
+  );
 });
 
 test("validates answers against original question ids", () => {
@@ -62,6 +83,24 @@ test("formats a durable user-visible answer summary and redacts secret values", 
       { credential: { answers: ["secret-value"] } },
     ),
     "我的选择：\n访问凭证：已提供",
+  );
+});
+
+test("only formats conversation messages for native Harness questions", () => {
+  const answers = { publication_channel: { answers: ["小红书"] } };
+  assert.equal(
+    formatConversationRequestUserInputAnswerMessage(
+      { origin: "codex_app_server", questions },
+      answers,
+    ),
+    "我的选择：\n发布渠道：小红书",
+  );
+  assert.equal(
+    formatConversationRequestUserInputAnswerMessage(
+      { origin: "commerce_approval", questions },
+      answers,
+    ),
+    null,
   );
 });
 

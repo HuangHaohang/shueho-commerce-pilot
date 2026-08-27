@@ -13,6 +13,16 @@ type LegalSource = {
 };
 
 export function LegalDocumentLayout({ title, lead, children }: LegalDocumentLayoutProps) {
+  const operator = {
+    name: process.env.COMMERCE_LEGAL_ENTITY_NAME?.trim() || null,
+    creditCode: process.env.COMMERCE_LEGAL_CREDIT_CODE?.trim() || null,
+    address: process.env.COMMERCE_LEGAL_REGISTERED_ADDRESS?.trim() || null,
+    serviceEmail: process.env.COMMERCE_LEGAL_SERVICE_EMAIL?.trim() || null,
+    privacyEmail: process.env.COMMERCE_LEGAL_PRIVACY_EMAIL?.trim() || null,
+  };
+  const operatorConfigured = Boolean(
+    operator.name && operator.creditCode && operator.address && operator.serviceEmail && operator.privacyEmail,
+  );
   return (
     <div className="min-h-dvh bg-[var(--cp-bg)] text-[var(--cp-text)]">
       <header className="sticky top-0 z-20 border-b border-[var(--cp-border-subtle)] bg-[rgba(255,255,255,0.94)] backdrop-blur-md">
@@ -35,11 +45,28 @@ export function LegalDocumentLayout({ title, lead, children }: LegalDocumentLayo
           <h1 className="m-0 text-[32px] font-semibold leading-tight tracking-[0] md:text-[36px]">{title}</h1>
           <p className="mt-4 max-w-[680px] text-[15px] leading-7 text-[var(--cp-text-muted)]">{lead}</p>
           <div className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-xs text-[var(--cp-text-faint)]">
-            <span>更新日期：2026 年 8 月 21 日</span>
-            <span>生效日期：正式上线之日</span>
-            <span>版本：静态初稿</span>
+            <span>更新日期：2026 年 8 月 26 日</span>
+            <span>生效日期：本版本向用户发布之日</span>
+            <span>版本：内测版 0.2</span>
           </div>
         </header>
+
+        <section className="border-b border-[var(--cp-border)] py-6" aria-label="运营主体信息">
+          <h2 className="m-0 text-sm font-semibold">运营主体</h2>
+          {operatorConfigured ? (
+            <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm text-[var(--cp-text-muted)] sm:grid-cols-2">
+              <div><dt className="inline">名称：</dt><dd className="inline">{operator.name}</dd></div>
+              <div><dt className="inline">统一社会信用代码：</dt><dd className="inline">{operator.creditCode}</dd></div>
+              <div className="sm:col-span-2"><dt className="inline">注册地址：</dt><dd className="inline">{operator.address}</dd></div>
+              <div><dt className="inline">客服邮箱：</dt><dd className="inline">{operator.serviceEmail}</dd></div>
+              <div><dt className="inline">个人信息保护联系邮箱：</dt><dd className="inline">{operator.privacyEmail}</dd></div>
+            </dl>
+          ) : (
+            <p className="mb-0 mt-2 text-sm leading-6 text-[var(--cp-danger)]">
+              当前部署尚未配置完整运营主体、统一社会信用代码、注册地址和有效联系方式，仅可用于开发与受控内测，不得据此对外商业上线。
+            </p>
+          )}
+        </section>
 
         <article className="legal-document pt-10">{children}</article>
       </main>
@@ -90,6 +117,12 @@ function LegalFooter() {
         </Link>
         <Link className="hover:text-[var(--cp-text)]" href="/ai-notice">
           AI 使用说明
+        </Link>
+        <Link className="hover:text-[var(--cp-text)]" href="/legal-basis">
+          合规依据
+        </Link>
+        <Link className="hover:text-[var(--cp-text)]" href="/subprocessors">
+          第三方服务清单
         </Link>
       </nav>
     </footer>

@@ -11,6 +11,13 @@ describe("task category resolution", () => {
         title: "轻量通勤双肩包小红书文案",
       }),
     ).toBe("creative");
+    expect(
+      resolveTaskCategory({
+        category: "general",
+        recipeId: "market_research",
+        title: "轻量通勤双肩包",
+      }),
+    ).toBe("research");
   });
 
   it("uses the persisted Spark classification when present", () => {

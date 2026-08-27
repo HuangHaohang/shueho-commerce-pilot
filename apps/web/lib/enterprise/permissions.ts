@@ -25,6 +25,11 @@ export const ENTERPRISE_PERMISSIONS = [
   "queue.manage",
   "artifact.read",
   "agent.run",
+  "external_data.catalog.read",
+  "external_data.call",
+  "external_data.policy.manage",
+  "external_data.usage.read",
+  "mcp.access_token.manage",
 ] as const;
 
 export type EnterprisePermission = (typeof ENTERPRISE_PERMISSIONS)[number];
@@ -52,6 +57,10 @@ const workspaceRunPermissions: EnterprisePermission[] = [
   "queue.manage",
   "artifact.read",
   "agent.run",
+  "external_data.catalog.read",
+  "external_data.call",
+  "external_data.usage.read",
+  "mcp.access_token.manage",
 ];
 
 export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
@@ -80,6 +89,11 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
       "quota.manage",
       "usage.read",
       "audit.read",
+      "external_data.catalog.read",
+      "external_data.call",
+      "external_data.policy.manage",
+      "external_data.usage.read",
+      "mcp.access_token.manage",
     ],
   },
   {
@@ -94,7 +108,13 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
     name: "用量分析员",
     description: "只读查看企业用量与审计概览。",
     scope: "tenant",
-    allowedPermissions: [...tenantReadPermissions, "usage.read", "audit.read", "quota.read"],
+    allowedPermissions: [
+      ...tenantReadPermissions,
+      "usage.read",
+      "audit.read",
+      "quota.read",
+      "external_data.usage.read",
+    ],
   },
   {
     key: "workspace_owner",
@@ -119,7 +139,12 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
     name: "工作区分析员",
     description: "只读查看工作区元数据和用量；对话共享将在独立授权面上线。",
     scope: "workspace",
-    allowedPermissions: ["workspaces.read", "usage.read"],
+    allowedPermissions: [
+      "workspaces.read",
+      "usage.read",
+      "external_data.catalog.read",
+      "external_data.usage.read",
+    ],
   },
   {
     key: "workspace_viewer",

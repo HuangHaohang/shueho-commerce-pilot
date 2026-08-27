@@ -10,9 +10,15 @@ apps/web/out/
 coverage/
 playwright-report/
 test-results/
+.venv/
+services/local-retrieval-models/.venv/
+.cache/huggingface/
+__pycache__/
+*.py[cod]
 .DS_Store
 .env
 .env.*
+!services/local-retrieval-models/.env.example
 !.env.example
 !**/.env.migration.example
 npm-debug.log*

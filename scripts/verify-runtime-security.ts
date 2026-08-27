@@ -10,6 +10,13 @@ import { readGatewayConfig } from "../src/gateway/config.js";
 const config = readGatewayConfig();
 const configPath = await ensureAppOwnedCodexConfig(config);
 const generatedConfig = await readFile(configPath, "utf8");
+const gatewaySource = await readFile(resolve("src/gateway/server.ts"), "utf8");
+const gatewayConfigSource = await readFile(resolve("src/gateway/config.ts"), "utf8");
+const externalDataClientSource = await readFile(
+  resolve("src/integrations/external-data-service-mcp-client.ts"),
+  "utf8",
+);
+const userInputSource = await readFile(resolve("src/gateway/request-user-input.ts"), "utf8");
 const runtimeRelativePath = relative(config.codexHome, config.runtimeRoot);
 
 if (!runtimeRelativePath || runtimeRelativePath.startsWith("..") || isAbsolute(runtimeRelativePath)) {
@@ -36,6 +43,7 @@ const requiredLines = [
   "required = true",
   'enabled_tools = ["search"]',
   'default_tools_approval_mode = "auto"',
+  '"COMMERCE_WEB_SEARCH_MODEL"',
   '"COMMERCE_WEB_SEARCH_TIMEOUT_MS"',
   '"COMMERCE_WEB_SEARCH_MAX_ATTEMPTS"',
   'inherit = "none"',
@@ -47,6 +55,28 @@ if (missingLines.length > 0) {
 }
 if (process.platform === "win32" && !generatedConfig.includes("commerce-runtime-hook.cmd")) {
   throw new Error("Generated Windows Codex config is missing the managed Hook command wrapper.");
+}
+if (/broadcastEvent\(\{\s*type:\s*"server_request"/.test(gatewaySource)) {
+  throw new Error("Gateway source must not synthesize Codex App Server requests.");
+}
+if (gatewaySource.includes('"thread/inject_items"')) {
+  throw new Error("Harness question answers must not be duplicated into model history.");
+}
+if (
+  gatewayConfigSource.includes("mcp.justoneapi.com") ||
+  gatewayConfigSource.includes("JUSTONEAPI_MCP_TOKEN") ||
+  externalDataClientSource.includes("mcp.justoneapi.com")
+) {
+  throw new Error("Commerce Pilot must connect only to the SHUEHO external-data MCP service, never JustOneAPI MCP.");
+}
+if (!gatewayConfigSource.includes("EXTERNAL_DATA_SERVICE_MCP_TOKEN")) {
+  throw new Error("Gateway config is missing the private SHUEHO external-data MCP credential.");
+}
+if (
+  !userInputSource.includes('CODEX_REQUEST_USER_INPUT_METHOD = "item/tool/requestUserInput"') ||
+  !userInputSource.includes('COMMERCE_APPROVAL_REQUESTED_METHOD = "commerce/approval/requested"')
+) {
+  throw new Error("Native Harness input and application approval channels are not separated.");
 }
 
 const managedHookPath = join(config.codexHome, "managed-hooks/commerce-runtime-hook.mjs");
@@ -85,6 +115,18 @@ if (!managedHookSource.includes('"web_search"')) {
 }
 if (!managedHookSource.includes('"commerce_skill.publish"')) {
   throw new Error("Managed Hook runner does not allow the approval-gated Commerce Skill publisher.");
+}
+if (!managedHookSource.includes('"commerce_data.research_social_content"')) {
+  throw new Error("Managed Hook runner does not allow governed social-content research.");
+}
+if (!managedHookSource.includes('"commerce_data.research_marketplace_products"')) {
+  throw new Error("Managed Hook runner does not allow governed marketplace-product research.");
+}
+if (!managedHookSource.includes('"commerce_data.search_business_data"')) {
+  throw new Error("Managed Hook runner does not allow curated business-data retrieval.");
+}
+if (!managedHookSource.includes('"commerce_data.get_research_result"')) {
+  throw new Error("Managed Hook runner does not allow curated research-result reads.");
 }
 if (!managedHookSource.includes('"request_user_input"')) {
   throw new Error("Managed Hook runner does not allow Harness user questions in Default mode.");
@@ -126,6 +168,7 @@ console.log(
       hostedWebSearch: true,
       managedMcpWebSearch: true,
       managedSkillPublisher: true,
+      governedExternalData: config.externalDataService.token ? "configured" : "disabled-without-service-token",
       defaultModeRequestUserInput: true,
       nativeProviderWebSearch: true,
       multiAgent: true,
@@ -137,7 +180,7 @@ console.log(
       compactionTimeoutMs: config.compactionTimeoutMs,
       developmentHookTrust: "app-owned-bypass",
       productionHookTrust: "requirements-managed-only",
-      checkedControls: requiredLines.length + 2,
+      checkedControls: requiredLines.length + 3,
     },
     null,
     2,

@@ -19,10 +19,28 @@ import {
   readWebSourcesFromToolItem,
   type WebSource,
 } from "./web-sources";
+import { readDynamicToolActivity, readMcpToolActivity } from "./tool-activity";
 import type { TaskCategory } from "./task-category";
 import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "./skill-invocation";
+import {
+  isAgentMessageFeedbackRating,
+  type AgentMessageFeedbackRating,
+} from "./message-feedback-contract";
+import {
+  shouldDisplayRequestUserInputAnswer,
+  type RequestUserInputOrigin,
+} from "./request-user-input-visibility";
+import {
+  isEndedRequestUserInputResponse,
+  terminalTurnMessage,
+} from "./request-user-input-lifecycle";
 
 export type { QueuedMessage } from "./pending-input-state";
+export type { AgentMessageFeedbackRating } from "./message-feedback-contract";
+
+const CODEX_REQUEST_USER_INPUT_METHOD = "item/tool/requestUserInput";
+const COMMERCE_APPROVAL_REQUESTED_METHOD = "commerce/approval/requested";
+const COMMERCE_APPROVAL_RESOLVED_METHOD = "commerce/approval/resolved";
 
 export type ConversationMessage = {
   id: string;
@@ -36,6 +54,7 @@ export type ConversationMessage = {
   phase?: "commentary" | "final_answer" | null;
   skillName?: string | null;
   attachments?: ConversationAttachment[];
+  feedback?: AgentMessageFeedbackRating | null;
   status: "streaming" | "completed";
 };
 
@@ -98,13 +117,16 @@ export type PendingRequestUserInput = {
   questions: RequestUserInputQuestion[];
   isBlocking: boolean;
   receivedAt: string;
-  action?: "skill.publish";
+  origin: RequestUserInputOrigin;
+  action?: "skill.publish" | "external_data.call";
 };
 
 export type AgentSubmitOptions = {
-  workflow?: "commerce-copywriting";
+  workflow?: "commerce-copywriting" | "commerce-market-research";
   skillName?: string;
+  displaySkillName?: string;
   attachments?: PendingAttachmentUpload[];
+  externalDataApprovalMode?: "always_ask" | "task" | "policy";
 };
 
 export type AgentThreadSummary = {
@@ -116,9 +138,19 @@ export type AgentThreadSummary = {
   activeTurnId: string | null;
   turnStartedAt: string | null;
   durationMs: number | null;
-  recipeId: "copywriting" | null;
+  recipeId: "copywriting" | "market_research" | null;
   category: TaskCategory;
 };
+
+function recipeIdForWorkflow(
+  workflow: AgentSubmitOptions["workflow"],
+): AgentThreadSummary["recipeId"] {
+  return workflow === "commerce-copywriting"
+    ? "copywriting"
+    : workflow === "commerce-market-research"
+      ? "market_research"
+      : null;
+}
 
 type StoredThreadResponse = {
   thread: {
@@ -128,7 +160,7 @@ type StoredThreadResponse = {
     status: "running" | "completed" | "interrupted" | "failed";
     durationMs: number | null;
     startedAt: string | null;
-    recipeId: "copywriting" | null;
+    recipeId: "copywriting" | "market_research" | null;
     category: TaskCategory;
   };
   messages: ConversationMessage[];
@@ -168,7 +200,12 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const [queueOperationId, setQueueOperationId] = useState<string | null>(null);
   const [pendingUserInput, setPendingUserInput] = useState<PendingRequestUserInput | null>(null);
   const [answeringUserInput, setAnsweringUserInput] = useState(false);
+  const [feedbackSubmittingIds, setFeedbackSubmittingIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const pendingUserInputRef = useRef<PendingRequestUserInput | null>(null);
   const sequenceRef = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
   const startedAtRef = useRef<number | null>(null);
@@ -179,6 +216,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const committedUserMessageClientIdsRef = useRef(new Set<string>());
   const threadReconcileInFlightRef = useRef(false);
   const titleGenerationAttemptRef = useRef(new Set<string>());
+  const feedbackSubmittingIdsRef = useRef(new Set<string>());
 
   const refreshQueue = useCallback(async (id: string): Promise<void> => {
     try {
@@ -230,6 +268,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       const pending = payload.requests
         .map(readPendingRequestUserInputPayload)
         .find((request): request is PendingRequestUserInput => Boolean(request));
+      pendingUserInputRef.current = pending ?? null;
       setPendingUserInput(pending ?? null);
     } catch {
       // The SSE server request remains authoritative; reconnect reconciliation retries this read.
@@ -261,6 +300,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setActiveTurnId(null);
     setCompacting(false);
     setInterrupting(false);
+    pendingUserInputRef.current = null;
     setPendingUserInput(null);
     setAnsweringUserInput(false);
     setDurationMs(startedAtRef.current ? Date.now() - startedAtRef.current : null);
@@ -283,11 +323,12 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       return;
     }
     if (
-      gatewayEvent.type === "server_request" &&
-      (gatewayEvent.method === "item/tool/requestUserInput" || gatewayEvent.method === "tool/requestUserInput")
+      (gatewayEvent.type === "server_request" && gatewayEvent.method === CODEX_REQUEST_USER_INPUT_METHOD) ||
+      (gatewayEvent.type === "notification" && gatewayEvent.method === COMMERCE_APPROVAL_REQUESTED_METHOD)
     ) {
       const pending = readPendingRequestUserInputEvent(gatewayEvent);
       if (pending) {
+        pendingUserInputRef.current = pending;
         setPendingUserInput(pending);
         setStatus("running");
       }
@@ -296,6 +337,19 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     if (gatewayEvent.type !== "notification") return;
     const method = typeof gatewayEvent.method === "string" ? gatewayEvent.method : "";
     const params = isRecord(gatewayEvent.params) ? gatewayEvent.params : {};
+
+    if (method === "serverRequest/resolved" || method === COMMERCE_APPROVAL_RESOLVED_METHOD) {
+      const requestId = typeof params.requestId === "string" || typeof params.requestId === "number"
+        ? String(params.requestId)
+        : "";
+      if (requestId) {
+        if (pendingUserInputRef.current?.requestId === requestId) {
+          pendingUserInputRef.current = null;
+        }
+        setPendingUserInput((current) => current?.requestId === requestId ? null : current);
+      }
+      return;
+    }
 
     if (method === "thread/queue/changed") {
       if (queueRefreshSuppressionRef.current > 0) {
@@ -477,6 +531,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setActiveTurnId(null);
       setCompacting(false);
       setPendingSteers([]);
+      pendingUserInputRef.current = null;
       setPendingUserInput(null);
       setAnsweringUserInput(false);
       setInterrupting(false);
@@ -487,11 +542,12 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             ? Date.now() - startedAtRef.current
             : null,
       );
-      setStatus(turnStatus === "interrupted" ? "interrupted" : turnStatus === "failed" ? "failed" : "completed");
+      const terminalStatus = turnStatus === "interrupted" ? "interrupted" : turnStatus === "failed" ? "failed" : "completed";
+      setStatus(terminalStatus);
       if (turnStatus === "failed" && isRecord(turn.error) && typeof turn.error.message === "string") {
         setError(turn.error.message);
       } else {
-        setError(null);
+        setError(terminalTurnMessage(terminalStatus));
       }
       if (threadId) {
         void refreshQueue(threadId);
@@ -501,9 +557,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
 
     if (method === "error") {
       const itemError = isRecord(params.error) ? params.error : {};
-      setInterrupting(false);
-      setError(typeof itemError.message === "string" ? itemError.message : "Agent 执行失败。");
-      setStatus("failed");
+      failActiveTurn(typeof itemError.message === "string" ? itemError.message : "Agent 执行失败。");
     }
   }, [activateTurn, failActiveTurn, refreshQueue, threadId]);
 
@@ -623,8 +677,12 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setInterrupting(false);
         setCompacting(false);
         setPendingSteers([]);
-        setError(null);
+        pendingUserInputRef.current = null;
+        setPendingUserInput(null);
+        setAnsweringUserInput(false);
+        setError(terminalTurnMessage(payload.thread.status));
         setStatus(payload.thread.status);
+        setError(terminalTurnMessage(payload.thread.status));
         void refreshQueue(threadId);
       } catch {
         // SSE remains the primary stream; the next watchdog tick retries reconciliation.
@@ -641,6 +699,79 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     };
   }, [activateTurn, refreshPendingUserInput, refreshQueue, status, threadId]);
 
+  const setMessageFeedback = useCallback(
+    async (
+      messageId: string,
+      rating: AgentMessageFeedbackRating | null,
+    ): Promise<boolean> => {
+      const currentThreadId = threadId;
+      const message = messages.find((candidate) => candidate.id === messageId);
+      if (
+        !currentThreadId ||
+        !message ||
+        message.role !== "assistant" ||
+        message.phase === "commentary" ||
+        message.status !== "completed" ||
+        feedbackSubmittingIdsRef.current.has(messageId)
+      ) {
+        return false;
+      }
+
+      const previousRating = message.feedback ?? null;
+      feedbackSubmittingIdsRef.current.add(messageId);
+      setFeedbackSubmittingIds(new Set(feedbackSubmittingIdsRef.current));
+      setFeedbackError(null);
+      setMessages((current) => current.map((candidate) =>
+        candidate.id === messageId ? { ...candidate, feedback: rating } : candidate
+      ));
+
+      try {
+        const response = await fetch(
+          `/api/agent/threads/${encodeURIComponent(currentThreadId)}/messages/${encodeURIComponent(messageId)}/feedback`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rating }),
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as {
+          rating?: unknown;
+          error?: unknown;
+        } | null;
+        const savedRating = payload?.rating;
+        if (
+          !response.ok ||
+          !payload ||
+          (savedRating !== null && !isAgentMessageFeedbackRating(savedRating))
+        ) {
+          throw new Error(
+            payload && typeof payload.error === "string"
+              ? payload.error
+              : "反馈暂时无法保存，请稍后重试。",
+          );
+        }
+        setMessages((current) => current.map((candidate) =>
+          candidate.id === messageId ? { ...candidate, feedback: savedRating } : candidate
+        ));
+        return true;
+      } catch (feedbackFailure) {
+        setMessages((current) => current.map((candidate) =>
+          candidate.id === messageId ? { ...candidate, feedback: previousRating } : candidate
+        ));
+        setFeedbackError(
+          feedbackFailure instanceof Error
+            ? feedbackFailure.message
+            : "反馈暂时无法保存，请稍后重试。",
+        );
+        return false;
+      } finally {
+        feedbackSubmittingIdsRef.current.delete(messageId);
+        setFeedbackSubmittingIds(new Set(feedbackSubmittingIdsRef.current));
+      }
+    },
+    [messages, threadId],
+  );
+
   const resetThread = useCallback(() => {
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
@@ -651,6 +782,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     compactingRef.current = false;
     pendingSteerRequestsRef.current.clear();
     committedUserMessageClientIdsRef.current.clear();
+    feedbackSubmittingIdsRef.current.clear();
     setThreadId(null);
     setThreadTitle(null);
     setMessages([]);
@@ -669,14 +801,22 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setPendingSteers([]);
     setQueueSubmitting(false);
     setQueueOperationId(null);
+    pendingUserInputRef.current = null;
     setPendingUserInput(null);
     setAnsweringUserInput(false);
+    setFeedbackSubmittingIds(new Set());
+    setFeedbackError(null);
   }, []);
 
   const loadThread = useCallback(
     async (summary: AgentThreadSummary): Promise<boolean> => {
       setLoadingHistory(true);
       setError(null);
+      pendingUserInputRef.current = null;
+      setPendingUserInput(null);
+      setFeedbackError(null);
+      feedbackSubmittingIdsRef.current.clear();
+      setFeedbackSubmittingIds(new Set());
       pendingSteerRequestsRef.current.clear();
       committedUserMessageClientIdsRef.current.clear();
       queueRefreshSuppressionRef.current = 0;
@@ -731,9 +871,13 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setQueuedMessages([]);
         setPendingSteers([]);
         await refreshQueue(payload.thread.id);
-        await refreshPendingUserInput(payload.thread.id);
         if (payload.thread.status === "running") {
+          await refreshPendingUserInput(payload.thread.id);
           await connectEventStream(payload.thread.id);
+        } else {
+          pendingUserInputRef.current = null;
+          setPendingUserInput(null);
+          setAnsweringUserInput(false);
         }
         return true;
       } catch {
@@ -776,7 +920,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           role: "user",
           content: message,
           clientId: clientRequestId,
-          skillName: options?.skillName ?? null,
+          skillName: options?.displaySkillName ?? options?.skillName ?? null,
           attachments: pendingAttachments.map(({ file: _file, local: _local, ...attachment }) => attachment),
           delivery: "pending",
           status: "completed",
@@ -793,7 +937,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             body: JSON.stringify({
               model,
               title: requestedTitle,
-              recipeId: options?.workflow === "commerce-copywriting" ? "copywriting" : null,
+              recipeId: recipeIdForWorkflow(options?.workflow),
             }),
           });
           const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
@@ -821,6 +965,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             workflow: options?.workflow,
             skillName: options?.skillName,
             attachmentIds: uploadedAttachments.map((attachment) => attachment.id),
+            externalDataApprovalMode: options?.externalDataApprovalMode ?? "always_ask",
             clientRequestId,
           }),
         });
@@ -836,7 +981,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
               body: JSON.stringify({
                 model,
                 title: requestedTitle,
-                recipeId: options?.workflow === "commerce-copywriting" ? "copywriting" : null,
+                recipeId: recipeIdForWorkflow(options?.workflow),
               }),
             });
             const createPayload = (await createResponse.json().catch(() => null)) as Record<string, unknown> | null;
@@ -869,6 +1014,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
                 workflow: options?.workflow,
                 skillName: options?.skillName,
                 attachmentIds: uploadedAttachments.map((attachment) => attachment.id),
+                externalDataApprovalMode: options?.externalDataApprovalMode ?? "always_ask",
                 clientRequestId,
               }),
             });
@@ -1156,12 +1302,19 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         );
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         if (!response.ok) {
+          if (isEndedRequestUserInputResponse(response.status, payload)) {
+            pendingUserInputRef.current = null;
+            setPendingUserInput(null);
+            failActiveTurn(readError(payload) || "待回答请求已经结束，当前任务无法继续。请重新发送任务。");
+            return false;
+          }
           throw new Error(readError(payload) || "无法提交答案。");
         }
         const answerMessage = payload && typeof payload.answerMessage === "string"
           ? payload.answerMessage.trim()
           : "";
-        if (answerMessage) {
+        const displayAnswer = shouldDisplayRequestUserInputAnswer(pendingUserInput.origin);
+        if (displayAnswer && answerMessage) {
           upsertUserMessage(
             setMessages,
             `user-input-answer-${pendingUserInput.requestId}`,
@@ -1170,9 +1323,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             nextSequence(sequenceRef),
           );
         }
-        if (payload?.answerIndexed === false) {
+        if (displayAnswer && payload?.answerIndexed === false) {
           setError("选择已提交，但暂时无法保存到对话记录。刷新后可能需要重新确认。");
         }
+        pendingUserInputRef.current = null;
         setPendingUserInput(null);
         return true;
       } catch (responseError) {
@@ -1182,7 +1336,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setAnsweringUserInput(false);
       }
     },
-    [answeringUserInput, pendingUserInput, threadId],
+    [answeringUserInput, failActiveTurn, pendingUserInput, threadId],
   );
 
   useEffect(() => {
@@ -1279,6 +1433,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     durationMs,
     startedAt,
     error,
+    feedbackError,
+    feedbackSubmittingIds,
     submit,
     enqueueMessage,
     updateQueuedMessage,
@@ -1287,6 +1443,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     clearQueuedMessages,
     interrupt,
     respondToUserInput,
+    setMessageFeedback,
     resetThread,
     loadThread,
   };
@@ -1443,52 +1600,47 @@ function activityFromItem(
     };
   }
   if (item.type === "dynamicToolCall") {
-    const namespace = typeof item.namespace === "string" ? item.namespace : "";
-    const tool = typeof item.tool === "string" ? item.tool : "工具";
-    const sources = namespace === "commerce_web" ? readWebSourcesFromToolItem(item) : [];
+    const metadata = readDynamicToolActivity(item);
     return {
       id: item.id as string,
       sequence,
       turnId,
-      kind: namespace === "commerce_image" ? "image" : namespace === "commerce_web" ? "search" : "tool",
+      kind: metadata.kind,
       label:
-        namespace === "commerce_image"
+        metadata.kind === "image"
           ? completed
             ? "图片生成完成"
             : "正在生成图片"
-          : namespace === "commerce_web"
+          : metadata.isWebSearch
             ? completed
               ? "搜索完成"
               : "正在搜索网页"
             : completed
               ? "工具调用完成"
               : "正在调用工具",
-      detail: namespace ? `${namespace}.${tool}` : tool,
+      ...(metadata.detail ? { detail: metadata.detail } : {}),
       durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
-      ...(sources.length > 0 ? { sources } : {}),
+      ...(metadata.sources.length > 0 ? { sources: metadata.sources } : {}),
       status,
     };
   }
   if (item.type === "mcpToolCall") {
-    const server = typeof item.server === "string" ? item.server : "";
-    const tool = typeof item.tool === "string" ? item.tool : "";
-    const isWebSearch = server === "commerce_web" && tool === "search";
-    const sources = isWebSearch ? readWebSourcesFromToolItem(item) : [];
+    const metadata = readMcpToolActivity(item);
     return {
       id: item.id as string,
       sequence,
       turnId,
-      kind: isWebSearch ? "search" : "tool",
-      label: isWebSearch
+      kind: metadata.kind,
+      label: metadata.isWebSearch
         ? completed
           ? "搜索完成"
           : "正在搜索网页"
         : completed
           ? "连接器调用完成"
           : "正在调用连接器",
-      detail: isWebSearch ? "commerce_web.search" : tool,
+      ...(metadata.detail ? { detail: metadata.detail } : {}),
       durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
-      ...(sources.length > 0 ? { sources } : {}),
+      ...(metadata.sources.length > 0 ? { sources: metadata.sources } : {}),
       status,
     };
   }
@@ -1590,14 +1742,26 @@ function readConversationAttachment(value: unknown): ConversationAttachment | nu
     : null;
 }
 
-function readPendingRequestUserInputEvent(event: Record<string, unknown>): PendingRequestUserInput | null {
-  if (!isRecord(event.params) || (typeof event.id !== "string" && typeof event.id !== "number")) {
-    return null;
+export function readPendingRequestUserInputEvent(event: Record<string, unknown>): PendingRequestUserInput | null {
+  if (!isRecord(event.params)) return null;
+  if (event.type === "server_request" && event.method === CODEX_REQUEST_USER_INPUT_METHOD) {
+    if (typeof event.id !== "string" && typeof event.id !== "number") return null;
+    return readPendingRequestUserInputPayload({
+      ...event.params,
+      requestId: String(event.id),
+      origin: "codex_app_server",
+    });
   }
-  return readPendingRequestUserInputPayload({ ...event.params, requestId: String(event.id) });
+  if (event.type === "notification" && event.method === COMMERCE_APPROVAL_REQUESTED_METHOD) {
+    return readPendingRequestUserInputPayload({
+      ...event.params,
+      origin: "commerce_approval",
+    });
+  }
+  return null;
 }
 
-function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserInput | null {
+export function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserInput | null {
   if (!isRecord(value)) return null;
   const requestId = typeof value.requestId === "string" ? value.requestId : "";
   const threadId = typeof value.threadId === "string" ? value.threadId : "";
@@ -1611,18 +1775,17 @@ function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserI
         typeof question.id !== "string" ||
         typeof question.header !== "string" ||
         typeof question.question !== "string" ||
-        !Array.isArray(question.options)
+        (question.options !== null && question.options !== undefined && !Array.isArray(question.options))
       ) {
         return null;
       }
-      const options = question.options
+      const options = (Array.isArray(question.options) ? question.options : [])
         .map((option): RequestUserInputQuestionOption | null =>
           isRecord(option) && typeof option.label === "string" && typeof option.description === "string"
             ? { label: option.label, description: option.description }
             : null,
         )
         .filter((option): option is RequestUserInputQuestionOption => Boolean(option));
-      if (!options.length) return null;
       return {
         id: question.id,
         header: question.header,
@@ -1634,6 +1797,13 @@ function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserI
     })
     .filter((question): question is RequestUserInputQuestion => Boolean(question));
   if (!questions.length || questions.length > 3) return null;
+  const action = value.action === "skill.publish" || value.action === "external_data.call"
+    ? value.action
+    : undefined;
+  const origin = value.origin === "commerce_approval" || action
+    ? "commerce_approval"
+    : "codex_app_server";
+  if (origin === "commerce_approval" && !action) return null;
   return {
     requestId,
     threadId,
@@ -1642,7 +1812,8 @@ function readPendingRequestUserInputPayload(value: unknown): PendingRequestUserI
     questions,
     isBlocking: value.isBlocking !== false,
     receivedAt: typeof value.receivedAt === "string" ? value.receivedAt : new Date().toISOString(),
-    action: value.action === "skill.publish" ? "skill.publish" : undefined,
+    origin,
+    action,
   };
 }
 

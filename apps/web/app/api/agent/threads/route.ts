@@ -26,7 +26,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "请选择有效模型。" }, { status: 400 });
   }
   const title = "新任务";
-  const recipeId = body.recipeId === "copywriting" ? "copywriting" : null;
+  const recipeId = body.recipeId === "copywriting"
+    ? "copywriting"
+    : body.recipeId === "market_research"
+      ? "market_research"
+      : null;
   if (body.recipeId !== undefined && body.recipeId !== null && !recipeId) {
     return NextResponse.json({ error: "任务类型无效。" }, { status: 400 });
   }
@@ -51,7 +55,13 @@ export async function POST(request: Request) {
     if (!threadId) {
       return NextResponse.json({ error: "Agent Gateway 未返回会话标识。" }, { status: 502 });
     }
-    await registerAgentThreadOwner(threadId, context, title, recipeId);
+    await registerAgentThreadOwner(
+      threadId,
+      context,
+      title,
+      recipeId,
+      recipeId === "copywriting" ? "creative" : recipeId === "market_research" ? "research" : "general",
+    );
     return NextResponse.json(
       { result: { thread: { id: threadId } } },
       { headers: { "Cache-Control": "no-store" } },

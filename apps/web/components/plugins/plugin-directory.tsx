@@ -40,7 +40,6 @@ export function PluginDirectory({ initialSelectedPluginName = null }: { initialS
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--cp-bg)]">
-      <PluginSectionSwitch />
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto w-full max-w-[960px] px-5 pb-20 pt-10 md:px-8 md:pt-14">
           <div className="flex flex-col gap-7 md:flex-row md:items-end md:justify-between">
@@ -127,14 +126,6 @@ export function PluginDirectory({ initialSelectedPluginName = null }: { initialS
           ) : null}
         </div>
       </div>
-    </div>
-  );
-}
-
-function PluginSectionSwitch() {
-  return (
-    <div className="hidden h-[var(--cp-topbar-height)] shrink-0 items-center justify-center border-b border-transparent md:flex">
-      <span className="text-sm font-medium">插件</span>
     </div>
   );
 }

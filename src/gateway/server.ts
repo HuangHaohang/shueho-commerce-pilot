@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
@@ -13,8 +13,34 @@ import {
   resolveExplicitSkillFromCatalog,
 } from "../codex/explicit-skill.js";
 import { buildManagedWorkflowTurn, isManagedWorkflowId } from "../codex/managed-workflows.js";
-import type { AppServerEvent, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
+import type { AppServerEvent, JsonRpcId, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
 import { ensureAppOwnedCodexConfig } from "../codex/runtime-config.js";
+import {
+  ExternalDataControlClient,
+  ExternalDataControlError,
+  externalDataParameterKeys,
+  hashExternalDataParameters,
+  type ExternalDataApprovalMode,
+  type ExternalDataPrincipal,
+  type ExternalDataReservation,
+} from "../integrations/external-data-control-client.js";
+import {
+  ExternalDataServiceMcpClient,
+  ExternalDataServiceMcpError,
+  type ExternalDataServiceToolResult,
+} from "../integrations/external-data-service-mcp-client.js";
+import { classifyExternalDataServiceOutcome } from "../integrations/external-data-outcome.js";
+import {
+  MarketplaceProductResearchPreflightError,
+  preflightMarketplaceProductResearch,
+  type MarketplaceProductResearchInput,
+  type MarketplaceProductResearchPreflight,
+  type MarketplaceProductResearchStep,
+} from "../integrations/marketplace-product-research-preflight.js";
+import {
+  preflightSocialContentResearch,
+  type SocialContentResearchInput,
+} from "../integrations/social-content-research-preflight.js";
 import { CommerceProviderClient, CommerceProviderError, type ImageGenerationInput } from "../provider/commerce-provider-client.js";
 import { normalizeProviderUsage } from "../provider/provider-usage.js";
 import { readGatewayConfig } from "./config.js";
@@ -31,13 +57,21 @@ import {
 } from "./managed-skill-store.js";
 import { readManagedMcpStatus, type ManagedMcpStatus } from "./managed-mcp-status.js";
 import {
+  assertMarketplacePlatformCatalogEntry,
+  parseMarketplacePlatformCatalog,
+  type MarketplacePlatformCatalog,
+} from "./marketplace-platform-catalog.js";
+import {
   PendingSteerRegistry,
   ThreadOperationQueue,
   type PendingSteerState,
 } from "./pending-steer-state.js";
 import { PendingSteerStore } from "./pending-steer-store.js";
 import {
-  formatRequestUserInputAnswerMessage,
+  CODEX_REQUEST_USER_INPUT_METHOD,
+  COMMERCE_APPROVAL_REQUESTED_METHOD,
+  COMMERCE_APPROVAL_RESOLVED_METHOD,
+  formatConversationRequestUserInputAnswerMessage,
   normalizeRequestUserInputAnswers,
   readPendingRequestUserInput,
   serializePendingRequestUserInput,
@@ -55,6 +89,8 @@ import {
   isAgentEventPipelineHealthy,
   isAgentEventPipelineWritable,
 } from "./agent-event-pipeline-health.js";
+import { CommerceDataToolError } from "./commerce-data-tool-error.js";
+import { isMissingCodexThreadError } from "./codex-thread-errors.js";
 import { AgentOutboxProcessLock } from "./agent-outbox-process-lock.js";
 import {
   sanitizeBrowserAppServerEvent,
@@ -105,6 +141,34 @@ type PendingSkillPublishApproval = {
   scope: RuntimeScope;
 };
 
+type MarketplaceWorkflowRuntime = {
+  executionId: string;
+  sourceCallId: string;
+  input: MarketplaceProductResearchInput;
+  preflight: MarketplaceProductResearchPreflight;
+  nextStepIndex: number;
+  resolvedBindings: Record<string, string | number>;
+  completedStepCount: number;
+};
+
+type PendingExternalDataApproval = {
+  requestId: string;
+  scope: RuntimeScope;
+  principal: ExternalDataPrincipal;
+  reservation: ExternalDataReservation;
+  endpointId: string;
+  params: Record<string, unknown>;
+  threadId: string;
+  turnId: string;
+  callId: string;
+  requestText: string;
+  businessTool: "research_social_content" | "research_marketplace_products";
+  businessIntent: Record<string, unknown>;
+  planCoverage: Record<string, unknown>;
+  workflow: MarketplaceWorkflowRuntime | null;
+  workflowStep: MarketplaceProductResearchStep | null;
+};
+
 class GatewayRequestError extends Error {
   constructor(message: string, readonly statusCode: number) {
     super(message);
@@ -118,11 +182,21 @@ const gatewayInstanceId = randomUUID();
 const agentEventDeliveryEnabled = Boolean(config.agentEventSinkUrl && config.internalToken);
 
 const provider = new CommerceProviderClient(config.provider);
+const externalDataService = new ExternalDataServiceMcpClient(config.externalDataService);
+const externalDataControl = new ExternalDataControlClient({
+  controlUrl: config.externalDataControlUrl,
+  internalToken: config.internalToken,
+});
 const generatedImages = new GeneratedImageStore(config.codexHome);
 const threadArtifacts = new ThreadArtifactStore(config.codexHome);
 const managedSkills = new ManagedSkillStore(config.runtimeRoot);
 const pendingRequestUserInputs = new Map<string, PendingRequestUserInput>();
 const pendingSkillPublishApprovals = new Map<string, PendingSkillPublishApproval>();
+const pendingExternalDataApprovals = new Map<string, PendingExternalDataApproval>();
+const turnExternalDataApprovalModes = new Map<string, ExternalDataApprovalMode>();
+const turnResearchRequestTexts = new Map<string, string>();
+const turnMarketplacePlatformCatalogs = new Map<string, MarketplacePlatformCatalog>();
+const pendingExternalDataExecutions = new Set<Promise<void>>();
 const codexEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   CODEX_HOME: config.codexHome,
@@ -187,9 +261,12 @@ const browserEventMethods = new Set([
   "commerce/imageGeneration/started",
   "commerce/imageGeneration/completed",
   "commerce/skillPublish/completed",
+  COMMERCE_APPROVAL_REQUESTED_METHOD,
+  COMMERCE_APPROVAL_RESOLVED_METHOD,
   "commerce/contextCompaction/started",
   "commerce/contextCompaction/failed",
   "commerce/authorization/revoked",
+  "serverRequest/resolved",
   "thread/queue/changed",
   "thread/deleted",
   "error",
@@ -199,6 +276,9 @@ const MAX_QUEUED_MESSAGES_PER_THREAD = 50;
 const MAX_QUEUED_MESSAGE_BYTES_PER_THREAD = 500_000;
 
 codex.on("event", (event: AppServerEvent) => {
+  if (event.type === "server_request_resolved") {
+    clearPendingInteractionByServerRequestId(event.id);
+  }
   if (event.type === "process" && event.event === "exit") {
     loadedThreadIds.clear();
     activeTurnsByThread.clear();
@@ -209,6 +289,7 @@ codex.on("event", (event: AppServerEvent) => {
     threadOperations.clear();
     pendingRequestUserInputs.clear();
     pendingSkillPublishApprovals.clear();
+    pendingExternalDataApprovals.clear();
     managedMcpReadyPromise = null;
     managedMcpReadyThreadIds.clear();
     managedMcpThreadReadyPromises.clear();
@@ -232,12 +313,7 @@ codex.on("event", (event: AppServerEvent) => {
     if (event.method === "serverRequest/resolved" && isRecord(event.params)) {
       const requestId = event.params.requestId;
       if (typeof requestId === "string" || typeof requestId === "number") {
-        const resolvedId = String(requestId);
-        for (const [pendingId, pending] of pendingRequestUserInputs) {
-          if (String(pending.id) !== resolvedId) continue;
-          pendingRequestUserInputs.delete(pendingId);
-          pendingSkillPublishApprovals.delete(pendingId);
-        }
+        clearPendingInteractionByServerRequestId(requestId);
       }
     }
     handleRuntimeNotification(event);
@@ -248,6 +324,7 @@ codex.on("event", (event: AppServerEvent) => {
   }
   if (event.method === "item/tool/call") {
     void handleCommerceHostToolRequest(event).catch((error) => {
+      if (respondWithCommerceDataFailure(event, error)) return;
       codex.rejectServerRequest(event.id, {
         code: -32603,
         message: error instanceof Error ? error.message : "Commerce host tool failed.",
@@ -255,7 +332,7 @@ codex.on("event", (event: AppServerEvent) => {
     });
     return;
   }
-  if (event.method === "item/tool/requestUserInput" || event.method === "tool/requestUserInput") {
+  if (event.method === CODEX_REQUEST_USER_INPUT_METHOD) {
     const pending = readPendingRequestUserInput(event);
     if (!pending) {
       codex.rejectServerRequest(event.id, {
@@ -307,10 +384,17 @@ const server = createServer(async (req, res) => {
           id: config.provider.id,
           configured: Boolean(config.provider.apiKey),
           imageModel: config.provider.imageModel,
+          webSearchModel: config.provider.webSearchModel,
           titleModel: config.titleModel,
           wireApi: "responses",
         },
         managedMcp: managedMcpState,
+        externalData: {
+          service: "shueho-external-data",
+          upstreamProvider: "justoneapi-rest",
+          controlConfigured: externalDataControl.configured,
+          ...readExternalDataBrowserStatus(),
+        },
         runtimePolicy: {
           tools: "application-registered-only",
           shell: false,
@@ -318,6 +402,7 @@ const server = createServer(async (req, res) => {
           processNetwork: false,
           hostedWebSearch: true,
           managedMcpWebSearch: true,
+          governedExternalData: externalDataService.readStatus().connected && externalDataControl.configured,
           nativeProviderWebSearch: true,
           legacyDynamicWebSearchHandler: true,
           multiAgent: true,
@@ -645,27 +730,74 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid user-input answers." });
         return;
       }
-      const answerMessage = formatRequestUserInputAnswerMessage(pending.questions, answers);
-      const answerPersisted = answerMessage
-        ? await injectUserInputAnswer(threadId, answerMessage)
-        : false;
-      const skillApproval = pendingSkillPublishApprovals.get(requestId);
-      if (skillApproval) {
-        await resolveSkillPublishApproval(pending, skillApproval, answers);
+      if (pending.origin === "commerce_approval" && !isPendingDynamicToolRequest(pending.id)) {
+        const staleExternalApproval = pendingExternalDataApprovals.get(requestId);
         pendingRequestUserInputs.delete(requestId);
         pendingSkillPublishApprovals.delete(requestId);
+        pendingExternalDataApprovals.delete(requestId);
+        broadcastCommerceApprovalResolved(pending, "turn_ended");
+        if (staleExternalApproval) {
+          void cancelPendingExternalDataApproval(staleExternalApproval, "upstream_unavailable");
+        }
+        sendJson(res, 409, { error: "The Harness tool call was already resolved or cancelled." });
+        return;
+      }
+      const answerMessage = formatConversationRequestUserInputAnswerMessage(pending, answers);
+      const skillApproval = pendingSkillPublishApprovals.get(requestId);
+      if (skillApproval) {
+        pendingRequestUserInputs.delete(requestId);
+        pendingSkillPublishApprovals.delete(requestId);
+        try {
+          await resolveSkillPublishApproval(pending, skillApproval, answers);
+        } catch (error) {
+          codex.rejectServerRequest(pending.id, {
+            code: -32603,
+            message: error instanceof Error ? error.message : "Skill publication approval failed.",
+          });
+          throw error;
+        } finally {
+          broadcastCommerceApprovalResolved(pending, "answered");
+        }
         sendJson(res, 200, {
           accepted: true,
           requestId,
           published: answers.publish_skill?.answers[0] === "发布",
-          answerMessage,
-          answerPersisted,
+          ...(answerMessage ? { answerMessage } : {}),
+        });
+        return;
+      }
+      const externalDataApproval = pendingExternalDataApprovals.get(requestId);
+      if (externalDataApproval) {
+        pendingRequestUserInputs.delete(requestId);
+        pendingExternalDataApprovals.delete(requestId);
+        broadcastCommerceApprovalResolved(pending, "answered");
+        const execution = resolveExternalDataApproval(pending, externalDataApproval, answers)
+          .catch((error) => {
+            codex.rejectServerRequest(pending.id, {
+              code: -32603,
+              message: error instanceof Error ? error.message : "External data approval failed.",
+            });
+          })
+          .finally(() => pendingExternalDataExecutions.delete(execution));
+        pendingExternalDataExecutions.add(execution);
+        sendJson(res, 202, {
+          accepted: true,
+          requestId,
+          approved: answers.external_data_call?.answers[0] === "允许本次调用",
+          ...(answerMessage ? { answerMessage } : {}),
         });
         return;
       }
       pendingRequestUserInputs.delete(requestId);
-      codex.respondToServerRequest(pending.id, { answers });
-      sendJson(res, 200, { accepted: true, requestId, answerMessage, answerPersisted });
+      if (!codex.respondToServerRequest(pending.id, { answers })) {
+        sendJson(res, 409, { error: "The Harness question was already resolved or cancelled." });
+        return;
+      }
+      sendJson(res, 200, {
+        accepted: true,
+        requestId,
+        ...(answerMessage ? { answerMessage } : {}),
+      });
       return;
     }
 
@@ -728,6 +860,11 @@ const server = createServer(async (req, res) => {
       }
       if (workflow && skillName) {
         sendJson(res, 400, { error: "A managed workflow and an explicit Skill cannot be combined." });
+        return;
+      }
+      const externalDataApprovalMode = readExternalDataApprovalMode(body.externalDataApprovalMode);
+      if (body.externalDataApprovalMode !== undefined && !externalDataApprovalMode) {
+        sendJson(res, 400, { error: "Invalid external-data approval mode." });
         return;
       }
       const threadId = decodeURIComponent(turnMatch[1] ?? "");
@@ -830,6 +967,11 @@ const server = createServer(async (req, res) => {
           bindTurnModel(threadId, startedTurnId, requestedModel);
           updateThreadRuntimeModel(threadId, requestedModel);
           activeTurnsByThread.set(threadId, startedTurnId);
+          turnExternalDataApprovalModes.set(
+            startedTurnId,
+            externalDataApprovalMode ?? "always_ask",
+          );
+          if (message) turnResearchRequestTexts.set(startedTurnId, message);
           scheduleTurnTimeout(threadId, startedTurnId);
         }
         sendJson(res, 200, { result });
@@ -1018,6 +1160,9 @@ const server = createServer(async (req, res) => {
 });
 
 await ensureCommerceWebMcpReady(true);
+if (externalDataService.configured && externalDataControl.configured) {
+  await externalDataService.verify();
+}
 scheduleAgentEventFlush(0);
 startRuntimeAuthorizationPoll();
 
@@ -1053,6 +1198,8 @@ async function shutdown(): Promise<void> {
     client.end();
   }
   sseClients.clear();
+  await Promise.allSettled([...pendingExternalDataExecutions]);
+  await externalDataService.close();
   await codex.stop();
   if (runtimeAuthorizationPollPromise) await runtimeAuthorizationPollPromise.catch(() => undefined);
   await Promise.allSettled([...pendingAgentEventWrites]);
@@ -1174,6 +1321,10 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
     return;
   }
   clearTurnTimeout(turnId);
+  clearPendingInteractionsForTurn(threadId, turnId);
+  turnExternalDataApprovalModes.delete(turnId);
+  turnResearchRequestTexts.delete(turnId);
+  turnMarketplacePlatformCatalogs.delete(turnId);
   const completedEvent = readTurnCompletedOutboxEvent(event, threadId, turnId);
   if (completedEvent) scheduleAgentEvent(completedEvent);
   turnModels.delete(turnModelKey(threadId, turnId));
@@ -1402,6 +1553,32 @@ function readThreadTitleContext(result: unknown): {
     : null;
 }
 
+async function readResearchRequestText(threadId: string, turnId: string): Promise<string> {
+  const result = await readThreadWithStartupRetry(threadId, true);
+  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
+    throw new Error("Codex App Server returned no thread history for external-data provenance.");
+  }
+  const turn = result.thread.turns
+    .filter(isRecord)
+    .find((candidate) => candidate.id === turnId);
+  if (!turn || !Array.isArray(turn.items)) {
+    throw new Error("Codex App Server returned no matching Turn for external-data provenance.");
+  }
+  for (const item of turn.items.filter(isRecord)) {
+    if (item.type !== "userMessage" || !Array.isArray(item.content)) continue;
+    const text = stripAttachmentContextBlocks(readVisibleExplicitSkillMessage(
+      item.content
+        .filter(isRecord)
+        .filter((content) => content.type === "text" && typeof content.text === "string")
+        .map((content) => content.text as string)
+        .join("\n")
+        .trim(),
+    ));
+    if (text) return text;
+  }
+  throw new Error("The current Turn contains no user request text for external-data provenance.");
+}
+
 async function readHarnessActiveTurnId(threadId: string): Promise<string | null> {
   const statusResult = await readThreadWithStartupRetry(threadId, false);
   if (!isRecord(statusResult) || !isRecord(statusResult.thread) || !isRecord(statusResult.thread.status)) {
@@ -1612,6 +1789,9 @@ async function interruptTurnWithRaceRetry(threadId: string, turnId: string): Pro
       await codex.request("turn/interrupt", { threadId, turnId }, 10_000);
       return;
     } catch (error) {
+      if (isMissingCodexThreadError(error)) {
+        throw new GatewayRequestError("Thread not found.", 404);
+      }
       lastError = error;
       if (!isNoActiveInterruptError(error)) {
         throw error;
@@ -1824,6 +2004,9 @@ async function readThreadWithStartupRetry(threadId: string, includeTurns: boolea
     try {
       return await codex.request("thread/read", { threadId, includeTurns });
     } catch (error) {
+      if (isMissingCodexThreadError(error)) {
+        throw new GatewayRequestError("Thread not found.", 404);
+      }
       lastError = error;
       if (!isEmptyRolloutError(error) || attempt === 5) {
         throw error;
@@ -1864,7 +2047,9 @@ async function permanentlyDeleteThreadTree(threadId: string): Promise<{
     }
     const threadIds = await listThreadTreeIds(threadId);
     await interruptThreadTree(threadIds, scope.rootThreadId);
-    await codex.request("thread/delete", { threadId }, 60_000);
+    await codex.request("thread/delete", { threadId }, 60_000).catch((error) => {
+      if (!isMissingCodexThreadError(error)) throw error;
+    });
     const imageDeletion = await generatedImages.deleteForThreads(threadIds);
     let artifactDirectoriesDeleted = 0;
     for (const deletedThreadId of threadIds) {
@@ -1933,6 +2118,7 @@ async function interruptThreadTree(threadIds: string[], rootThreadId: string): P
 
 async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void> {
   let pendingSteersChanged = false;
+  const externalApprovalCancellations: Promise<void>[] = [];
   for (const deletedThreadId of threadIds) {
     const activeTurnId = activeTurnsByThread.get(deletedThreadId);
     if (activeTurnId) clearTurnTimeout(activeTurnId);
@@ -1952,13 +2138,22 @@ async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void
     }
     for (const [requestId, pending] of pendingRequestUserInputs) {
       if (pending.threadId !== deletedThreadId) continue;
+      const externalApproval = pendingExternalDataApprovals.get(requestId);
       pendingRequestUserInputs.delete(requestId);
       pendingSkillPublishApprovals.delete(requestId);
+      pendingExternalDataApprovals.delete(requestId);
+      broadcastCommerceApprovalResolved(pending, "thread_deleted");
+      if (externalApproval) {
+        externalApprovalCancellations.push(
+          cancelPendingExternalDataApproval(externalApproval, "upstream_unavailable"),
+        );
+      }
     }
     for (const key of turnModels.keys()) {
       if (key.startsWith(`${deletedThreadId}:`)) turnModels.delete(key);
     }
   }
+  await Promise.all(externalApprovalCancellations);
   if (pendingSteersChanged) await persistPendingSteers();
 }
 
@@ -1983,6 +2178,11 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
     developerInstructions: createRuntimeDeveloperInstructions(),
     dynamicTools: createCommerceDynamicToolSpecs(),
     excludeTurns: true,
+  }).catch((error) => {
+    if (isMissingCodexThreadError(error)) {
+      throw new GatewayRequestError("Thread not found.", 404);
+    }
+    throw error;
   });
   loadedThreadIds.add(threadId);
   await ensureCommerceWebMcpReadyForThread(threadId);
@@ -2722,7 +2922,7 @@ function broadcastEvent(event: AppServerEvent): void {
   const browserNotification = event.type === "notification" && browserEventMethods.has(event.method);
   const browserUserInputRequest =
     event.type === "server_request" &&
-    (event.method === "item/tool/requestUserInput" || event.method === "tool/requestUserInput");
+    event.method === CODEX_REQUEST_USER_INPUT_METHOD;
   if (!browserNotification && !browserUserInputRequest) {
     return;
   }
@@ -2735,6 +2935,72 @@ function broadcastEvent(event: AppServerEvent): void {
     }
     client.write(payload);
   }
+}
+
+function clearPendingInteractionByServerRequestId(serverRequestId: JsonRpcId): void {
+  const resolvedId = String(serverRequestId);
+  for (const [requestId, pending] of pendingRequestUserInputs) {
+    if (String(pending.id) !== resolvedId) continue;
+    const externalApproval = pendingExternalDataApprovals.get(requestId);
+    pendingRequestUserInputs.delete(requestId);
+    pendingSkillPublishApprovals.delete(requestId);
+    pendingExternalDataApprovals.delete(requestId);
+    if (externalApproval) void cancelPendingExternalDataApproval(externalApproval, "upstream_unavailable");
+  }
+}
+
+function clearPendingInteractionsForTurn(threadId: string, turnId: string): void {
+  for (const [requestId, pending] of pendingRequestUserInputs) {
+    if (pending.threadId !== threadId || pending.turnId !== turnId) continue;
+    const externalApproval = pendingExternalDataApprovals.get(requestId);
+    pendingRequestUserInputs.delete(requestId);
+    pendingSkillPublishApprovals.delete(requestId);
+    pendingExternalDataApprovals.delete(requestId);
+    if (pending.origin === "commerce_approval") {
+      broadcastCommerceApprovalResolved(pending, "turn_ended");
+    }
+    if (externalApproval) {
+      void cancelPendingExternalDataApproval(externalApproval, "upstream_unavailable");
+    }
+  }
+}
+
+async function cancelPendingExternalDataApproval(
+  approval: PendingExternalDataApproval,
+  reason: "user_denied" | "approval_required" | "upstream_unavailable",
+): Promise<void> {
+  await externalDataControl
+    .cancel(approval.principal, approval.reservation.reservationId, reason)
+    .catch(() => undefined);
+  if (approval.workflow) {
+    await externalDataService.cancelMarketplaceProductResearch({
+      workflow_execution_id: approval.workflow.executionId,
+      reason: reason === "user_denied" ? "User denied the pending workflow step." : "Harness workflow ended before the pending step was dispatched.",
+      _commerce_context: {
+        tenant_id: approval.principal.tenantId,
+        workspace_id: approval.principal.workspaceId,
+      },
+    }).catch(() => undefined);
+  }
+}
+
+function broadcastCommerceApprovalResolved(
+  pending: PendingRequestUserInput,
+  reason: "answered" | "turn_ended" | "thread_deleted",
+): void {
+  if (pending.origin !== "commerce_approval") return;
+  broadcastEvent({
+    type: "notification",
+    method: COMMERCE_APPROVAL_RESOLVED_METHOD,
+    params: {
+      requestId: pending.requestId,
+      threadId: pending.threadId,
+      turnId: pending.turnId,
+      itemId: pending.itemId,
+      reason,
+    },
+    at: new Date().toISOString(),
+  });
 }
 
 function getEventThreadId(event: AppServerEvent): string | undefined {
@@ -2947,17 +3213,21 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
       ],
       isBlocking: true,
       receivedAt: new Date().toISOString(),
+      origin: "commerce_approval",
       action: "skill.publish",
     };
     pendingRequestUserInputs.set(requestId, pending);
     pendingSkillPublishApprovals.set(requestId, { requestId, draft, scope });
     broadcastEvent({
-      type: "server_request",
-      id: requestId,
-      method: "tool/requestUserInput",
+      type: "notification",
+      method: COMMERCE_APPROVAL_REQUESTED_METHOD,
       params: serializePendingRequestUserInput(pending),
       at: pending.receivedAt,
     });
+    return;
+  }
+  if (namespace === "commerce_data") {
+    await handleCommerceDataHostToolRequest(event, scope, threadId, turnId, callId, tool);
     return;
   }
   if (namespace !== "commerce_image" || tool !== "generate") {
@@ -3049,6 +3319,1018 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
   });
 }
 
+async function handleCommerceDataHostToolRequest(
+  event: Extract<AppServerEvent, { type: "server_request" }>,
+  scope: RuntimeScope,
+  threadId: string,
+  turnId: string,
+  callId: string,
+  tool: string,
+): Promise<void> {
+  if (!externalDataService.configured || !externalDataControl.configured) {
+    throw new Error("Commerce external data service is not configured.");
+  }
+  const principal: ExternalDataPrincipal = {
+    tenantId: scope.tenantId,
+    workspaceId: scope.workspaceId,
+    userId: scope.userId,
+    rootThreadId: scope.rootThreadId,
+    mcpAccessTokenId: null,
+  };
+  const args = isRecord(event.params) && isRecord(event.params.arguments)
+    ? event.params.arguments
+    : {};
+
+  if (tool === "search_business_data") {
+    await externalDataControl.authorizeCatalog(principal);
+    const query = typeof args.query === "string" ? args.query.trim() : "";
+    const limit = typeof args.limit === "number" && Number.isInteger(args.limit)
+      ? Math.min(20, Math.max(1, args.limit))
+      : 10;
+    if (!query || query.length > 4_096) {
+      throw new CommerceDataToolError(
+        "业务数据检索必须包含 1 到 4096 个字符。",
+        "EXTERNAL_DATA_INVALID_BUSINESS_QUERY",
+        "Use a concise research-evidence query. This read-only call does not dispatch or charge a provider endpoint.",
+      );
+    }
+    const result = await externalDataService.searchBusinessData({
+      query,
+      limit,
+      _commerce_context: { tenant_id: scope.tenantId, workspace_id: scope.workspaceId },
+    });
+    respondWithCommerceDataResult(event.id, result.payload);
+    return;
+  }
+
+  if (tool === "list_marketplace_research_platforms") {
+    await externalDataControl.authorizeCatalog(principal);
+    const result = await externalDataService.listMarketplaceResearchPlatforms();
+    const catalog = parseMarketplacePlatformCatalog(result.payload);
+    if (!catalog.size) {
+      throw new CommerceDataToolError(
+        "当前数据服务没有可用的关键词商品研究平台。",
+        "MARKETPLACE_PLATFORM_CATALOG_EMPTY",
+        "Do not invent a marketplace option. Explain that the database-backed product-research catalog is currently empty; no paid provider endpoint was dispatched.",
+      );
+    }
+    turnMarketplacePlatformCatalogs.set(turnId, catalog);
+    respondWithCommerceDataResult(event.id, result.payload);
+    return;
+  }
+
+  if (tool === "get_marketplace_options") {
+    await externalDataControl.authorizeCatalog(principal);
+    const platform = typeof args.platform === "string" ? args.platform.trim().toUpperCase() : "";
+    if (!/^[A-Z0-9_]{2,64}$/.test(platform)) {
+      throw new CommerceDataToolError(
+        "电商平台标识无效。",
+        "EXTERNAL_DATA_INVALID_MARKETPLACE_PLATFORM",
+        "Use the marketplace requested by the user. This read-only call does not dispatch a provider endpoint.",
+      );
+    }
+    assertMarketplacePlatformCatalogEntry(turnMarketplacePlatformCatalogs.get(turnId), platform);
+    const result = await externalDataService.getMarketplaceOptions({ platform });
+    respondWithCommerceDataResult(event.id, result.payload);
+    return;
+  }
+
+  if (tool === "get_research_result") {
+    await externalDataControl.authorizeCatalog(principal);
+    const researchRequestId = typeof args.research_request_id === "string" ? args.research_request_id : "";
+    if (!isUuid(researchRequestId)) {
+      throw new CommerceDataToolError(
+        "research_request_id 无效。",
+        "EXTERNAL_DATA_INVALID_RESEARCH_ID",
+        "Use a research_request_id returned by a completed research tool. This read-only call does not dispatch a provider endpoint.",
+      );
+    }
+    const result = await externalDataService.getResearchResult({
+      research_request_id: researchRequestId,
+      _commerce_context: { tenant_id: scope.tenantId, workspace_id: scope.workspaceId },
+    });
+    respondWithCommerceDataResult(event.id, result.payload);
+    return;
+  }
+
+  const authorization = await externalDataControl.authorizeCatalog(principal);
+  if (tool === "research_marketplace_products") {
+    const businessInput = readMarketplaceProductResearchInput(args);
+    assertMarketplacePlatformCatalogEntry(turnMarketplacePlatformCatalogs.get(turnId), businessInput.platform);
+    let workflowPreflight: MarketplaceProductResearchPreflight;
+    try {
+      workflowPreflight = await preflightMarketplaceProductResearch(externalDataService, businessInput, authorization);
+    } catch (error) {
+      const preflightError = error instanceof MarketplaceProductResearchPreflightError ? error : null;
+      const code = preflightError?.code ?? "MARKETPLACE_RESEARCH_PREFLIGHT_FAILED";
+      const marketInstruction = code === "MARKET_SELECTION_REQUIRED"
+        ? "Call the free get_marketplace_options tool for this platform, then use native request_user_input with exactly those database-returned options. Do not guess or dispatch a paid call before the user answers."
+        : code === "MARKET_UNSUPPORTED"
+          ? "Tell the user that the requested site is currently unsupported and list only the database-returned supported options. Do not dispatch a paid call or silently substitute another site."
+          : code === "LOCALIZED_KEYWORD_REQUIRED"
+            ? "Generate one concise equivalent search term in the selected market's catalog language, preserve the user's original keyword separately, and call the business tool again once. Do not ask the user to translate it and do not dispatch the paid call with an untranslated keyword."
+          : "Explain the exact workflow capability gap or correct the business-level research arguments once. No reservation, approval or paid provider dispatch occurred.";
+      throw new CommerceDataToolError(
+        error instanceof Error ? error.message : "商品研究请求无法匹配当前已授权数据能力。",
+        code,
+        marketInstruction,
+      );
+    }
+    for (const step of workflowPreflight.steps) assertEndpointAllowed(step.endpointId, authorization);
+    const requestText = turnResearchRequestTexts.get(turnId) ?? await readResearchRequestText(threadId, turnId);
+    const businessIntent = {
+      ...workflowPreflight.businessIntent,
+      workflow_plan_key: workflowPreflight.planKey,
+    };
+    const began = await externalDataService.beginMarketplaceProductResearch({
+      ...businessInput,
+      workflow_id: workflowPreflight.workflowId,
+      research_plan_key: workflowPreflight.planKey,
+      _commerce_context: {
+        tenant_id: principal.tenantId,
+        workspace_id: principal.workspaceId,
+        user_id: principal.userId,
+        source: "codex_harness",
+        source_call_id: callId,
+        root_thread_id: principal.rootThreadId ?? null,
+        thread_id: threadId,
+        turn_id: turnId,
+        request_text: requestText,
+        top_n: readBusinessIntentTopN(businessIntent),
+        business_intent: businessIntent,
+      },
+    });
+    const executionId = typeof began.payload.workflow_execution_id === "string"
+      ? began.payload.workflow_execution_id
+      : "";
+    if (began.payload.success !== true || !isUuid(executionId)) {
+      throw new CommerceDataToolError(
+        typeof began.payload.message === "string" ? began.payload.message : "商品研究工作流无法建立。",
+        typeof began.payload.code === "string" ? began.payload.code : "MARKETPLACE_WORKFLOW_BEGIN_FAILED",
+        "The workflow failed before any paid provider dispatch. Report the exact failure and do not substitute another source.",
+      );
+    }
+    await advanceMarketplaceWorkflow(event.id, scope, principal, {
+      executionId,
+      sourceCallId: callId,
+      input: businessInput,
+      preflight: { ...workflowPreflight, businessIntent },
+      nextStepIndex: 0,
+      resolvedBindings: {},
+      completedStepCount: 0,
+    }, {
+      threadId,
+      turnId,
+      callId,
+      requestText,
+    });
+    return;
+  }
+  let businessTool: PendingExternalDataApproval["businessTool"];
+  let approvalQuestion: string;
+  let approvalSummary: string;
+  let preflight: {
+    endpointId: string;
+    catalogPlatform: string;
+    normalizedParams: Record<string, unknown>;
+    businessIntent: Record<string, unknown>;
+    coverage: Record<string, unknown>;
+  };
+  if (tool === "research_social_content") {
+    const businessInput = readSocialContentResearchInput(args);
+    try {
+      preflight = await preflightSocialContentResearch(externalDataService, businessInput, authorization);
+    } catch (error) {
+      throw new CommerceDataToolError(
+        error instanceof Error ? error.message : "社交内容研究请求无法匹配当前已授权数据能力。",
+        "SOCIAL_RESEARCH_PREFLIGHT_FAILED",
+        "Explain the exact capability gap or correct the business-level research arguments once. No reservation, approval or paid provider dispatch occurred.",
+      );
+    }
+    businessTool = "research_social_content";
+    approvalQuestion = `允许 Commerce Pilot 查询 ${businessInput.platform} 的公开社交内容？`;
+    approvalSummary = businessInput.objective === "latest_content"
+      ? `时间范围内最新内容，${businessInput.start_date} 至 ${businessInput.end_date}`
+      : `高互动内容，${businessInput.start_date} 至 ${businessInput.end_date}`;
+  } else {
+    throw new Error(`Commerce data tool ${tool || "unknown"} is not registered.`);
+  }
+  const endpointId = preflight.endpointId;
+  const params = preflight.normalizedParams;
+  const platform = preflight.catalogPlatform || endpointPlatform(endpointId);
+  assertEndpointAllowed(endpointId, authorization);
+  const requestText = turnResearchRequestTexts.get(turnId) ?? await readResearchRequestText(threadId, turnId);
+  const requestedApprovalMode = turnExternalDataApprovalModes.get(turnId) ?? "always_ask";
+  const reservation = await externalDataControl.reserve(principal, {
+    source: "codex_harness",
+    threadId,
+    turnId,
+    callId,
+    endpointId,
+    platform,
+    parameterHash: hashExternalDataParameters(params),
+    parameterKeys: externalDataParameterKeys(params),
+    requestedApprovalMode,
+  });
+  if (!reservation.requiresApproval) {
+    await dispatchCommerceDataCall(event.id, principal, reservation, endpointId, params, {
+      threadId,
+      turnId,
+      callId,
+      requestText,
+      businessTool,
+      businessIntent: preflight.businessIntent,
+      planCoverage: preflight.coverage,
+    });
+    return;
+  }
+
+  const requestId = `external_data_${callId}`;
+  if (pendingRequestUserInputs.has(requestId)) {
+    throw new Error("This external data call is already waiting for approval.");
+  }
+  const pending: PendingRequestUserInput = {
+    id: event.id,
+    requestId,
+    threadId,
+    turnId,
+    itemId: callId,
+    questions: [
+      {
+        id: "external_data_call",
+        header: "外部数据调用",
+        question: approvalQuestion,
+        isOther: false,
+        isSecret: false,
+        options: [
+          {
+            label: "允许本次调用",
+            description: formatExternalDataApprovalDescription(reservation, params, approvalSummary),
+          },
+          {
+            label: "拒绝",
+            description: "不向 JustOneAPI 发送请求，也不会产生本次外部接口费用。",
+          },
+        ],
+      },
+    ],
+    isBlocking: true,
+    receivedAt: new Date().toISOString(),
+    origin: "commerce_approval",
+    action: "external_data.call",
+  };
+  pendingRequestUserInputs.set(requestId, pending);
+  pendingExternalDataApprovals.set(requestId, {
+    requestId,
+    scope,
+    principal,
+    reservation,
+    endpointId,
+    params,
+    threadId,
+    turnId,
+    callId,
+    requestText,
+    businessTool,
+    businessIntent: preflight.businessIntent,
+    planCoverage: preflight.coverage,
+    workflow: null,
+    workflowStep: null,
+  });
+  broadcastEvent({
+    type: "notification",
+    method: COMMERCE_APPROVAL_REQUESTED_METHOD,
+    params: serializePendingRequestUserInput(pending),
+    at: pending.receivedAt,
+  });
+}
+
+async function advanceMarketplaceWorkflow(
+  requestId: JsonRpcId,
+  scope: RuntimeScope,
+  principal: ExternalDataPrincipal,
+  workflow: MarketplaceWorkflowRuntime,
+  research: { threadId: string; turnId: string; callId: string; requestText: string },
+): Promise<void> {
+  if (workflow.nextStepIndex >= workflow.preflight.steps.length) {
+    await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow);
+    return;
+  }
+  const step = workflow.preflight.steps[workflow.nextStepIndex];
+  if (!step) throw new Error("Marketplace workflow step is missing.");
+  if (Object.keys(step.dynamicParameterBindings).length && !Object.keys(workflow.resolvedBindings).length) {
+    const resolved = await externalDataService.resolveMarketplaceProductBindings({
+      workflow_execution_id: workflow.executionId,
+      _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
+    });
+    if (resolved.payload.success !== true || !isRecord(resolved.payload.bindings)) {
+      await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
+        code: typeof resolved.payload.code === "string" ? resolved.payload.code : "WORKFLOW_BINDING_UNAVAILABLE",
+        message: typeof resolved.payload.message === "string"
+          ? resolved.payload.message
+          : "质量通过的搜索结果中没有可用于详情调用的商品标识。",
+      });
+      return;
+    }
+    workflow.resolvedBindings = readWorkflowBindingValues(resolved.payload.bindings);
+  }
+  const params = materializeWorkflowStepParameters(step, workflow.resolvedBindings);
+  const endpointPreflight = await externalDataService.preflightEndpoint({
+    endpoint_id: step.endpointId,
+    params,
+  });
+  if (
+    endpointPreflight.payload.success !== true || endpointPreflight.payload.endpoint_id !== step.endpointId ||
+    !isRecord(endpointPreflight.payload.normalized_params)
+  ) {
+    await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
+      code: typeof endpointPreflight.payload.code === "string"
+        ? endpointPreflight.payload.code
+        : "WORKFLOW_STEP_PREFLIGHT_FAILED",
+      message: typeof endpointPreflight.payload.message === "string"
+        ? endpointPreflight.payload.message
+        : `商品研究的 ${step.role} 步骤未通过接口参数校验。`,
+    });
+    return;
+  }
+  const normalizedParams = endpointPreflight.payload.normalized_params;
+  const childCallId = marketplaceWorkflowChildCallId(research.callId, workflow.preflight.planKey, step);
+  const requestedApprovalMode = turnExternalDataApprovalModes.get(research.turnId) ?? "always_ask";
+  const reservation = await externalDataControl.reserve(principal, {
+    source: "codex_harness",
+    threadId: research.threadId,
+    turnId: research.turnId,
+    callId: childCallId,
+    endpointId: step.endpointId,
+    platform: step.catalogPlatform,
+    parameterHash: hashExternalDataParameters(normalizedParams),
+    parameterKeys: externalDataParameterKeys(normalizedParams),
+    requestedApprovalMode,
+  });
+  if (!reservation.requiresApproval) {
+    await executeMarketplaceWorkflowStep(
+      requestId, scope, principal, reservation, normalizedParams,
+      workflow, step, { ...research, callId: childCallId },
+    );
+    return;
+  }
+  const approvalRequestId = marketplaceWorkflowApprovalRequestId(childCallId);
+  if (pendingRequestUserInputs.has(approvalRequestId)) {
+    throw new Error("This marketplace workflow step is already waiting for approval.");
+  }
+  const roleLabel = marketplaceWorkflowRoleLabel(step.role);
+  const pending: PendingRequestUserInput = {
+    id: requestId,
+    requestId: approvalRequestId,
+    threadId: research.threadId,
+    turnId: research.turnId,
+    itemId: research.callId,
+    questions: [
+      {
+        id: "external_data_call",
+        header: "外部数据调用",
+        question: `允许 Commerce Pilot 执行第 ${step.stepOrder + 1}/${workflow.preflight.steps.length} 次调用（${roleLabel}）？`,
+        isOther: false,
+        isSecret: false,
+        options: [
+          {
+            label: "允许本次调用",
+            description: formatExternalDataApprovalDescription(
+              reservation,
+              normalizedParams,
+              `${workflow.input.platform}；${workflow.input.keyword}；${roleLabel}`,
+            ),
+          },
+          {
+            label: "拒绝",
+            description: "停止当前工作流；该步骤及后续步骤不会发送，也不会产生对应费用。",
+          },
+        ],
+      },
+    ],
+    isBlocking: true,
+    receivedAt: new Date().toISOString(),
+    origin: "commerce_approval",
+    action: "external_data.call",
+  };
+  pendingRequestUserInputs.set(approvalRequestId, pending);
+  pendingExternalDataApprovals.set(approvalRequestId, {
+    requestId: approvalRequestId,
+    scope,
+    principal,
+    reservation,
+    endpointId: step.endpointId,
+    params: normalizedParams,
+    threadId: research.threadId,
+    turnId: research.turnId,
+    callId: childCallId,
+    requestText: research.requestText,
+    businessTool: "research_marketplace_products",
+    businessIntent: workflow.preflight.businessIntent,
+    planCoverage: workflow.preflight.coverage,
+    workflow,
+    workflowStep: step,
+  });
+  broadcastEvent({
+    type: "notification",
+    method: COMMERCE_APPROVAL_REQUESTED_METHOD,
+    params: serializePendingRequestUserInput(pending),
+    at: pending.receivedAt,
+  });
+}
+
+async function executeMarketplaceWorkflowStep(
+  requestId: JsonRpcId,
+  scope: RuntimeScope,
+  principal: ExternalDataPrincipal,
+  reservation: ExternalDataReservation,
+  params: Record<string, unknown>,
+  workflow: MarketplaceWorkflowRuntime,
+  step: MarketplaceProductResearchStep,
+  research: { threadId: string; turnId: string; callId: string; requestText: string },
+): Promise<void> {
+  await externalDataControl.dispatch(principal, reservation.reservationId, {
+    endpoint_id: step.endpointId,
+    params,
+    workflow_execution_id: workflow.executionId,
+    workflow_step_id: step.stepId,
+  });
+  let result: ExternalDataServiceToolResult;
+  try {
+    result = await externalDataService.callEndpoint({
+      endpoint_id: step.endpointId,
+      params,
+      _commerce_context: {
+        tenant_id: principal.tenantId,
+        workspace_id: principal.workspaceId,
+        user_id: principal.userId,
+        source: "codex_harness",
+        source_call_id: research.callId,
+        root_thread_id: principal.rootThreadId ?? null,
+        thread_id: research.threadId,
+        turn_id: research.turnId,
+        request_text: research.requestText,
+        top_n: readBusinessIntentTopN(workflow.preflight.businessIntent),
+        workflow_execution_id: workflow.executionId,
+        workflow_step_id: step.stepId,
+        business_intent: {
+          ...workflow.preflight.businessIntent,
+          workflow_plan_key: workflow.preflight.planKey,
+          workflow_step_id: step.stepId,
+          workflow_step_role: step.role,
+        },
+      },
+    });
+  } catch (error) {
+    const normalized = error instanceof ExternalDataServiceMcpError
+      ? error
+      : new ExternalDataServiceMcpError("SHUEHO external-data MCP workflow step failed.", "CALL_FAILED", true);
+    await externalDataControl.settle(principal, reservation.reservationId, {
+      state: "unknown",
+      upstreamCode: null,
+      upstreamMessage: normalized.message,
+      resultBytes: null,
+      responsePayload: null,
+    }).catch(() => undefined);
+    await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
+      code: "UPSTREAM_RESULT_UNKNOWN",
+      message: normalized.message,
+    });
+    return;
+  }
+  const outcome = classifyExternalDataServiceOutcome(result.payload, result.isError);
+  await externalDataControl.settle(principal, reservation.reservationId, {
+    state: outcome.settlementState,
+    upstreamCode: outcome.upstreamCode,
+    upstreamMessage: typeof result.payload.message === "string" ? result.payload.message : null,
+    resultBytes: result.resultBytes,
+    responsePayload: result.payload,
+  });
+  workflow.completedStepCount += 1;
+  workflow.nextStepIndex += 1;
+  if (!outcome.businessUsable) {
+    await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
+      code: typeof result.payload.code === "string" || typeof result.payload.code === "number"
+        ? String(result.payload.code)
+        : "WORKFLOW_STEP_FAILED",
+      message: typeof result.payload.message === "string"
+        ? result.payload.message
+        : `${marketplaceWorkflowRoleLabel(step.role)}没有形成可用业务结果。`,
+    });
+    return;
+  }
+  await advanceMarketplaceWorkflow(requestId, scope, principal, workflow, {
+    threadId: research.threadId,
+    turnId: research.turnId,
+    callId: workflowSourceCallId(workflow),
+    requestText: research.requestText,
+  });
+}
+
+async function respondWithCompletedMarketplaceWorkflow(
+  requestId: JsonRpcId,
+  principal: ExternalDataPrincipal,
+  workflow: MarketplaceWorkflowRuntime,
+  stopReason?: { code: string; message: string },
+): Promise<void> {
+  const completed = await externalDataService.completeMarketplaceProductResearch({
+    workflow_execution_id: workflow.executionId,
+    _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
+  });
+  const payload = {
+    ...completed.payload,
+    ...(stopReason ? {
+      workflow_stop_reason: stopReason,
+      instruction: "Use only the completed workflow evidence, state the exact stopped step and do not retry or substitute another data source automatically.",
+    } : {
+      instruction: "Use only the quality-checked composed workflow evidence, preserve source and metric limitations, and do not repeat any completed paid step.",
+    }),
+  };
+  codex.respondToServerRequest(requestId, {
+    success: completed.payload.success === true,
+    contentItems: [{ type: "inputText", text: JSON.stringify(payload) }],
+  });
+}
+
+function materializeWorkflowStepParameters(
+  step: MarketplaceProductResearchStep,
+  bindings: Record<string, string | number>,
+): Record<string, unknown> {
+  const params = structuredClone(step.parameterTemplate);
+  for (const [parameter, bindingName] of Object.entries(step.dynamicParameterBindings)) {
+    const value = bindings[bindingName];
+    if (value === undefined) {
+      throw new CommerceDataToolError(
+        `商品研究工作流缺少 ${bindingName}，${step.role} 步骤不会发送。`,
+        "WORKFLOW_BINDING_UNAVAILABLE",
+        "Report the missing quality-checked identifier and do not retry or use a raw provider id supplied by the model.",
+      );
+    }
+    params[parameter] = value;
+  }
+  return params;
+}
+
+function readWorkflowBindingValues(value: Record<string, unknown>): Record<string, string | number> {
+  const output: Record<string, string | number> = {};
+  for (const [key, child] of Object.entries(value)) {
+    if ((typeof child === "string" && child.length <= 500) || (typeof child === "number" && Number.isSafeInteger(child))) {
+      output[key] = child;
+    }
+  }
+  return output;
+}
+
+function marketplaceWorkflowChildCallId(
+  sourceCallId: string,
+  planKey: string,
+  step: MarketplaceProductResearchStep,
+): string {
+  const digest = createHash("sha256")
+    .update(`${sourceCallId}:${planKey}:${step.stepId}`, "utf8")
+    .digest("hex")
+    .slice(0, 20);
+  return `wf_${step.stepOrder}_${digest}`;
+}
+
+function marketplaceWorkflowApprovalRequestId(childCallId: string): string {
+  return `external_data_${childCallId}`;
+}
+
+function marketplaceWorkflowRoleLabel(role: MarketplaceProductResearchStep["role"]): string {
+  return ({ discovery: "商品搜索", detail: "商品详情", price: "商品价格", reviews: "商品评价", sku: "商品 SKU" })[role];
+}
+
+function workflowSourceCallId(workflow: MarketplaceWorkflowRuntime): string {
+  return workflow.sourceCallId;
+}
+
+async function resolveExternalDataApproval(
+  pending: PendingRequestUserInput,
+  approval: PendingExternalDataApproval,
+  answers: Record<string, { answers: string[] }>,
+): Promise<void> {
+  const selection = answers.external_data_call?.answers[0];
+  if (selection !== "允许本次调用") {
+    await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "user_denied");
+    if (approval.workflow) {
+      await externalDataService.cancelMarketplaceProductResearch({
+        workflow_execution_id: approval.workflow.executionId,
+        reason: `用户拒绝了 ${approval.workflowStep?.role ?? "pending"} 步骤。`,
+        _commerce_context: {
+          tenant_id: approval.principal.tenantId,
+          workspace_id: approval.principal.workspaceId,
+        },
+      }).catch(() => undefined);
+      await respondWithCompletedMarketplaceWorkflow(pending.id, approval.principal, approval.workflow, {
+        code: "USER_DENIED",
+        message: `用户拒绝了${approval.workflowStep ? marketplaceWorkflowRoleLabel(approval.workflowStep.role) : "当前"}调用。`,
+      });
+      return;
+    }
+    codex.respondToServerRequest(pending.id, {
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({
+            status: "cancelled",
+            endpointId: approval.endpointId,
+            instruction: "The user denied this paid external data call. Do not retry or claim that data was retrieved.",
+          }),
+        },
+      ],
+    });
+    return;
+  }
+  const activeScope = threadScopes.get(pending.threadId);
+  if (
+    !activeScope ||
+    runtimeRootKey(activeScope) !== runtimeRootKey(approval.scope) ||
+    activeScope.userId !== approval.scope.userId
+  ) {
+    await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "upstream_unavailable");
+    throw new Error("External data approval no longer belongs to the active Commerce Pilot principal.");
+  }
+  if (!isEventPipelineWritable() || !(await readRuntimeAuthorization(activeScope))) {
+    await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "upstream_unavailable");
+    throw new Error("Commerce Pilot authorization changed before the external data call.");
+  }
+  if (!isPendingDynamicToolRequest(pending.id)) {
+    await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "upstream_unavailable");
+    throw new Error("The Harness tool call ended before external-data approval was applied.");
+  }
+  await externalDataControl.approve(approval.principal, approval.reservation.reservationId);
+  if (approval.workflow && approval.workflowStep) {
+    await executeMarketplaceWorkflowStep(
+      pending.id,
+      approval.scope,
+      approval.principal,
+      { ...approval.reservation, requiresApproval: false, approvalState: "approved" },
+      approval.params,
+      approval.workflow,
+      approval.workflowStep,
+      {
+        threadId: approval.threadId,
+        turnId: approval.turnId,
+        callId: approval.callId,
+        requestText: approval.requestText,
+      },
+    );
+    return;
+  }
+  await dispatchCommerceDataCall(
+    pending.id,
+    approval.principal,
+    { ...approval.reservation, requiresApproval: false, approvalState: "approved" },
+    approval.endpointId,
+    approval.params,
+    {
+      threadId: approval.threadId,
+      turnId: approval.turnId,
+      callId: approval.callId,
+      requestText: approval.requestText,
+      businessTool: approval.businessTool,
+      businessIntent: approval.businessIntent,
+      planCoverage: approval.planCoverage,
+    },
+  );
+}
+
+async function dispatchCommerceDataCall(
+  requestId: JsonRpcId,
+  principal: ExternalDataPrincipal,
+  reservation: ExternalDataReservation,
+  endpointId: string,
+  params: Record<string, unknown>,
+  research: {
+    threadId: string;
+    turnId: string;
+    callId: string;
+    requestText: string;
+    businessTool: PendingExternalDataApproval["businessTool"];
+    businessIntent: Record<string, unknown>;
+    planCoverage: Record<string, unknown>;
+  },
+): Promise<void> {
+  await externalDataControl.dispatch(principal, reservation.reservationId, {
+    endpoint_id: endpointId,
+    params,
+  });
+  let result: ExternalDataServiceToolResult;
+  try {
+    result = await externalDataService.callEndpoint({
+      endpoint_id: endpointId,
+      params,
+      _commerce_context: {
+        tenant_id: principal.tenantId,
+        workspace_id: principal.workspaceId,
+        user_id: principal.userId,
+        source: "codex_harness",
+        source_call_id: research.callId,
+        root_thread_id: principal.rootThreadId ?? null,
+        thread_id: research.threadId,
+        turn_id: research.turnId,
+        request_text: research.requestText,
+        top_n: readBusinessIntentTopN(research.businessIntent),
+        business_intent: research.businessIntent,
+      },
+    });
+  } catch (error) {
+    const normalized = error instanceof ExternalDataServiceMcpError
+      ? error
+      : new ExternalDataServiceMcpError("SHUEHO external-data MCP call failed.", "CALL_FAILED", true);
+    let reconciliationPending = false;
+    try {
+      await externalDataControl.settle(principal, reservation.reservationId, {
+        state: "unknown",
+        upstreamCode: null,
+        upstreamMessage: normalized.message,
+        resultBytes: null,
+        responsePayload: null,
+      });
+    } catch {
+      reconciliationPending = true;
+    }
+    codex.respondToServerRequest(requestId, {
+      success: true,
+      contentItems: [
+        {
+          type: "inputText",
+          text: JSON.stringify({
+            status: "unknown",
+            businessTool: research.businessTool,
+            endpointId,
+            error: normalized.message,
+            reconciliationPending,
+            instruction: "The paid upstream result is uncertain. Do not retry automatically. Tell the user that reconciliation is required.",
+          }),
+        },
+      ],
+    });
+    return;
+  }
+
+  const { upstreamCode, providerCompleted, businessUsable, settlementState } =
+    classifyExternalDataServiceOutcome(result.payload, result.isError);
+  const upstreamMessage = typeof result.payload.message === "string" ? result.payload.message : null;
+  const acceptedEvidence = isRecord(result.payload.coverage) && typeof result.payload.coverage.acceptedEvidence === "number"
+    ? result.payload.coverage.acceptedEvidence
+    : 0;
+  let settlementError: string | null = null;
+  try {
+    await externalDataControl.settle(principal, reservation.reservationId, {
+      state: settlementState,
+      upstreamCode,
+      upstreamMessage,
+      resultBytes: result.resultBytes,
+      responsePayload: result.payload,
+    });
+  } catch {
+    settlementError = "Commerce Pilot received the upstream result, but billing reconciliation is still pending.";
+  }
+  codex.respondToServerRequest(requestId, {
+    success: true,
+    contentItems: [
+      {
+        type: "inputText",
+        text: JSON.stringify({
+          status: businessUsable ? "completed" : "failed",
+          businessTool: research.businessTool,
+          endpointId,
+          pricingStatus: reservation.pricingStatus,
+          currency: reservation.currency,
+          billableAmountMicros: providerCompleted ? reservation.billableAmountMicros : null,
+          result: result.payload,
+          researchPlan: research.planCoverage,
+          ...(settlementError ? { billingWarning: settlementError } : {}),
+          instruction: businessUsable && acceptedEvidence > 0
+            ? "Use only the returned quality-checked evidence, preserve the requested time window, metrics coverage, sources and freshness caveats, and do not repeat this paid call."
+            : businessUsable
+              ? "The paid collection completed and raw data was archived, but no evidence passed the requested time and quality gates. State that exact coverage gap and do not substitute public Web Search or retry automatically."
+            : providerCompleted
+              ? "The paid provider call completed and its raw result was archived, but SHUEHO processing did not produce a usable business result. Explain the processing state and do not retry the paid call automatically."
+              : "The upstream business call failed and should not be described as successful. Do not retry unless the user explicitly asks.",
+        }),
+      },
+    ],
+  });
+}
+
+function assertEndpointAllowed(
+  endpointId: string,
+  authorization: { allowedPlatforms: string[]; allowedEndpointIds: string[] },
+): void {
+  const platform = endpointPlatform(endpointId);
+  if (!authorization.allowedPlatforms.includes(platform)) {
+    throw new CommerceDataToolError(
+      `接口目录平台 ${platform} 未获当前工作区授权。`,
+      "EXTERNAL_DATA_ENDPOINT_PLATFORM_DENIED",
+      "The service-selected provider capability is not allowed by workspace policy. Explain the policy restriction; no paid endpoint was dispatched.",
+    );
+  }
+  if (authorization.allowedEndpointIds.length && !authorization.allowedEndpointIds.includes(endpointId)) {
+    throw new CommerceDataToolError(
+      `接口 ${endpointId} 未获当前工作区授权。`,
+      "EXTERNAL_DATA_ENDPOINT_DENIED",
+      "The service-selected provider capability is not allowed by workspace policy. Explain the policy restriction; no paid endpoint was dispatched.",
+    );
+  }
+}
+
+function respondWithCommerceDataResult(
+  requestId: JsonRpcId,
+  payload: Record<string, unknown>,
+): void {
+  codex.respondToServerRequest(requestId, {
+    success: true,
+    contentItems: [{ type: "inputText", text: JSON.stringify(payload) }],
+  });
+}
+
+function readExternalDataBrowserStatus(): Record<string, unknown> {
+  const status = externalDataService.readStatus();
+  return {
+    configured: status.configured,
+    connected: status.connected,
+    checkedAt: status.checkedAt,
+    error: status.error,
+    businessTools: [
+      "search_business_data",
+      "list_marketplace_research_platforms",
+      "get_marketplace_options",
+      "get_research_result",
+      "research_social_content",
+      "research_marketplace_products",
+    ],
+  };
+}
+
+function respondWithCommerceDataFailure(
+  event: Extract<AppServerEvent, { type: "server_request" }>,
+  error: unknown,
+): boolean {
+  if (!isRecord(event.params) || event.params.namespace !== "commerce_data") return false;
+  const tool = typeof event.params.tool === "string" ? event.params.tool : "";
+  const catalogTool = tool === "search_business_data" || tool === "list_marketplace_research_platforms" ||
+    tool === "get_marketplace_options" || tool === "get_research_result";
+  const knownError =
+    error instanceof CommerceDataToolError ||
+    error instanceof ExternalDataControlError ||
+    error instanceof ExternalDataServiceMcpError;
+  const code = knownError ? error.code : "COMMERCE_DATA_FAILED";
+  const message = knownError ? error.message : "外部数据调用失败。";
+  const instruction = error instanceof CommerceDataToolError
+    ? error.instruction
+    : catalogTool
+      ? "This read-only business-data call did not dispatch a paid endpoint. Use the exact error to correct the arguments at most once in the same turn."
+      : "Explain this exact failure reason to the user. Do not retry an uncertain or completed paid call automatically.";
+  codex.respondToServerRequest(event.id, {
+    success: false,
+    contentItems: [
+      {
+        type: "inputText",
+        text: JSON.stringify({
+          status: "failed",
+          code,
+          error: message,
+          instruction,
+        }),
+      },
+    ],
+  });
+  return true;
+}
+
+function readSocialContentResearchInput(value: Record<string, unknown>): SocialContentResearchInput {
+  const platform = typeof value.platform === "string" ? value.platform.trim().toUpperCase() : "";
+  const keyword = typeof value.keyword === "string" ? value.keyword.trim() : "";
+  const startDate = typeof value.start_date === "string" ? value.start_date.trim() : "";
+  const endDate = typeof value.end_date === "string" ? value.end_date.trim() : "";
+  const objective = value.objective === "latest_content" || value.objective === "interaction_ranked"
+    ? value.objective
+    : null;
+  const allowedMetrics = new Set(["views", "likes", "comments", "shares", "interactions"]);
+  const requestedMetrics = Array.isArray(value.requested_metrics)
+    ? value.requested_metrics.filter((metric): metric is SocialContentResearchInput["requested_metrics"][number] =>
+        typeof metric === "string" && allowedMetrics.has(metric))
+    : [];
+  const maxResults = typeof value.max_results === "number" && Number.isInteger(value.max_results)
+    ? value.max_results
+    : 0;
+  if (
+    !/^[A-Z0-9_]{2,64}$/.test(platform) || !keyword || keyword.length > 500 ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate) ||
+    !objective || !Array.isArray(value.requested_metrics) || requestedMetrics.length !== value.requested_metrics.length ||
+    new Set(requestedMetrics).size !== requestedMetrics.length || maxResults < 1 || maxResults > 100
+  ) {
+    throw new CommerceDataToolError(
+      "社交内容研究参数无效。",
+      "INVALID_SOCIAL_RESEARCH_REQUEST",
+      "Correct the business-level platform, keyword, dates, objective, requested_metrics or max_results once. No provider call was dispatched.",
+    );
+  }
+  return {
+    platform,
+    keyword,
+    start_date: startDate,
+    end_date: endDate,
+    objective,
+    requested_metrics: requestedMetrics,
+    max_results: maxResults,
+  };
+}
+
+function readMarketplaceProductResearchInput(value: Record<string, unknown>): MarketplaceProductResearchInput {
+  const platform = typeof value.platform === "string" ? value.platform.trim().toUpperCase() : "";
+  const keyword = typeof value.keyword === "string" ? value.keyword.trim() : "";
+  const localizedKeyword = value.localized_keyword === null || value.localized_keyword === undefined
+    ? null
+    : typeof value.localized_keyword === "string"
+      ? value.localized_keyword.normalize("NFKC").trim()
+      : "";
+  const market = value.market === null || value.market === undefined
+    ? null
+    : typeof value.market === "string"
+      ? value.market.trim().toUpperCase()
+      : "";
+  const tmallOnly = value.tmall_only;
+  const minPriceYuan = value.min_price_yuan === null
+    ? null
+    : typeof value.min_price_yuan === "number" && Number.isFinite(value.min_price_yuan)
+      ? value.min_price_yuan
+      : Number.NaN;
+  const maxPriceYuan = value.max_price_yuan === null
+    ? null
+    : typeof value.max_price_yuan === "number" && Number.isFinite(value.max_price_yuan)
+      ? value.max_price_yuan
+      : Number.NaN;
+  const allowedMetrics = new Set(["price_band", "sales_level", "brand_competition", "property_distribution"]);
+  const requestedMetrics = Array.isArray(value.requested_metrics)
+    ? value.requested_metrics.filter((metric): metric is MarketplaceProductResearchInput["requested_metrics"][number] =>
+        typeof metric === "string" && allowedMetrics.has(metric))
+    : [];
+  const maxResults = typeof value.max_results === "number" && Number.isInteger(value.max_results)
+    ? value.max_results
+    : 0;
+  if (
+    !/^[A-Z0-9_]{2,64}$/.test(platform) || !keyword || keyword.length > 500 ||
+    (localizedKeyword !== null && (!localizedKeyword || localizedKeyword.length > 500)) ||
+    (market !== null && !/^[A-Z0-9_-]{2,32}$/.test(market)) || typeof tmallOnly !== "boolean" ||
+    Number.isNaN(minPriceYuan) || Number.isNaN(maxPriceYuan) ||
+    (minPriceYuan !== null && minPriceYuan < 0) || (maxPriceYuan !== null && maxPriceYuan < 0) ||
+    (minPriceYuan !== null && maxPriceYuan !== null && minPriceYuan > maxPriceYuan) ||
+    !Array.isArray(value.requested_metrics) || !requestedMetrics.length || requestedMetrics.length !== value.requested_metrics.length ||
+    new Set(requestedMetrics).size !== requestedMetrics.length || maxResults < 1 || maxResults > 100
+  ) {
+    throw new CommerceDataToolError(
+      "商品研究参数无效。",
+      "INVALID_MARKETPLACE_RESEARCH_REQUEST",
+      "Correct the business-level platform, keyword, marketplace filters, requested_metrics or max_results once. No provider call was dispatched.",
+    );
+  }
+  return {
+    platform,
+    keyword,
+    localized_keyword: localizedKeyword,
+    market,
+    tmall_only: tmallOnly,
+    min_price_yuan: minPriceYuan,
+    max_price_yuan: maxPriceYuan,
+    requested_metrics: requestedMetrics,
+    max_results: maxResults,
+  };
+}
+
+function endpointPlatform(endpointId: string): string {
+  return endpointId.slice(0, endpointId.indexOf("."));
+}
+
+function readExternalDataApprovalMode(value: unknown): ExternalDataApprovalMode | null {
+  return value === "always_ask" || value === "task" || value === "policy" ? value : null;
+}
+
+function formatExternalDataApprovalDescription(
+  reservation: ExternalDataReservation,
+  params: Record<string, unknown>,
+  researchSummary: string,
+): string {
+  const price = reservation.billableAmountMicros === null
+    ? "供应商单价尚未配置，可能产生费用"
+    : `预计计费 ${formatMicros(reservation.billableAmountMicros, reservation.currency)}`;
+  const keys = externalDataParameterKeys(params);
+  return `${researchSummary}；${price}；仅发送字段 ${keys.join("、") || "无"}，不发送任何凭据。`;
+}
+
+function readBusinessIntentTopN(intent: Record<string, unknown>): number {
+  const value = intent.requested_top_n;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 500 ? value : 50;
+}
+
+function formatMicros(value: number, currency: string): string {
+  return `${currency} ${(value / 1_000_000).toFixed(4)}`;
+}
+
 async function resolveSkillPublishApproval(
   pending: PendingRequestUserInput,
   approval: PendingSkillPublishApproval,
@@ -3076,6 +4358,9 @@ async function resolveSkillPublishApproval(
   }
   if (!isEventPipelineWritable() || !(await readRuntimeAuthorization(activeScope))) {
     throw new Error("Commerce Pilot authorization changed before Skill publication.");
+  }
+  if (!isPendingDynamicToolRequest(pending.id)) {
+    throw new Error("The Harness tool call ended before Skill publication was approved.");
   }
   const published = await managedSkills.publish(approval.draft, activeScope);
   const inventory = await codex.request(
@@ -3127,28 +4412,6 @@ async function resolveSkillPublishApproval(
   });
 }
 
-async function injectUserInputAnswer(threadId: string, answerMessage: string): Promise<boolean> {
-  try {
-    await codex.request(
-      "thread/inject_items",
-      {
-        threadId,
-        items: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: answerMessage }],
-          },
-        ],
-      },
-      10_000,
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function skillCatalogContains(value: unknown, name: string): boolean {
   if (!isRecord(value) || !Array.isArray(value.data)) return false;
   const entry = value.data.find((item) => isRecord(item) && item.cwd === config.runtimeRoot);
@@ -3157,6 +4420,13 @@ function skillCatalogContains(value: unknown, name: string): boolean {
       Array.isArray(entry.skills) &&
       entry.skills.some((skill) => isRecord(skill) && skill.name === name && skill.enabled !== false),
   );
+}
+
+function isPendingDynamicToolRequest(requestId: JsonRpcId): boolean {
+  const expectedId = String(requestId);
+  return codex
+    .listPendingServerRequests()
+    .some((request) => String(request.id) === expectedId && request.method === "item/tool/call");
 }
 
 function createCommerceImageToolSpec(): Record<string, unknown> {
@@ -3239,8 +4509,153 @@ function createCommerceSkillToolSpec(): Record<string, unknown> {
   };
 }
 
+function createCommerceDataToolSpec(): Record<string, unknown> {
+  return {
+    type: "namespace",
+    name: "commerce_data",
+    description:
+      "Application-governed commerce research through the SHUEHO external-data service. Use business-level tools only; provider endpoints, schemas and parameters are selected and validated inside the service. Paid collection always passes Commerce Pilot authorization, approval, quota, billing and audit controls.",
+    tools: [
+      {
+        type: "function",
+        name: "search_business_data",
+        description:
+          "Search previously curated workspace evidence with Elasticsearch BM25, pgvector HNSW, and local Qwen3 reranking. This is read-only and does not incur a provider fee. Use it before considering a new paid collection when existing evidence may be sufficient.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            query: { type: "string", description: "Concise business-evidence query." },
+            limit: { type: "integer", minimum: 1, maximum: 20, default: 10 },
+          },
+          required: ["query"],
+        },
+      },
+      {
+        type: "function",
+        name: "list_marketplace_research_platforms",
+        description:
+          "Read the authoritative database-backed list of marketplaces that currently have a complete, active keyword-product research workflow. This is free and read-only. Call it before proposing platform choices, before get_marketplace_options, and before research_marketplace_products. Platform questions must contain only exact ids and labels returned by this tool; never add a familiar marketplace from general knowledge.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        type: "function",
+        name: "get_marketplace_options",
+        description:
+          "Read the current database-backed country/site choices for one exact platform returned by list_marketplace_research_platforms, without calling a paid provider. A missing workflow returns available=false. When requiresSelection is true and the user did not specify a market, use native request_user_input with exactly the returned options. Never guess or embed a platform or site option list.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            platform: { type: "string", description: "Requested marketplace, for example SHOPEE, AMAZON or TIKTOK_SHOP." },
+          },
+          required: ["platform"],
+        },
+      },
+      {
+        type: "function",
+        name: "get_research_result",
+        description: "Read one previously completed curated research result by the id returned from a research tool. No raw warehouse rows are exposed.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            research_request_id: { type: "string", description: "UUID returned by a completed research tool." },
+          },
+          required: ["research_request_id"],
+        },
+      },
+      {
+        type: "function",
+        name: "research_social_content",
+        description:
+          "Collect public social-platform content for one explicit business objective. Use latest_content for exact date-bounded discovery and interaction_ranked for provider-ranked engagement evidence; when both are materially required, call each objective separately and respect each paid-call approval. The service selects the provider endpoint, validates parameters, archives the complete response, enforces the requested date window and returns only quality-checked evidence. Never retry a completed or uncertain call.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            platform: {
+              type: "string",
+              description: "Requested public content platform in uppercase form, for example DOUYIN or XIAOHONGSHU.",
+            },
+            keyword: { type: "string", description: "Concise product, category, brand or topic keyword." },
+            start_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive start date in Asia/Shanghai, YYYY-MM-DD." },
+            end_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive end date in Asia/Shanghai, YYYY-MM-DD." },
+            objective: {
+              type: "string",
+              enum: ["latest_content", "interaction_ranked"],
+              description: "Business evidence objective, never a provider endpoint name.",
+            },
+            requested_metrics: {
+              type: "array",
+              items: { type: "string", enum: ["views", "likes", "comments", "shares", "interactions"] },
+              uniqueItems: true,
+              maxItems: 5,
+              description: "Interaction metrics materially required by the user; use an empty array when none are required.",
+            },
+            max_results: { type: "integer", minimum: 1, maximum: 100, description: "Maximum curated evidence rows requested." },
+          },
+          required: ["platform", "keyword", "start_date", "end_date", "objective", "requested_metrics", "max_results"],
+        },
+      },
+      {
+        type: "function",
+        name: "research_marketplace_products",
+        description:
+          "Collect public marketplace product evidence for prices, sales levels, brands and product properties. Supply only business-level marketplace filters; the SHUEHO service selects and validates the provider endpoint, archives every returned source list and returns quality-checked products and aggregates. This may incur a fee and must never be retried after a completed or uncertain result.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            platform: { type: "string", description: "Requested marketplace in uppercase form, for example TAOBAO." },
+            keyword: { type: "string", description: "Concise product or category keyword." },
+            localized_keyword: {
+              type: ["string", "null"],
+              description: "Agent-generated concise search term in the selected market's catalog language. Preserve keyword as the user's original concept. Required when get_marketplace_options returns requiresSelection=true; use null for marketplaces without a market dimension.",
+            },
+            market: {
+              type: ["string", "null"],
+              description: "Optional country or marketplace site code, for example US, JP, TW, ID or TH. Use null when the platform has no market dimension.",
+            },
+            tmall_only: { type: "boolean", description: "Whether to limit results to Tmall sellers." },
+            min_price_yuan: { type: ["number", "null"], minimum: 0, description: "Optional minimum price in CNY; use null when absent." },
+            max_price_yuan: { type: ["number", "null"], minimum: 0, description: "Optional maximum price in CNY; use null when absent." },
+            requested_metrics: {
+              type: "array",
+              items: { type: "string", enum: ["price_band", "sales_level", "brand_competition", "property_distribution"] },
+              minItems: 1,
+              maxItems: 4,
+              uniqueItems: true,
+              description: "Business metrics materially required by the user.",
+            },
+            max_results: { type: "integer", minimum: 1, maximum: 100, description: "Maximum curated product evidence rows requested." },
+          },
+          required: ["platform", "keyword", "localized_keyword", "market", "tmall_only", "min_price_yuan", "max_price_yuan", "requested_metrics", "max_results"],
+        },
+      },
+    ],
+  };
+}
+
 function createCommerceDynamicToolSpecs(): Record<string, unknown>[] {
-  return [createCommerceImageToolSpec(), createCommerceSkillToolSpec()];
+  return [
+    createCommerceImageToolSpec(),
+    createCommerceSkillToolSpec(),
+    ...(externalDataService.readStatus().connected && externalDataControl.configured
+      ? [createCommerceDataToolSpec()]
+      : []),
+  ];
 }
 
 function createRuntimeRequestConfig(): Record<string, unknown> {
@@ -3268,6 +4683,22 @@ function createRuntimeDeveloperInstructions(): string {
     "The current tool catalog is authoritative over older conversation messages that claimed Web Search was missing.",
     "Use that MCP Web Search tool whenever the user explicitly asks to search the web or when current external information is required. Do not look for a dynamic tool named `commerce_web.search`. Cite returned source URLs and never claim Web Search is unavailable while the MCP tool is present.",
     "If one search call fails or times out, retry once with a shorter and more specific query before reporting the provider failure. Do not tell the user to enable, install, or register Web Search when the tool is already present.",
+    ...(externalDataService.readStatus().connected && externalDataControl.configured
+      ? [
+          "Commerce Pilot provides the host namespace commerce_data through the SHUEHO external-data MCP service; the Gateway never connects to JustOneAPI MCP.",
+          "Use search_business_data first when previously curated workspace evidence may answer the request; it is read-only and free of provider charges. Use get_research_result to revisit an id returned by a prior collection.",
+          "Use research_social_content for public social-platform content evidence. Supply only the business platform, keyword, inclusive Asia/Shanghai dates, objective, required metrics and result limit; never choose or mention a provider endpoint or provider parameter.",
+          "Use objective latest_content for exact date-bounded discovery and interaction_ranked for provider-ranked engagement evidence. If the user materially requires both, each objective is a separate governed paid call and each approval must be respected.",
+          "Use research_marketplace_products for marketplace prices, sales levels, brand competition, property distributions and keyword-based product details. Supply only the marketplace, keyword, optional country/site market code, Tmall and price filters, required metrics and result limit. Never ask the user for itemId, ASIN, shopId or another provider identifier: SHUEHO discovers a quality-checked identifier and executes the bounded search-to-detail workflow internally.",
+          "Before proposing or asking about marketplace scope, call the free list_marketplace_research_platforms tool. Build native request_user_input platform choices only from its exact database-returned ids and labels. Never add a familiar marketplace from general knowledge, memory, geography, language, or prior conversation; an absent platform is unavailable and must not appear as a selectable or researched platform.",
+          "For each selected platform, call the free get_marketplace_options tool using the exact catalog id. If available=false, do not continue with that platform. If requiresSelection is true and the user omitted the market, use native request_user_input with the exact returned labels and codes; when two or three options are returned, include every option in the card. If the user's requested site is absent, clearly state that it is unsupported and do not call the paid tool. Never hard-code, memorize, guess, or silently default market options.",
+          "When get_marketplace_options returns requiresSelection=true, generate one concise localized_keyword in the selected market's catalog language. Preserve keyword as the user's original concept and do not ask the user to translate. A missing localized keyword is a free preflight failure and must be corrected before any paid dispatch.",
+          "The SHUEHO service deterministically selects and validates the provider capability before any reservation. If it returns a capability gap, zero date-valid evidence or missing metrics, report that exact limitation; do not silently substitute public Web Search or invent values.",
+          "A research_social_content or research_marketplace_products collection may incur a fee and is not idempotent for billing. Never retry an uncertain or completed paid call automatically.",
+          "External data results can be incomplete, delayed, or affected by third-party platform changes. State the platform, requested scope, freshness, and material limitations in research outputs.",
+          "Commerce Pilot, SHUEHO service, and JustOneAPI credentials are never user inputs and must never be requested, displayed, or included in tool parameters.",
+        ]
+      : []),
   ].join(" ");
 }
 

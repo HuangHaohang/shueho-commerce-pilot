@@ -28,7 +28,7 @@ This model is informed by OpenAI's documented Enterprise workspace, roles, group
 
 ## Implemented Data Model
 
-The current Enterprise schema is migrations `001` through `011`. Versioned migrations are applied by `npm run auth:migrate` under a PostgreSQL advisory lock:
+The current Enterprise schema is migrations `001` through `030`. Versioned migrations are applied by `npm run auth:migrate` under a PostgreSQL advisory lock:
 
 - `001` creates the tenant/workspace/RBAC/contract/thread/usage/lease/audit foundation;
 - `002` separates organization from tenant and adds tenant-wide admission scope;
@@ -41,6 +41,20 @@ The current Enterprise schema is migrations `001` through `011`. Versioned migra
 - `009` adds database-backed per-user API buckets for thread, turn, queue, compaction, invitation, workspace, and membership mutation limits.
 - `010` aligns built-in read-only role promises with implemented surfaces and assigns finite default monthly contract limits.
 - `011` adds audited missing-usage reconciliation fields and removes tenant-only promises from the workspace-owner role.
+- `012` through `017` add generated task titles, Task Recipe metadata, category grouping, durable user-input display history, deletion jobs, and deterministic category correction.
+- `018` adds governed external-data policy, effective rate cards, paid-call accounting, hashed Commerce MCP tokens, RLS, permissions, and market-research recipe metadata.
+- `019` hardens the MCP Token authentication function against PL/pgSQL output-column ambiguity and preserves least-privilege execution grants.
+- `020` adds legal holds and a tenant-pinned external-data audit-retention function.
+- `021` adds a per-Turn paid-call cap and explicit permanent retention for external-data audit/billing metadata without persisting upstream result bodies.
+- `022` adds immutable JustOneAPI pricing-import receipts and the active provider endpoint/price master.
+- `023` represents unavailable provider endpoints with nullable prices while requiring positive prices for callable endpoints.
+- `024` removes hard-coded platform defaults so new workspace policies start empty and select only imported provider data.
+- `025` makes provider master data read-only to the long-running application role; only the migration/operator credential can import or replace snapshots.
+- `026` adds tenant/user-scoped current Agent-message feedback plus an append-only feedback-event history keyed to authoritative Harness thread, Turn, and message-item ids.
+- `027` adds the independently retained raw JustOneAPI request/response archive, payload hashes, legal hold, RLS and archive retention worker function.
+- `028` removes all product read/delete permissions and keeps the raw archive SQL-only.
+- `029` adds SQL-only `/api/search/v1` request indexes and a query view over stable request and response-envelope fields.
+- `030` reads provider `requestId` and `recordTime` from either the direct response envelope or the MCP `raw` envelope and backfills existing archives.
 
 | Area | Primary records | Boundary |
 | --- | --- | --- |
@@ -52,10 +66,15 @@ The current Enterprise schema is migrations `001` through `011`. Versioned migra
 | Commercial terms | `commerce_enterprise_contract` | Seats, workspaces, monthly limits, concurrency |
 | Runtime placement | `commerce_tenant_runtime` | Dedicated runtime identity and readiness |
 | Conversations | `commerce_agent_thread` | Tenant, workspace, creator, visibility |
+| Reply feedback | `commerce_agent_message_feedback` and event history | Current rating plus append-only quality signals without duplicating reply text |
 | Metering | `commerce_agent_usage_event` | Immutable provider-response usage rows |
 | Concurrency | `commerce_agent_turn_lease` | Reserved/active/released/expired turns |
 | Terminal ordering | `commerce_agent_turn_completion` | Idempotent terminal event and stale-update protection |
 | Audit | `commerce_enterprise_audit_event` | Tenant/workspace-scoped security events |
+| External data policy | `commerce_external_data_policy` and rate cards | Platform/endpoint allowlist, approval mode, call/spend limits |
+| External data billing | `commerce_external_data_call` | Reservation, approval, dispatch, upstream result and price state |
+| External data warehouse | `commerce_external_data_archive` and SQL-only search view | Complete request/response JSON retained independently from conversation deletion |
+| External MCP access | `commerce_mcp_access_token` | Hashed, revocable, workspace-bound customer credentials |
 | Replay protection | `commerce_idempotency_record` and turn request ids | Tenant-scoped idempotency |
 
 The current access path fails closed on organization, tenant, contract term, workspace, membership, ownership, and permission state:

@@ -12,6 +12,9 @@ const {
   markThreadDeletionItem,
   requeueThreadDeletionJob,
 } = await import("../lib/agent/thread-deletion-jobs");
+const { shouldRetryThreadDeletionGatewayStatus } = await import(
+  "../lib/agent/thread-deletion-worker-policy"
+);
 const { deleteAgentThreadRecord } = await import("../lib/agent/thread-ownership");
 const { getAuthDatabase } = await import("../lib/auth/database");
 
@@ -20,6 +23,13 @@ const gatewayToken = process.env.COMMERCE_GATEWAY_INTERNAL_TOKEN?.trim() || null
 const tenantPin = process.env.COMMERCE_RUNTIME_TENANT_ID?.trim() || null;
 const pollIntervalMs = 1_000;
 let stopping = false;
+
+class RetryableThreadDeletionInfrastructureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RetryableThreadDeletionInfrastructureError";
+  }
+}
 
 process.once("SIGINT", () => {
   stopping = true;
@@ -46,18 +56,32 @@ try {
       for (const threadId of threadIds) {
         await markThreadDeletionItem(scope, job.id, threadId, "running");
         try {
-          const response = await fetch(new URL(`/api/threads/${encodeURIComponent(threadId)}`, gatewayBase), {
-            method: "DELETE",
-            headers: gatewayHeaders(scope),
-            signal: AbortSignal.timeout(90_000),
-          });
+          let response: Response;
+          try {
+            response = await fetch(new URL(`/api/threads/${encodeURIComponent(threadId)}`, gatewayBase), {
+              method: "DELETE",
+              headers: gatewayHeaders(scope),
+              signal: AbortSignal.timeout(90_000),
+            });
+          } catch (error) {
+            throw new RetryableThreadDeletionInfrastructureError(
+              error instanceof Error ? error.message : "Gateway request failed.",
+            );
+          }
           const payload = (await response.json().catch(() => null)) as { error?: unknown } | null;
           if (!response.ok) {
-            throw new Error(typeof payload?.error === "string" ? payload.error : `Gateway returned HTTP ${response.status}.`);
+            const message = typeof payload?.error === "string"
+              ? payload.error
+              : `Gateway returned HTTP ${response.status}.`;
+            if (shouldRetryThreadDeletionGatewayStatus(response.status)) {
+              throw new RetryableThreadDeletionInfrastructureError(message);
+            }
+            throw new Error(message);
           }
           await deleteAgentThreadRecord(threadId, scope);
           await markThreadDeletionItem(scope, job.id, threadId, "deleted");
         } catch (error) {
+          if (error instanceof RetryableThreadDeletionInfrastructureError) throw error;
           await markThreadDeletionItem(
             scope,
             job.id,
@@ -75,6 +99,7 @@ try {
         error instanceof Error ? error.message : "Deletion job execution failed.",
       ).catch(() => undefined);
       console.error(`Thread deletion job ${job.id} was requeued.`);
+      await sleep(5_000);
     }
   }
 } finally {

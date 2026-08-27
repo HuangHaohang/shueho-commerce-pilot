@@ -52,7 +52,7 @@ Any Agent-related pull request must answer all of these:
 
 - Which native App Server API owns the lifecycle?
 - Are native thread/Turn/item events preserved?
-- Are approvals or `request_user_input` server requests preserved?
+- Are native approvals and `request_user_input` server requests preserved, without application code fabricating either protocol?
 - Does the browser avoid App Server credentials and protocol authority?
 - Can browser input override `cwd`, sandbox, provider, developer instructions, tools, Skill paths, or runtime scope? The answer must be no.
 - Are unknown tools and server requests rejected?
@@ -78,6 +78,7 @@ If the design introduces a new custom agent loop, stop. Reframe it as product lo
 - Runtime queries must use the least-privilege role and tenant context; migration credentials exist only in one-shot jobs.
 - Never log secrets, prompts, attachments, tool payloads, or PII in audit events.
 - External writes need application authorization, approval where required, idempotency, audit, and readback.
+- Paid external reads are also side effects: preserve provider credential isolation, budget reservation, approval evidence, exact-once dispatch, pricing state, audit retention, and ambiguous-result reconciliation.
 
 ## Working With Parallel Human/AI Changes
 

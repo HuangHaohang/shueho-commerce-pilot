@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "@/lib/agent/skill-invocation";
+import {
+  listAgentMessageFeedback,
+  type AgentMessageFeedback,
+} from "@/lib/agent/message-feedback";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
 import {
@@ -13,6 +17,8 @@ import {
   type AgentUserInputAnswer,
 } from "@/lib/agent/user-input-answers";
 import { readWebSourcesFromToolItem } from "@/lib/agent/web-sources";
+import { reconcileActivityStatus } from "@/lib/agent/request-user-input-lifecycle";
+import { readDynamicToolActivity, readMcpToolActivity } from "@/lib/agent/tool-activity";
 import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
 
 export async function GET(request: Request, routeContext: { params: Promise<{ threadId: string }> }) {
@@ -46,8 +52,11 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
         { status },
       );
     }
-    const userInputAnswers = await listAgentUserInputAnswers(enterpriseContext, threadId);
-    const normalized = normalizeThreadHistory(payload, record, userInputAnswers);
+    const [userInputAnswers, messageFeedback] = await Promise.all([
+      listAgentUserInputAnswers(enterpriseContext, threadId),
+      listAgentMessageFeedback(enterpriseContext, threadId),
+    ]);
+    const normalized = normalizeThreadHistory(payload, record, userInputAnswers, messageFeedback);
     await updateAgentThreadStatus(
       threadId,
       enterpriseContext,
@@ -73,6 +82,7 @@ function normalizeThreadHistory(
   payload: Record<string, unknown>,
   record: Awaited<ReturnType<typeof getAgentThreadForUser>>,
   userInputAnswers: AgentUserInputAnswer[],
+  messageFeedback: AgentMessageFeedback[],
 ) {
   const result = isRecord(payload.result) ? payload.result : null;
   const thread = result && isRecord(result.thread) ? result.thread : null;
@@ -90,6 +100,9 @@ function normalizeThreadHistory(
   const messages: Array<Record<string, unknown>> = [];
   const activities: Array<Record<string, unknown>> = [];
   const images: Array<Record<string, unknown>> = [];
+  const feedbackByMessageItemId = new Map(
+    messageFeedback.map((feedback) => [feedback.messageItemId, feedback.rating]),
+  );
   let sequence = 0;
 
   for (const turn of turns) {
@@ -161,6 +174,7 @@ function normalizeThreadHistory(
           role: "assistant",
           content: item.text,
           phase: item.phase === "commentary" || item.phase === "final_answer" ? item.phase : null,
+          feedback: feedbackByMessageItemId.get(id) ?? null,
           status: "completed",
         });
       } else {
@@ -241,12 +255,9 @@ function normalizeActivity(
   sequence: number,
   turnRunning: boolean,
 ) {
-  const status =
-    item.status === "failed"
-      ? "failed"
-      : item.status === "inProgress" || (item.type === "contextCompaction" && turnRunning)
-        ? "running"
-        : "completed";
+  const status = item.type === "contextCompaction" && turnRunning
+    ? "running"
+    : reconcileActivityStatus(item.status, turnRunning);
   const durationMs = typeof item.durationMs === "number" ? item.durationMs : null;
   if (item.type === "commandExecution") {
     return { id, sequence, turnId, kind: "command", label: status === "failed" ? "命令未完成" : "运行了命令", durationMs, status };
@@ -255,35 +266,30 @@ function normalizeActivity(
     return { id, sequence, turnId, kind: "file", label: status === "failed" ? "文件操作未完成" : "编辑了文件", durationMs, status };
   }
   if (item.type === "dynamicToolCall") {
-    const namespace = typeof item.namespace === "string" ? item.namespace : "";
-    const tool = typeof item.tool === "string" ? item.tool : "工具";
-    const sources = namespace === "commerce_web" ? readWebSourcesFromToolItem(item) : [];
+    const metadata = readDynamicToolActivity(item);
     return {
       id,
       sequence,
       turnId,
-      kind: namespace === "commerce_image" ? "image" : namespace === "commerce_web" ? "search" : "tool",
-      label: namespace === "commerce_web" ? "完成了搜索" : "调用了工具",
-      detail: namespace ? `${namespace}.${tool}` : tool,
+      kind: metadata.kind,
+      label: metadata.isWebSearch ? "完成了搜索" : "调用了工具",
+      ...(metadata.detail ? { detail: metadata.detail } : {}),
       durationMs,
-      ...(sources.length > 0 ? { sources } : {}),
+      ...(metadata.sources.length > 0 ? { sources: metadata.sources } : {}),
       status,
     };
   }
   if (item.type === "mcpToolCall") {
-    const server = typeof item.server === "string" ? item.server : "";
-    const tool = typeof item.tool === "string" ? item.tool : "";
-    const isWebSearch = server === "commerce_web" && tool === "search";
-    const sources = isWebSearch ? readWebSourcesFromToolItem(item) : [];
+    const metadata = readMcpToolActivity(item);
     return {
       id,
       sequence,
       turnId,
-      kind: isWebSearch ? "search" : "tool",
-      label: isWebSearch ? "完成了搜索" : "调用了连接器",
-      detail: isWebSearch ? "commerce_web.search" : tool,
+      kind: metadata.kind,
+      label: metadata.isWebSearch ? "完成了搜索" : "调用了连接器",
+      ...(metadata.detail ? { detail: metadata.detail } : {}),
       durationMs,
-      ...(sources.length > 0 ? { sources } : {}),
+      ...(metadata.sources.length > 0 ? { sources: metadata.sources } : {}),
       status,
     };
   }

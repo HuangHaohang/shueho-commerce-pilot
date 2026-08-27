@@ -118,7 +118,7 @@ The browser cannot bypass the Agent boundary because no direct BFF or Gateway im
 
 ## Web Search
 
-Commerce Pilot exposes provider-backed Web Search as the managed `commerce_web.search` MCP tool. The MCP server calls the same configured provider and returns grounded content plus source URLs:
+Commerce Pilot exposes provider-backed Web Search as the managed `commerce_web.search` MCP tool. The MCP server calls the same configured provider with the dedicated `COMMERCE_WEB_SEARCH_MODEL` and returns grounded content plus source URLs:
 
 ```text
 commerce_web.search MCP -> POST /v1/responses
@@ -130,7 +130,7 @@ The Gateway does not scrape arbitrary pages with deployment-host shell commands.
 
 The MCP capability comes from app-owned config rather than `dynamicTools`, because current App Server versions only accept dynamic tools at `thread/start`. Persisted-thread reads execute managed resume before `thread/read`, so the current MCP catalog is loaded for old conversations without rewriting history. `PreToolUse` and `PostToolUse` Hooks allow and audit the MCP tool name while recording only lifecycle metadata; queries and results are not written to the Hook audit log. Native `web_search = "live"` remains enabled as a provider-supported capability, and the old dynamic handler remains only for already-persisted threads that contain it.
 
-Gateway calls `config/mcpServer/reload` and validates `mcpServerStatus/list` before accepting turns. Web Search uses one bounded transient retry: the first attempt is capped at 45 seconds, and later attempts use `COMMERCE_WEB_SEARCH_TIMEOUT_MS` (default 90 seconds). Set `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS` from 1 to 3; the default is 2. Generated `tool_timeout_sec` is derived from the total provider attempt budget plus a 15-second protocol margin.
+Gateway calls `config/mcpServer/reload` and validates `mcpServerStatus/list` before accepting turns. The default Web Search model is `gpt-5.6-luna`, with a 30-second timeout and one attempt. `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS` still accepts 1 to 3 for controlled deployments, but hidden retries are discouraged: a failed MCP result carries a stable reason so the Harness can issue at most one shorter query. Generated `tool_timeout_sec` is derived from the configured provider attempt budget plus a 15-second protocol margin.
 
 The managed MCP returns provider response id, model, and usage in application-owned `_meta.commercePilotUsage`; Gateway records it as `commerce_web_mcp`. The legacy host compatibility path records `commerce_web_tool`. If the provider omits usage, the immutable request row is retained with `usage_status=missing` and zero placeholder counts so operations can alert and reconcile it later.
 
