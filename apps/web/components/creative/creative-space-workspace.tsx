@@ -162,7 +162,7 @@ function ContentProjectList({ projects, onCreate, onOpenProject }: { projects: C
   }, [projects, query]);
 
   return (
-    <section className="mx-auto w-full max-w-[1040px] px-5 py-10 md:px-10 md:py-14">
+    <section className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
       <PageIntro
         title="内容项目"
         description="每个项目围绕一个核心选题持续创作，脚本、剪辑和平台版本都保留在同一上下文中。"
@@ -240,7 +240,7 @@ function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: Creativ
   }
 
   return (
-    <section className="mx-auto w-full max-w-[840px] px-5 py-10 md:px-10 md:py-14">
+    <section className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
       <button type="button" className="mb-8 inline-flex items-center gap-2 text-sm text-[var(--cp-text-muted)] hover:text-[var(--cp-text)]" onClick={onCancel}>
         <ArrowLeft className="size-4" />返回内容项目
       </button>
@@ -329,7 +329,7 @@ function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel
   const [chapter, setChapter] = useState<CreativeProjectChapter>(initialChapter);
   return (
     <article className="min-h-full">
-      <div className="mx-auto w-full max-w-[1120px] px-5 pt-8 md:px-10 md:pt-10">
+      <div className="w-full px-5 pt-8 md:px-8 md:pt-10 xl:px-10">
         <button type="button" className="inline-flex items-center gap-2 text-sm text-[var(--cp-text-muted)] hover:text-[var(--cp-text)]" onClick={onBack}>
           <ArrowLeft className="size-4" />{backLabel}
         </button>
@@ -345,7 +345,7 @@ function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel
       </div>
 
       <nav className="sticky top-0 z-10 border-y border-[var(--cp-border-subtle)] bg-[rgba(255,255,255,0.96)]" aria-label="项目创作章节">
-        <div className="cp-hidden-scrollbar mx-auto flex w-full max-w-[1120px] gap-6 overflow-x-auto px-5 md:px-10">
+        <div className="cp-hidden-scrollbar flex w-full gap-6 overflow-x-auto px-5 md:px-8 xl:px-10">
           {creativeProjectChapters.map((item) => (
             <button
               key={item}
@@ -364,7 +364,7 @@ function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel
         </div>
       </nav>
 
-      <div className="mx-auto w-full max-w-[920px] px-5 py-10 md:px-10 md:py-14">
+      <div className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
         {chapter === "概览" ? <ProjectOverview project={project} /> : <ChapterPlaceholder chapter={chapter} project={project} />}
       </div>
     </article>
@@ -430,7 +430,7 @@ function ChapterPlaceholder({ chapter, project }: { chapter: Exclude<CreativePro
 
 function InspirationWorkspace({ snapshot }: { snapshot: CreativeSpaceSnapshot }) {
   return (
-    <section className="mx-auto w-full max-w-[960px] px-5 py-10 md:px-10 md:py-14">
+    <section className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
       <PageIntro title="灵感与案例" description="先留住值得继续看的问题、画面和表达方法，未来可以引用到具体内容项目。" />
       <div className="mt-7 flex flex-wrap gap-2 text-xs text-[var(--cp-text-muted)]" aria-label="灵感内容类型">
         {["灵感", "参考视频", "案例", "用户评论", "项目引用"].map((label) => <span key={label} className="rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] px-3 py-2">{label}</span>)}
@@ -457,7 +457,7 @@ function AiToolbox({ onOpenCopywriting }: { onOpenCopywriting: () => void }) {
     { label: "视频生成", description: "生成视频草稿与视觉片段", icon: Video, available: false },
   ];
   return (
-    <section className="mx-auto w-full max-w-[900px] px-5 py-10 md:px-10 md:py-14">
+    <section className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
       <PageIntro title="AI 工具箱" description="适合临时、独立的创作需求。正式内容生产仍建议从内容项目开始。" />
       <div className="mt-8 border-t border-[var(--cp-border-subtle)]">
         {tools.map((tool) => (
