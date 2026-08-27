@@ -10,7 +10,8 @@ describe("my creative dashboard adapter", () => {
 
     expect(dashboard.focuses[0].projectName).toBe(projects[0].name);
     expect(dashboard.focuses[0].sourceTask).toBe(projects[0].linkedTask?.name);
-    expect(dashboard.summaries.map((summary) => summary.id)).toEqual(["active", "pending", "output"]);
+    expect(dashboard.summaries.map((summary) => summary.id)).toEqual(["pending", "today", "overdue", "risk"]);
+    expect(dashboard.stages.reduce((total, stage) => total + stage.count, 0)).toBe(dashboard.summaries[0].value);
     expect(dashboard.focuses[0].platforms).toEqual(projects[0].platforms);
     expect(dashboard.actions.every((action) => projects.some((project) => project.id === action.projectId))).toBe(true);
   });
@@ -28,6 +29,7 @@ describe("my creative dashboard adapter", () => {
     expect(editorDashboard.actions[0].stage).toBe("剪辑");
     expect(filtered.actions.length).toBeGreaterThan(0);
     expect(filtered.actions.every((action) => action.stage === "剪辑")).toBe(true);
+    expect(filtered.actions[0].chapter).toBe("剪辑");
   });
 
   it("applies time, role, and search filters consistently", () => {

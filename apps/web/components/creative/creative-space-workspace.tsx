@@ -33,7 +33,12 @@ type CreativeSection = "my-work" | "projects" | "inspiration" | "toolbox";
 type CreativeRoute =
   | { kind: "section"; section: CreativeSection }
   | { kind: "create-project" }
-  | { kind: "project"; projectId: string };
+  | {
+      kind: "project";
+      projectId: string;
+      chapter?: CreativeProjectChapter;
+      returnSection: "my-work" | "projects";
+    };
 
 const sectionItems: Array<{ id: CreativeSection; label: string }> = [
   { id: "my-work", label: "我的创作" },
@@ -56,7 +61,7 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywritin
   function createProject(input: CreateCreativeProjectInput) {
     const project = creativeSpaceAdapter.createProject(input);
     setSnapshot(creativeSpaceAdapter.getSnapshot());
-    setRoute({ kind: "project", projectId: project.id });
+    setRoute({ kind: "project", projectId: project.id, returnSection: "projects" });
   }
 
   const selectedProject =
@@ -99,20 +104,28 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywritin
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {route.kind === "section" && route.section === "my-work" ? (
-          <MyCreativeDashboardPage projects={snapshot.projects} onOpenProject={(projectId) => setRoute({ kind: "project", projectId })} />
+          <MyCreativeDashboardPage
+            projects={snapshot.projects}
+            onOpenProject={(projectId, chapter) => setRoute({ kind: "project", projectId, chapter, returnSection: "my-work" })}
+          />
         ) : null}
         {route.kind === "section" && route.section === "projects" ? (
           <ContentProjectList
             projects={snapshot.projects}
             onCreate={() => setRoute({ kind: "create-project" })}
-            onOpenProject={(projectId) => setRoute({ kind: "project", projectId })}
+            onOpenProject={(projectId) => setRoute({ kind: "project", projectId, returnSection: "projects" })}
           />
         ) : null}
         {route.kind === "create-project" ? (
           <ProjectCreateForm snapshot={snapshot} onCancel={() => openSection("projects")} onCreate={createProject} />
         ) : null}
         {route.kind === "project" && selectedProject ? (
-          <ContentProjectWorkspace project={selectedProject} onBack={() => openSection("projects")} />
+          <ContentProjectWorkspace
+            project={selectedProject}
+            initialChapter={route.chapter}
+            backLabel={route.returnSection === "my-work" ? "我的创作" : "内容项目"}
+            onBack={() => openSection(route.returnSection)}
+          />
         ) : null}
         {route.kind === "section" && route.section === "inspiration" ? (
           <InspirationWorkspace snapshot={snapshot} />
@@ -312,13 +325,13 @@ function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: Creativ
   );
 }
 
-function ContentProjectWorkspace({ project, onBack }: { project: CreativeProject; onBack: () => void }) {
-  const [chapter, setChapter] = useState<CreativeProjectChapter>("概览");
+function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel, onBack }: { project: CreativeProject; initialChapter?: CreativeProjectChapter; backLabel: string; onBack: () => void }) {
+  const [chapter, setChapter] = useState<CreativeProjectChapter>(initialChapter);
   return (
     <article className="min-h-full">
       <div className="mx-auto w-full max-w-[1120px] px-5 pt-8 md:px-10 md:pt-10">
         <button type="button" className="inline-flex items-center gap-2 text-sm text-[var(--cp-text-muted)] hover:text-[var(--cp-text)]" onClick={onBack}>
-          <ArrowLeft className="size-4" />内容项目
+          <ArrowLeft className="size-4" />{backLabel}
         </button>
         <div className="grid gap-5 pb-8 pt-6 md:grid-cols-[minmax(0,1fr)_240px] md:items-end">
           <div>
