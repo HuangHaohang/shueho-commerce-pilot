@@ -20,6 +20,10 @@ export type MyCreativeFocus = {
   summary: string;
   aiHint: string;
   sourceTask: string;
+  owner: string;
+  platforms: string[];
+  versionLabel: string;
+  nextStep: string;
   ranges: RangeVisibility;
 };
 
@@ -63,6 +67,14 @@ export type MyCreativeRecentItem = {
 export type MyCreativeDashboard = {
   currentUser: { id: string; name: string; primaryRole: Exclude<MyCreativeRole, "全部"> };
   headline: string;
+  summaries: Array<{
+    id: "active" | "pending" | "output";
+    eyebrow: string;
+    label: string;
+    value: number;
+    unit: string;
+    note: string;
+  }>;
   stages: Array<{ stage: MyCreativeStage; count: number; note: string }>;
   focuses: MyCreativeFocus[];
   actions: MyCreativeAction[];
@@ -115,6 +127,11 @@ export function getMockMyCreativeDashboard(
   return {
     currentUser: { id: "member-wang", name: "王策", primaryRole },
     headline: "今天有 3 件内容需要你推进，1 条视频等待审核",
+    summaries: [
+      { id: "active", eyebrow: "ACTIVE / 正在参与", label: "制作中的内容", value: 12, unit: "条", note: "分布在 5 个制作环节" },
+      { id: "pending", eyebrow: "INBOX / 等我处理", label: "待我推进", value: 6, unit: "件", note: "其中 3 件需要今天完成" },
+      { id: "output", eyebrow: "OUTPUT / 本周产出", label: "已形成成果", value: 8, unit: "份", note: "新增 2 个可交付版本" },
+    ],
     stages: [
       { stage: "策划", count: 4, note: "2 条待完善脚本" },
       { stage: "拍摄", count: 2, note: "1 条今天拍摄" },
@@ -123,8 +140,8 @@ export function getMockMyCreativeDashboard(
       { stage: "待发布", count: 2, note: "制作完成待交付" },
     ],
     focuses: [
-      { id: "focus-oil-pot", projectId: "project-oil-pot-no-straw", projectName: oilPot, topic: "从真实使用疑问进入产品结构差异", stage: "策划", role: "策划", todayGoal: "根据审核意见修改开头，让产品差异更早出现", deadline: "今天 16:00", summary: "“为什么这只喷油壶没有吸管？”先让反常识的问题成立，再用一次倒油和清洁过程证明结构优势。", aiHint: "问题意识已经清楚，但无吸管带来的清洁优势可以提前到前 3 秒。", sourceTask: "厨房小工具短视频选题周", ranges: allRanges },
-      { id: "focus-mini-knife", projectId: "project-mini-knife-pov-fruit", projectName: miniKnife, topic: "办公室临时切水果的第一视角演示", stage: "拍摄", role: "拍摄", todayGoal: "确认桌面场景、道具和第一组落刀镜头", deadline: "今天 17:30", summary: "镜头从抽屉里拿出迷你刀开始，不解释尺寸，先用动作让便携和顺手变得可见。", aiHint: "第一镜保留手部动作即可，桌面杂物过多会削弱产品尺寸感。", sourceTask: "小王子迷你刀新品内容测试", ranges: allRanges },
+      { id: "focus-oil-pot", projectId: "project-oil-pot-no-straw", projectName: oilPot, topic: "从真实使用疑问进入产品结构差异", stage: "策划", role: "策划", todayGoal: "根据审核意见修改开头，让产品差异更早出现", deadline: "今天 16:00", summary: "“为什么这只喷油壶没有吸管？”先让反常识的问题成立，再用一次倒油和清洁过程证明结构优势。", aiHint: "问题意识已经清楚，但无吸管带来的清洁优势可以提前到前 3 秒。", sourceTask: "厨房小工具短视频选题周", owner: "王策", platforms: ["抖音", "小红书"], versionLabel: "脚本 V4", nextStep: "完成修改后提交余安复审", ranges: allRanges },
+      { id: "focus-mini-knife", projectId: "project-mini-knife-pov-fruit", projectName: miniKnife, topic: "办公室临时切水果的第一视角演示", stage: "拍摄", role: "拍摄", todayGoal: "确认桌面场景、道具和第一组落刀镜头", deadline: "今天 17:30", summary: "镜头从抽屉里拿出迷你刀开始，不解释尺寸，先用动作让便携和顺手变得可见。", aiHint: "第一镜保留手部动作即可，桌面杂物过多会削弱产品尺寸感。", sourceTask: "小王子迷你刀新品内容测试", owner: "陈一", platforms: ["抖音", "视频号"], versionLabel: "拍摄准备 V2", nextStep: "确认后进入现场拍摄", ranges: allRanges },
     ],
     actions,
     activities: [

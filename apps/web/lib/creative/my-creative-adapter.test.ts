@@ -10,6 +10,8 @@ describe("my creative dashboard adapter", () => {
 
     expect(dashboard.focuses[0].projectName).toBe(projects[0].name);
     expect(dashboard.focuses[0].sourceTask).toBe(projects[0].linkedTask?.name);
+    expect(dashboard.summaries.map((summary) => summary.id)).toEqual(["active", "pending", "output"]);
+    expect(dashboard.focuses[0].platforms).toEqual(projects[0].platforms);
     expect(dashboard.actions.every((action) => projects.some((project) => project.id === action.projectId))).toBe(true);
   });
 
