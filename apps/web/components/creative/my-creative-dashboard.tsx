@@ -81,33 +81,37 @@ export function MyCreativeDashboardPage({ projects, onOpenProject }: MyCreativeD
 
         <CreativeSummaryStrip summaries={dashboard.summaries} />
 
-        <div className="mt-5 grid min-w-0 items-start gap-5 xl:grid-cols-[250px_minmax(0,1fr)_300px]">
-          <div className="order-2 min-w-0 space-y-5 xl:order-1">
-            <MyCreativeQueue actions={visible.actions} stages={dashboard.stages} selectedStage={stage} onSelectStage={setStage} onOpenProject={onOpenProject} />
+        <div className="mt-5 grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_300px]">
+          <div className="min-w-0">
+            <div className="grid min-w-0 items-start gap-5 xl:grid-cols-[250px_minmax(0,1fr)]">
+              <div className="order-2 min-w-0 xl:order-1">
+                <MyCreativeQueue actions={visible.actions} stages={dashboard.stages} selectedStage={stage} onSelectStage={setStage} onOpenProject={onOpenProject} />
+              </div>
+
+              <div className="order-1 min-w-0 xl:order-2">
+                <MyFocusWorkspace
+                  focus={focus}
+                  total={visible.focuses.length}
+                  index={focusIndex}
+                  stages={dashboard.stages}
+                  selectedStage={stage}
+                  onSelectStage={setStage}
+                  onPrevious={() => switchFocus(-1)}
+                  onNext={() => switchFocus(1)}
+                  onOpenProject={onOpenProject}
+                />
+              </div>
+            </div>
+
+            <MyRecentTabs activeTab={recentTab} items={recent} onTabChange={setRecentTab} onOpenProject={onOpenProject} />
           </div>
 
-          <div className="order-1 min-w-0 xl:order-2">
-            <MyFocusWorkspace
-              focus={focus}
-              total={visible.focuses.length}
-              index={focusIndex}
-              stages={dashboard.stages}
-              selectedStage={stage}
-              onSelectStage={setStage}
-              onPrevious={() => switchFocus(-1)}
-              onNext={() => switchFocus(1)}
-              onOpenProject={onOpenProject}
-            />
-          </div>
-
-          <div className="order-3 min-w-0 space-y-5">
+          <div className="min-w-0 space-y-5">
             <SmartDetailPanel focus={focus} onOpenProject={onOpenProject} />
             <MyTodayPanel today={dashboard.today} risks={dashboard.risks} aiReminders={dashboard.aiReminders} />
             <MyActivityFeed activities={visible.activities} onOpenProject={onOpenProject} />
           </div>
         </div>
-
-        <MyRecentTabs activeTab={recentTab} items={recent} onTabChange={setRecentTab} onOpenProject={onOpenProject} />
       </section>
     </div>
   );
