@@ -26,7 +26,7 @@ This repository is designed for humans collaborating with coding agents. Before 
 - Streams allowlisted Codex App Server notifications over SSE.
 - Fixes the model provider, runtime directory, permissions, and tool registry on the server; browser requests cannot override them.
 - Discovers text and image models from the application-owned CPA provider.
-- Uses Codex Harness's native `image_gen` tool and `imageGeneration` Items; Gateway only persists the completed tenant-owned artifact and never runs a parallel image tool call.
+- Uses Codex Harness's native `image_gen` tool and `imageGeneration` Items. A loopback-only actor-authorized Provider relay makes that native extension available to the custom CPA Provider, injects the upstream credential server-side, and streams the single request; Gateway only persists the completed tenant-owned artifact and never runs a parallel image tool call.
 - Disables shell, unified exec, arbitrary local-path file tools, process network access, connectors, unmanaged MCP, plugins, and unmanaged Hooks.
 - Exposes provider-backed Web Search through the application-owned `commerce_web.search` MCP server, with real Harness `mcpToolCall` lifecycle events and cited source URLs. This remains available when old threads are resumed because it is managed runtime configuration rather than a `thread/start` dynamic-tool snapshot.
 - Reloads and validates `commerce_web.search` against the current App Server process before Gateway starts or accepts a thread. `/health` reports the real MCP catalog and dedicated search model instead of a configured-only flag. Search failures return structured reasons to the Harness; any retry is a visible, shorter follow-up tool call rather than a hidden repeat of the same expensive query.
@@ -38,7 +38,7 @@ This repository is designed for humans collaborating with coding agents. Before 
 - Opens persisted tasks directly through concurrent `thread/read` and paginated history APIs without resuming execution or waiting for per-thread MCP readiness. The sidebar prewarms recent task status, switches selection immediately, cancels stale rapid-click loads, and performs resume/tool verification only before the next model Turn.
 - Implements an Enterprise-only organization, one-to-one isolation tenant, and workspace foundation with invitation-only registration, members, workspace lifecycle, invitation revocation, tenant audit reads, direct/group roles, explicit-deny precedence, contracts, seats, quotas, and tenant-scoped thread ownership.
 - Pins each production Gateway/App Server/`CODEX_HOME` to one Enterprise tenant; tenant, workspace, and user scope are resolved by the authenticated BFF and cannot be selected by the browser.
-- Records exact Codex 0.149 Harness usage, including native image generation, plus source-attributed MCP/Web Search usage and explicit missing-usage status through a durable outbox/dead-letter pipeline and idempotent PostgreSQL ledger.
+- Records exact Codex 0.150.1 Harness usage, including native image generation, plus source-attributed MCP/Web Search usage and explicit missing-usage status through a durable outbox/dead-letter pipeline and idempotent PostgreSQL ledger.
 - Reserves direct, queue-steer, and context-compaction root-job leases under tenant-wide concurrency and projected token/request budgets; Codex multi-agent fan-out is separately capped at four threads per session by default.
 - Actively polls Enterprise authorization for running roots, reauthorizes host-tool calls, and interrupts active work plus clears queued input when access is revoked or the authorizer fails.
 - Provides an authenticated, read-only Commerce Plugin inventory inside the existing workbench shell, with `/plugins` as a direct entry point. Manifests describe application-managed skills, MCP servers, tools, UI, and security scope, while enablement is derived from live Gateway/MCP/Provider evidence. List controls open same-shell details; arbitrary package installation and host execution remain disabled. See [Commerce Plugin Runtime](./docs/architecture/commerce-plugin-runtime.md).
@@ -52,8 +52,9 @@ This repository is designed for humans collaborating with coding agents. Before 
 - Imports the complete official JustOneAPI documentation/OpenAPI catalog into immutable SQL receipts, joins it to the official pricing snapshot, and drives all GET/POST query/form calls through one database-configured adapter. Generic source collections and records preserve every returned list/item for endpoints without a specialized normalizer.
 - Runs a separate bearer-authenticated Commerce Pilot Streamable HTTP MCP server for external clients. Customer MCP Tokens are hashed, workspace-bound and intersected with live RBAC; customers never receive the JustOneAPI Token. See [External Data MCP And Governance](./docs/architecture/external-data-mcp.md).
 - Provides a dedicated market-research Task Recipe and workbench that keeps public Web Search and approved external-data evidence as distinct lineages while preserving sources, freshness, metric coverage and limitations; one never silently substitutes for a failed governed call.
-- Exposes only `list_marketplace_research_platforms`, `get_marketplace_options`, `research_social_content`, `research_marketplace_products`, `search_business_data` and `get_research_result` to Harness. The platform directory is derived exclusively from active database business workflows, and the Gateway requires a same-Turn directory read before site lookup or paid marketplace research. Marketplace and site choices therefore cannot come from model memory. Provider endpoint discovery, OpenAPI inspection and raw parameter mapping remain inside the private SHUEHO service. Per-call confirmation, current-task authorization and enterprise policy automation remain separate choices under the same hard allowlist, quota, budget, audit and no-retry controls.
-- Resolves marketplace identifiers inside database-driven business workflows. For example, one JD keyword research tool call becomes search -> quality-checked item-id binding -> detail -> price, while every paid provider step keeps its own reservation, approval, exact-once dispatch, raw archive and billing settlement. The same catalog currently defines bounded workflows for JD, Taobao/Tmall, 1688, Amazon, Douyin E-commerce, TikTok Shop, Shopee and Xianyu.
+- Exposes `list_marketplace_research_platforms`, `get_marketplace_options`, free `plan_marketplace_research`, paid `execute_marketplace_research`, `research_social_content`, `search_business_data` and `get_research_result` to new Harness threads. A ready marketplace plan is persisted under Enterprise RLS, pinned to immutable catalog/workflow/market-profile revisions, expires after 30 minutes, includes a control-plane quote, and is the only accepted input to paid execution. Legacy `research_marketplace_products` calls remain server-handled only for already-persisted tool contracts.
+- Resolves marketplace identifiers inside database-driven business workflows. Discovery now selects a bounded, title/shop-diversified representative sample from quality-promoted products and materializes an independent detail/price/review/SKU step instance for each target. Every actual provider step keeps its own approval, reservation, exact-once call id, raw archive and billing settlement; known failure of one representative does not replay it or erase independent completed evidence.
+- Imports versioned platform-market search-language profiles separately from provider endpoint enums. The profile receipt supplies BCP-47 query locales, accepted languages/scripts, timezone, currency, localization policy, sample bounds and quality thresholds. Unsupported markets never appear merely because a profile exists; officially enumerated markets without an active profile fail closed.
 - Places copy, positive, and negative actions below every completed final Agent reply. Ratings are revalidated against authoritative Harness message ids, stored under Enterprise RLS as current state plus append-only events, and never routed through Codex's diagnostic `feedback/upload` API.
 
 This is not a desktop app scaffold. The browser frontend should call this gateway; it should not embed Codex App Server directly.
@@ -89,6 +90,12 @@ This starts Codex App Server over stdio, initializes it, reads diagnostics/confi
 npm run smoke:codex
 ```
 
+Verify that Codex exposes native `image_gen` only after actor authorization, without calling a real image Provider:
+
+```bash
+npm run smoke:image-tool
+```
+
 ## Run The Gateway
 
 Start and migrate the independent external-data infrastructure, then run the local retrieval models and SHUEHO MCP in separate terminals:
@@ -97,6 +104,8 @@ Start and migrate the independent external-data infrastructure, then run the loc
 npm run external-data:infra:up
 npm run external-data:migrate
 npm run external-data:import-catalog
+npm run external-data:import-market-profiles
+npm run external-data:import-business-workflows
 npm run external-data:models:sync
 npm run external-data:models:download
 npm run external-data:models
@@ -210,6 +219,7 @@ Full pull-request validation:
 npm run check
 npm run external-data:check
 npm run external-data:test
+npm run external-data:evaluate
 npm run external-data:verify:catalog
 npm run web:check
 npm run test:gateway

@@ -12,7 +12,7 @@ The implementation follows the current `openai/codex` source behavior:
 - explicit invocation keeps the user text unchanged and adds a native `skill` input item;
 - bundled system Skills include `skill-creator`.
 
-The inspected runtime baseline is `@openai/codex` `0.149.0`, matching `openai/codex` tag `rust-v0.149.0` at `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`.
+The inspected runtime baseline is `@openai/codex` `0.150.1`, matching `openai/codex` tag `rust-v0.150.1` at `90854393966b21e9ebfd21b122334eb09a20c93d`.
 
 ## Hosted Boundary
 
@@ -57,6 +57,6 @@ Explicit Skill submissions cannot be downgraded into plain `thread/queue/add` me
 
 ## Native User Input And Business Approval
 
-The Gateway accepts the Codex 0.149 App Server method `item/tool/requestUserInput` for model-originated questions. It persists the pending request in process memory, filters it by thread, exposes authenticated read/respond routes through the BFF, validates answers against the original question ids, and calls `respondToServerRequest`. App Server's `serverRequest/resolved` notification is authoritative for lifecycle cleanup. The removed legacy alias `tool/requestUserInput` is not accepted.
+The Gateway accepts the Codex 0.150.1 App Server method `item/tool/requestUserInput` for model-originated questions. It persists the pending request in process memory, filters it by thread, exposes authenticated read/respond routes through the BFF, validates answers against the original question ids, and calls `respondToServerRequest`. App Server's `serverRequest/resolved` notification is authoritative for lifecycle cleanup. The removed legacy alias `tool/requestUserInput` is not accepted.
 
 Skill publication is different: it is an application policy decision inside the already-running `item/tool/call`. Commerce Pilot emits `commerce/approval/requested`, keeps the original dynamic-tool request pending, and returns one success, cancellation, or failure response to that original App Server request. It never fabricates a Codex server request. Turn completion, interruption, deletion, or App Server restart clears stale application approvals; unknown App Server requests still fail closed.

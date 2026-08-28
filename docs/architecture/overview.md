@@ -29,7 +29,7 @@ Commerce Pilot must not replace these concerns with a custom agent loop, prompt 
 | Client server-state | TanStack Query | Models, threads, plugins, Skills, Enterprise state, cache invalidation |
 | Agent gateway | Node.js 20.16+, TypeScript, native HTTP/SSE | App Server ownership, policy, scope binding, event sanitization, host tools |
 | Agent runtime | `@openai/codex` App Server | Threads, Turns, streaming, tools, Skills, approvals, queue, compaction, multi-agent |
-| Agent protocol | Generated Codex 0.149 TypeScript schema + JSON-RPC over application-owned stdio | Typed Gateway-to-App Server communication only |
+| Agent protocol | Generated Codex 0.150.1 TypeScript schema + JSON-RPC over application-owned stdio | Typed Gateway-to-App Server communication only |
 | Authentication | Better Auth | Browser sessions and invitation-only identity |
 | Business database | PostgreSQL 16 | Enterprise identity, RBAC, RLS, thread index, quotas, usage, deletion jobs |
 | External data warehouse | PostgreSQL 16 + pgvector 0.8.6 | Independent request lineage, complete raw responses, normalized source data, vectors and curated business evidence |
@@ -55,7 +55,7 @@ Browser
 External market data has an additional mediated boundary:
 
 ```text
-Codex Harness business-level commerce_data tool or external Commerce Pilot MCP client
+Codex Harness business-level commerce_data plan/execute tools or external Commerce Pilot MCP client
   -> application authorization / approval / quota / audit / billing
   -> SHUEHO External Data MCP
   -> service-owned JustOneAPI REST client
@@ -63,7 +63,7 @@ Codex Harness business-level commerce_data tool or external Commerce Pilot MCP c
   -> independent raw, normalized and business warehouse
 ```
 
-Keyword product research is a bounded business workflow inside that service, not an Agent loop. Harness invokes one business tool; the service plans search and dependent detail/price/review steps from SQL, resolves provider identifiers only from quality-checked source records, and the Gateway applies authorization, approval and settlement separately to every actual paid request.
+Keyword product research is a bounded workflow inside that service, not an Agent loop. Harness first creates a free immutable plan using database market-language metadata; Commerce Pilot quotes the full call graph without reserving quota. Paid execution accepts only the plan id. The service runs discovery, selects a diversified quality-promoted representative set, materializes target-specific detail/price/review steps from SQL, and the Gateway applies authorization, approval and settlement separately to every actual paid request.
 
 Inbound Commerce Pilot identities are never passed through as JustOneAPI credentials. See [External Data MCP And Governance](./external-data-mcp.md).
 
@@ -83,6 +83,8 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 | Usage | Exact provider/App Server usage events + idempotent PostgreSQL ledger |
 | Audit, billing, and reply feedback | Transactional append-only PostgreSQL records under Enterprise RLS |
 | Complete JustOneAPI request/response authority | Independent SQL-only `external_api_call_raw`; `commerce_external_data_archive` retains the governance receipt and warehouse ids |
+| Marketplace market/language capability | Official `provider_market_option` enum intersected with immutable `provider_market_profile` revisions |
+| Marketplace paid execution identity | Tenant/thread/Turn-bound `marketplace_research_plan` plus target-specific workflow step instances |
 | Runtime operational logs | Redacted structured JSON, exportable through OpenTelemetry to Elastic or another log backend; never the business source of truth |
 | Uploaded/generated media | Tenant artifact metadata + ownership-checked BFF URL |
 | External write completion | Downstream write receipt followed by readback evidence |

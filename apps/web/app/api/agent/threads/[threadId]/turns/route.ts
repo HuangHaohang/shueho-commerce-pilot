@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
 import {
-  CURRENT_AGENT_TOOL_CONTRACT_VERSION,
+  isSupportedAgentToolContractVersion,
   getAgentThreadForUser,
   markAgentThreadRunning,
 } from "@/lib/agent/thread-ownership";
@@ -31,7 +31,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   if (!thread) {
     return NextResponse.json({ error: "会话不存在。" }, { status: 404 });
   }
-  if (thread.toolContractVersion !== CURRENT_AGENT_TOOL_CONTRACT_VERSION) {
+  if (!isSupportedAgentToolContractVersion(thread.toolContractVersion)) {
     return NextResponse.json(
       {
         error: "该任务的工具契约已更新，将自动创建新任务后继续。",

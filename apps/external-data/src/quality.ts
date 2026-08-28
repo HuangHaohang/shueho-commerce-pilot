@@ -68,6 +68,12 @@ export function lexicalRelevance(target: string | null, requestText: string, doc
   return clamp(matchedWeight / Math.max(1, totalWeight));
 }
 
+export function lexicalRelevanceMany(targets: string[], requestText: string, document: string): number {
+  const normalizedTargets = [...new Set(targets.map((target) => target.trim()).filter(Boolean))];
+  if (!normalizedTargets.length) return lexicalRelevance(null, requestText, document);
+  return Math.max(...normalizedTargets.map((target) => lexicalRelevance(target, requestText, document)));
+}
+
 export function parseSalesDisplay(value: unknown): {
   display: string | null;
   lowerBound: number | null;

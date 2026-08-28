@@ -103,4 +103,55 @@ describe("AI enrichment promotion", () => {
     expect(result.decisions[0]?.decision).toBe("promote");
     expect(result.decisions[0]?.reasonCodes).toContain("SEMANTIC_TARGET_MATCH");
   });
+
+  it("uses localized and simplified-traditional query variants before applying model thresholds", async () => {
+    const models = {
+      embed: async (texts: string[]) => texts.map(() => new Array(1024).fill(0).map((_, index) => index === 0 ? 1 : 0)),
+      rerank: async () => [0.1],
+    } as unknown as LocalModelClient;
+    const result = await enrichCandidates({
+      requestText: "调研 Shopee 台湾站的休闲运动裤",
+      intent: {
+        platform: "shopee",targetProduct: "休闲运动裤",localizedKeyword: "休閒運動褲",
+        localizedKeywords: ["休閒運動褲"],metrics: ["price_band"],
+        expectedCategories: ["休闲运动裤"],excludedCategories: [],currency: "TWD",
+        requestedTopN: 20,originalRequest: "调研 Shopee 台湾站的休闲运动裤",
+      },
+      candidates: [{
+        entityType: "generic_record",entityId: "00000000-0000-4000-8000-000000000005",
+        sourceJsonPointer: "/data/cards/0",content: "台灣現貨 美式休閒運動長褲 寬鬆百搭直筒長褲",
+        quality: { status: "valid",reasons: [],normalizedValue: "台灣現貨 美式休閒運動長褲" },
+        supportsPrice: true,supportsSales: true,metadata: {},
+      }],
+      models,
+    });
+    expect(result.decisions[0]?.lexicalScore).toBeGreaterThanOrEqual(0.6);
+    expect(result.decisions[0]?.decision).toBe("promote");
+    expect(result.decisions[0]?.reasonCodes).not.toContain("TARGET_MISMATCH");
+  });
+
+  it("holds valid low-confidence candidates instead of mislabeling them as irrelevant", async () => {
+    const models = {
+      embed: async (texts: string[]) => texts.map(() => new Array(1024).fill(0).map((_, index) => index === 0 ? 1 : 0)),
+      rerank: async () => [0.01],
+    } as unknown as LocalModelClient;
+    const result = await enrichCandidates({
+      requestText: "调研休闲运动裤",
+      intent: {
+        platform: "shopee",targetProduct: "休闲运动裤",metrics: ["price_band"],
+        expectedCategories: ["休闲运动裤"],excludedCategories: [],currency: null,
+        requestedTopN: 20,originalRequest: "调研休闲运动裤",
+      },
+      candidates: [{
+        entityType: "generic_record",entityId: "00000000-0000-4000-8000-000000000006",
+        sourceJsonPointer: "/data/cards/1",content: "男士日常服饰新品",
+        quality: { status: "valid",reasons: [],normalizedValue: "男士日常服饰新品" },
+        supportsPrice: true,supportsSales: true,metadata: {},
+      }],
+      models,
+    });
+    expect(result.decisions[0]?.decision).toBe("hold");
+    expect(result.decisions[0]?.entityMatch).not.toBe("irrelevant");
+    expect(result.decisions[0]?.reasonCodes).toContain("INSUFFICIENT_RELEVANCE_EVIDENCE");
+  });
 });

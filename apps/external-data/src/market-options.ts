@@ -22,9 +22,21 @@ export type MarketplaceOptionCatalog = {
   platformLabel: string | null;
   requiresSelection: boolean;
   localizedKeywordRequired: boolean;
-  options: Array<{ code: string; label: string }>;
+  options: MarketplaceMarketOption[];
+  unavailableOptions: Array<{ code: string; label: string; reason: string }>;
   supportedPlatforms?: MarketplaceResearchPlatform[];
   suggestedPlatforms?: MarketplaceResearchPlatform[];
+};
+
+export type MarketplaceMarketOption = {
+  code: string;
+  label: string;
+  preferredQueryLocale: string;
+  queryLocales: string[];
+  acceptedQueryLanguages: string[];
+  timezone: string;
+  currency: string;
+  keywordLocalizationPolicy: "none" | "agent_generated_validated";
 };
 
 export type MarketplaceResearchPlatform = {
@@ -130,33 +142,76 @@ export async function readMarketplaceOptions(platform: string): Promise<Marketpl
       requiresSelection: false,
       localizedKeywordRequired: false,
       options: [],
+      unavailableOptions: [],
       supportedPlatforms: catalog.platforms,
       suggestedPlatforms,
     };
   }
-  const options = await database.query<{ market_code: string; display_name: string; sort_order: number }>(`
-    SELECT option.market_code,max(option.display_name) AS display_name,
-           min(option.sort_order) AS sort_order
-    FROM provider_business_workflow_step step
-    CROSS JOIN LATERAL jsonb_each(step.input_bindings) binding
-    JOIN provider_market_option option
-      ON option.endpoint_id=step.endpoint_id AND option.parameter_name=binding.key
-     AND option.enabled=true
-    JOIN provider_business_workflow workflow ON workflow.workflow_id=step.workflow_id
-    WHERE workflow.platform_id=$1 AND workflow.status='active'
-      AND binding.value->>'source'='business_input'
-      AND binding.value->>'key'='market'
-    GROUP BY option.market_code
-    ORDER BY min(option.sort_order),option.market_code
+  const options = await database.query<{
+    market_code: string; display_name: string; sort_order: number;
+    profile_id: string | null;
+    preferred_query_locale: string | null; query_locales: string[] | null;
+    accepted_query_languages: string[] | null; timezone: string | null; currency: string | null;
+    keyword_localization_policy: "none" | "agent_generated_validated" | null;
+  }>(`
+    WITH available_options AS (
+      SELECT option.market_code,max(option.display_name) AS display_name,
+             min(option.sort_order) AS sort_order,max(option.market_profile_id::text) AS profile_id
+      FROM provider_business_workflow_step step
+      CROSS JOIN LATERAL jsonb_each(step.input_bindings) binding
+      JOIN provider_market_option option
+        ON option.endpoint_id=step.endpoint_id AND option.parameter_name=binding.key
+       AND option.enabled=true
+      JOIN provider_business_workflow workflow ON workflow.workflow_id=step.workflow_id
+      WHERE workflow.platform_id=$1 AND workflow.status='active'
+        AND binding.value->>'source'='business_input'
+        AND binding.value->>'key'='market'
+      GROUP BY option.market_code
+    )
+    SELECT option.market_code,option.display_name,option.sort_order,
+           profile.id::text AS profile_id,
+           profile.preferred_query_locale,profile.query_locales,
+           profile.accepted_query_languages,profile.timezone,profile.currency,
+           profile.keyword_localization_policy
+    FROM available_options option
+    LEFT JOIN provider_market_profile profile
+      ON profile.id=option.profile_id::uuid AND profile.enabled=true
+    ORDER BY option.sort_order,option.market_code
   `, [platformId]);
+  const readyOptions = options.rows.filter((option): option is typeof option & {
+    profile_id: string; preferred_query_locale: string;
+    query_locales: string[]; accepted_query_languages: string[]; timezone: string; currency: string;
+    keyword_localization_policy: "none" | "agent_generated_validated";
+  } => Boolean(
+    option.profile_id && option.preferred_query_locale &&
+    option.query_locales?.length && option.accepted_query_languages?.length &&
+    option.timezone && option.currency && option.keyword_localization_policy,
+  ));
+  const readyCodes = new Set(readyOptions.map((option) => option.market_code));
   return {
     platform: platformId,
     available: true,
     canonicalPlatform: platformEntry.platform,
     platformLabel: platformEntry.label,
     requiresSelection: options.rows.length > 0,
-    localizedKeywordRequired: options.rows.length > 0,
-    options: options.rows.map((option) => ({ code: option.market_code, label: option.display_name })),
+    localizedKeywordRequired: readyOptions.some((option) => option.keyword_localization_policy !== "none"),
+    options: readyOptions.map((option) => ({
+      code: option.market_code,
+      label: option.display_name,
+      preferredQueryLocale: option.preferred_query_locale,
+      queryLocales: option.query_locales,
+      acceptedQueryLanguages: option.accepted_query_languages,
+      timezone: option.timezone,
+      currency: option.currency,
+      keywordLocalizationPolicy: option.keyword_localization_policy,
+    })),
+    unavailableOptions: options.rows
+      .filter((option) => !readyCodes.has(option.market_code))
+      .map((option) => ({
+        code: option.market_code,
+        label: option.display_name,
+        reason: "市场语言档案尚未通过版本化导入，当前不会发送付费请求。",
+      })),
   };
 }
 
@@ -168,6 +223,7 @@ export async function readMarketplaceResearchPlatforms(): Promise<MarketplaceRes
     capability: string;
     maximum_provider_calls: number;
     requires_selection: boolean;
+    localized_keyword_required: boolean;
   }>(`
     SELECT workflow.workflow_id,workflow.platform_id,
            COALESCE(
@@ -192,7 +248,21 @@ export async function readMarketplaceResearchPlatforms(): Promise<MarketplaceRes
              WHERE step.workflow_id=workflow.workflow_id
                AND binding.value->>'source'='business_input'
                AND binding.value->>'key'='market'
-           ) AS requires_selection
+           ) AS requires_selection,
+           EXISTS (
+             SELECT 1
+             FROM provider_business_workflow_step step
+             CROSS JOIN LATERAL jsonb_each(step.input_bindings) binding
+             JOIN provider_market_option option
+               ON option.endpoint_id=step.endpoint_id AND option.parameter_name=binding.key
+              AND option.enabled=true AND option.localization_ready=true
+             JOIN provider_market_profile profile
+               ON profile.id=option.market_profile_id AND profile.enabled=true
+             WHERE step.workflow_id=workflow.workflow_id
+               AND binding.value->>'source'='business_input'
+               AND binding.value->>'key'='market'
+               AND profile.keyword_localization_policy <> 'none'
+           ) AS localized_keyword_required
     FROM provider_business_workflow workflow
     WHERE workflow.provider='justoneapi'
       AND workflow.business_tool='research_marketplace_products'
@@ -207,7 +277,7 @@ export async function readMarketplaceResearchPlatforms(): Promise<MarketplaceRes
       capability: workflow.capability,
       providerCalls: workflow.maximum_provider_calls,
       requiresSelection: workflow.requires_selection,
-      localizedKeywordRequired: workflow.requires_selection,
+      localizedKeywordRequired: workflow.localized_keyword_required,
     })),
   };
 }

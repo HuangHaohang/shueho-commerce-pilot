@@ -35,12 +35,17 @@ There is no custom Agent loop. New and resumed threads receive the `commerce_dat
 
 - `search_business_data` performs free, read-only hybrid retrieval over previously curated workspace evidence;
 - `list_marketplace_research_platforms` lists only platforms backed by a complete active database workflow;
-- `get_marketplace_options` reads current database-backed market/site choices without a provider call;
+- `get_marketplace_options` reads current database-backed market/site choices plus immutable query-language profiles without a provider call;
 - `get_research_result` reloads one curated result by the id returned from a prior collection;
 - `research_social_content` accepts a public platform, keyword, inclusive Shanghai dates, one business objective and required interaction metrics;
-- `research_marketplace_products` accepts marketplace product filters and required price, sales, brand or property metrics.
+- `plan_marketplace_research` validates business filters, localized query variants and representative sample size, persists a 30-minute plan and returns its quote without a provider call;
+- `execute_marketplace_research` accepts only the ready plan UUID and drives the governed paid step instances.
 
-`research_marketplace_products` is a composed business contract. Before the Agent proposes a platform question, it must read `list_marketplace_research_platforms` and use only the exact returned ids and labels. Gateway records that directory for the current Turn and rejects `get_marketplace_options` or `research_marketplace_products` when the directory was not read or the platform is absent. The model then supplies a catalog marketplace id, keyword, optional country/site market code, seller and price filters, requested metrics and result limit. It never supplies provider identifiers. The private service selects a versioned SQL workflow, performs search first, resolves identifiers only from quality-promoted search rows, and then materializes the bounded detail/price/review steps. With `always_ask`, each actual provider request produces its own approval prompt; one Harness tool call may therefore pause more than once.
+Marketplace research is a composed two-phase contract. Before asking about scope, the Agent reads `list_marketplace_research_platforms` and `get_marketplace_options`, uses native `request_user_input` only for missing user choices, and generates localized variants only from the selected profile's `preferredQueryLocale`, `queryLocales` and script policy. Free planning persists a tenant/user/thread/Turn-bound plan pinned to exact catalog, workflow and profile revisions and obtains a no-reservation control-plane quote. Paid execution accepts only `plan_id`; the model cannot alter platform, site, localization, sample size or endpoint set.
+
+`get_marketplace_options` deliberately omits internal quality thresholds, profile ids/revisions and maximum representative-sample policy. Unless the user explicitly requests a sample count, the Agent plans with `detail_sample_size=null` and waits for the free quote. If policy permits fewer representatives, the Agent's immediate next action is native `request_user_input` with one accept-reduced-coverage or pause choice; it must not first emit an assistant message, numbered list or an unexecutable sample promise.
+
+Search runs first. The service deduplicates complete identifier bindings, selects relevance/title/shop-diversified representatives, records immutable targets, and materializes one independent detail/price/review/SKU step instance per target. With `always_ask`, every actual provider request produces its own Commerce approval prompt while the original Harness `item/tool/call` remains pending. A known failure is recorded without retry and does not erase independent completed targets; an uncertain result stops automatic execution and requires reconciliation.
 
 Provider endpoint ids, REST paths, raw parameter names, provider sort tokens and endpoint schemas are never model-facing inputs. The managed market-research Skill chooses only a business tool and business constraints, and forbids shell, host files, arbitrary network calls, browser automation and unmanaged MCP. The SHUEHO service applies the workspace endpoint/platform intersection, performs a deterministic no-charge preflight from database OpenAPI contracts, and returns the exact endpoint and normalized parameters only to the Gateway control plane.
 
@@ -48,7 +53,7 @@ For social research, `latest_content` requires an endpoint whose database reques
 
 Commerce Pilot follows the App Server dynamic-tool failure contract instead of rewriting model arguments. A business-contract or capability failure returns `success: false` with an exact code, message and corrective instruction in `contentItems`; Harness records the `dynamicToolCall` as failed and exposes that output to the model. The host must never silently relax dates or metrics, inject a provider endpoint, substitute Web Search after a governed call fails, or convert a failure into success. A dispatched, completed or uncertain paid research call remains non-retryable.
 
-This contract follows the [official App Server dynamic-tool lifecycle](https://developers.openai.com/codex/app-server/) and the pinned Codex [`DynamicToolHandler`](https://github.com/openai/codex/blob/rust-v0.149.0/codex-rs/core/src/tools/handlers/dynamic.rs), where returned content and `success` become the model-visible function output and the authoritative completed/failed item state.
+This contract follows the [official App Server dynamic-tool lifecycle](https://developers.openai.com/codex/app-server/) and the pinned Codex [`DynamicToolHandler`](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/tools/handlers/dynamic.rs), where returned content and `success` become the model-visible function output and the authoritative completed/failed item state.
 
 The user does not have to mention JustOneAPI, an endpoint id, or a tool in the prompt. The Harness decides from the business objective whether governed external data would materially improve the answer and which business evidence objective is required. It must not spend money merely because a tool is available. Once the Harness chooses a paid business research tool, Commerce Pilot applies the selected approval mode below while the original `item/tool/call` remains pending.
 
@@ -72,6 +77,8 @@ Production uses private TLS networking. The internal token is injected through t
 - `get_endpoint_schema`
 - `preflight_social_content_research`
 - `preflight_marketplace_product_research`
+- `plan_marketplace_product_research`
+- `execute_marketplace_product_research_plan`
 - `begin_marketplace_product_research`
 - `resolve_marketplace_product_bindings`
 - `complete_marketplace_product_research`
@@ -103,7 +110,7 @@ Commerce Pilot governance migrations `018` through `025` and `027` through `031`
 
 - `commerce_external_data_policy`: workspace enablement, maximum approval mode, allowed platforms/endpoints, monthly call/spend limits, per-Turn call cap, auto-approval price ceiling, and metadata retention;
 - `commerce_external_data_rate_card`: effective endpoint vendor cost and customer price;
-- `commerce_external_data_call`: immutable call identity, approval, dispatch, settlement, price and upstream business status;
+- `commerce_external_data_call`: immutable call identity, opaque marketplace plan/target-step lineage, approval, dispatch, settlement, price and upstream business status;
 - `commerce_mcp_access_token`: user-owned, workspace-bound, hashed external MCP credentials;
 - `commerce_authenticate_mcp_access_token`: security-definer digest authentication with live tenant, membership, contract and RBAC checks.
 - `commerce_purge_external_data_calls`: tenant-pinned retention batches that preserve unresolved calls and rows under legal hold.
@@ -147,6 +154,8 @@ reserved -> cancelled
 
 `dispatch` is an atomic compare-and-set and cannot be repeated. Only `succeeded` rows contribute customer and vendor monetary totals. `business_failed` is retained for audit but clears monetary amounts. `unknown` remains visible for reconciliation and blocks automatic replay.
 
+The free plan quote is an append-only audit event keyed by opaque `plan_id + plan_key`; it checks projected call and spend limits but creates no reservation. Each later `commerce_external_data_call` stores the same plan id plus workflow step/target ids, so quote, approvals, exact-once dispatches and settlements are traceable across the independent warehouse boundary.
+
 The approval HTTP response returns immediately while Gateway continues the original Harness dynamic-tool request. The approval decision is retained in the approval, audit and billing control plane, but it is not written to the user-message display index and is not injected into model history. Only answers to native App Server `item/tool/requestUserInput` questions receive a user-visible answer summary. A Gateway restart after reservation or dispatch never replays the upstream call: the durable ledger remains `reserved`, `dispatched`, or `unknown` for operator reconciliation, while the interrupted Harness Turn may be resumed only through a new user-authorized request.
 
 The MCP discovery catalog does not provide a contractual unit price. Commerce Pilot therefore reads official unit prices from the latest validated Dashboard Excel import, with workspace rate-card rows reserved for customer-pricing overrides. A call without either price source is `unpriced`; monetary-budget policies reject it rather than allowing a budget bypass.
@@ -171,7 +180,7 @@ Production publishes this listener only behind TLS and a dedicated ingress. Port
 
 The first release uses high-entropy bearer access tokens rather than claiming OAuth compatibility. ChatGPT web plugin publication requires a standards-compliant OAuth protected-resource and authorization-server deployment in a later reviewed change. Codex, Cursor, and other clients that support bearer-token Streamable HTTP can use the current endpoint.
 
-The public MCP exposes the same `research_social_content` and `research_marketplace_products` business contracts, never raw endpoint selection. Calls with `external_data.call` request policy automation. If workspace policy requires human approval, the tool returns `APPROVAL_REQUIRED` and does not dispatch upstream. Human approval remains available through the Commerce Pilot web Harness flow.
+The public MCP exposes `research_social_content` plus the same `plan_marketplace_research` / `execute_marketplace_research` split, never raw endpoint selection. Public planning requires a client-generated UUID `idempotency_key`; transport retries therefore return the same SQL plan receipt. Planning is provider-free. Execution requests policy automation; if workspace policy requires human approval, the tool returns `APPROVAL_REQUIRED` without dispatching upstream. Human approval remains available through the Commerce Pilot web Harness flow.
 
 ## Audit And Data Minimization
 

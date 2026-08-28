@@ -34,11 +34,26 @@ export type ExternalDataCatalogAuthorization = {
   allowedEndpointIds: string[];
 };
 
+export type ExternalDataPlanQuote = {
+  currency: string;
+  providerCallCount: number;
+  vendorCostMicros: number | null;
+  billableAmountMicros: number | null;
+  unpricedEndpointIds: string[];
+  monthlyCallLimit: number;
+  callsUsed: number;
+  monthlySpendLimitMicros: number | null;
+  spendUsedMicros: number;
+  approvalMode: ExternalDataApprovalMode;
+  perCallAutoApprovalMicros: number | null;
+};
+
 export class ExternalDataControlError extends Error {
   constructor(
     message: string,
     readonly code: string,
     readonly status: number,
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "ExternalDataControlError";
@@ -71,6 +86,10 @@ export class ExternalDataControlClient {
       parameterHash: string;
       parameterKeys: string[];
       requestedApprovalMode: ExternalDataApprovalMode;
+      marketplacePlanId?: string | null;
+      workflowStepInstanceId?: string | null;
+      workflowTargetId?: string | null;
+      workflowRole?: "discovery" | "detail" | "price" | "reviews" | "sku" | null;
     },
   ): Promise<ExternalDataReservation> {
     const payload = await this.post(this.requireControlUrl(), {
@@ -92,6 +111,38 @@ export class ExternalDataControlClient {
     return {
       allowedPlatforms: readStringArray(payload.authorization.allowedPlatforms),
       allowedEndpointIds: readStringArray(payload.authorization.allowedEndpointIds),
+    };
+  }
+
+  async quote(
+    principal: ExternalDataPrincipal,
+    input: {
+      planId: string;
+      planKey: string;
+      source: "codex_harness" | "external_mcp";
+      threadId?: string | null;
+      turnId?: string | null;
+      calls: Array<{ endpointId: string; platform: string; count: number }>;
+    },
+  ): Promise<ExternalDataPlanQuote> {
+    const payload = await this.post(this.requireControlUrl(), { ...principal,...input,action: "quote" });
+    if (!isRecord(payload.quote)) {
+      throw new ExternalDataControlError("External-data plan quote is missing.","INVALID_CONTROL_RESPONSE",502);
+    }
+    const quote = payload.quote;
+    const providerCallCount = readNumber(quote.providerCallCount);
+    return {
+      currency: typeof quote.currency === "string" ? quote.currency : "CNY",
+      providerCallCount,
+      vendorCostMicros: readNullableNumber(quote.vendorCostMicros),
+      billableAmountMicros: readNullableNumber(quote.billableAmountMicros),
+      unpricedEndpointIds: readStringArray(quote.unpricedEndpointIds),
+      monthlyCallLimit: readNumber(quote.monthlyCallLimit),
+      callsUsed: readNumber(quote.callsUsed),
+      monthlySpendLimitMicros: readNullableNumber(quote.monthlySpendLimitMicros),
+      spendUsedMicros: readNumber(quote.spendUsedMicros),
+      approvalMode: quote.approvalMode === "task" || quote.approvalMode === "policy" ? quote.approvalMode : "always_ask",
+      perCallAutoApprovalMicros: readNullableNumber(quote.perCallAutoApprovalMicros),
     };
   }
 
@@ -216,6 +267,7 @@ export class ExternalDataControlClient {
         typeof record.error === "string" ? record.error.slice(0, 500) : "External-data control request was rejected.",
         typeof record.code === "string" ? record.code : "CONTROL_REJECTED",
         response.status,
+        isRecord(record.details) ? record.details : {},
       );
     }
     if (!isRecord(payload)) {

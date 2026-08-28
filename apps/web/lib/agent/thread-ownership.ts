@@ -2,7 +2,12 @@ import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context
 import type { EnterpriseScope } from "@/lib/enterprise/types";
 import type { TaskCategory } from "@/lib/agent/task-category";
 
-export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 1;
+export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 2;
+export const SUPPORTED_AGENT_TOOL_CONTRACT_VERSIONS = new Set([1,2]);
+
+export function isSupportedAgentToolContractVersion(version: number): boolean {
+  return SUPPORTED_AGENT_TOOL_CONTRACT_VERSIONS.has(version);
+}
 
 export type AgentThreadRecord = {
   threadId: string;

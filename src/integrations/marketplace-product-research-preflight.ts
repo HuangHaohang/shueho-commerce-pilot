@@ -59,7 +59,12 @@ export async function preflightMarketplaceProductResearch(
       allowed_endpoint_ids: authorization.allowedEndpointIds,
     } : {}),
   });
-  const payload = result.payload;
+  return parseMarketplaceProductResearchPreflightPayload(result.payload);
+}
+
+export function parseMarketplaceProductResearchPreflightPayload(
+  payload: Record<string, unknown>,
+): MarketplaceProductResearchPreflight {
   if (payload.success !== true) {
     throw new MarketplaceProductResearchPreflightError(
       typeof payload.message === "string" ? payload.message : "商品研究请求无法匹配可用数据能力。",

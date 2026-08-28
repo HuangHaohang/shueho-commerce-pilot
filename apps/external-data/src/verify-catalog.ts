@@ -91,8 +91,11 @@ const marketOptions = await database.query<{
   market_code: string;
   display_name: string;
   schema_version: string;
+  localization_ready: boolean;
+  market_profile_id: string | null;
 }>(`
-  SELECT endpoint_id,parameter_name,market_code,display_name,schema_version
+  SELECT endpoint_id,parameter_name,market_code,display_name,schema_version,
+         localization_ready,market_profile_id
   FROM provider_market_option WHERE provider='justoneapi' AND enabled=true
   ORDER BY endpoint_id,parameter_name,market_code
 `);
@@ -106,7 +109,16 @@ for (const option of marketOptions.rows) {
   const schema = isRecord(properties[option.parameter_name]) ? properties[option.parameter_name] as JsonObject : {};
   assert.ok(Array.isArray(schema.enum) && schema.enum.includes(option.market_code));
   assert.ok(option.display_name.length > 0);
+  assert.equal(option.localization_ready,true,`${option.endpoint_id}.${option.market_code} is missing a language profile`);
+  assert.ok(option.market_profile_id);
 }
+const marketProfiles = await database.query<{ count: string; receipt_count: string }>(`
+  SELECT count(*) FILTER (WHERE profile.enabled)::text AS count,
+         count(DISTINCT profile.source_profile_import_id)::text AS receipt_count
+  FROM provider_market_profile profile WHERE profile.provider='justoneapi'
+`);
+assert.ok(Number(marketProfiles.rows[0]?.count ?? 0) >= 37,"market language profile catalog is incomplete");
+assert.ok(Number(marketProfiles.rows[0]?.receipt_count ?? 0) >= 1,"market language profile receipt is missing");
 const marketplacePlatforms = await readMarketplaceResearchPlatforms();
 assert.deepEqual(
   marketplacePlatforms.platforms.map((platform) => platform.platform).sort(),
@@ -118,6 +130,17 @@ assert.equal(marketplacePlatforms.platforms.some((platform) => platform.platform
 const unsupportedMarketplace = await readMarketplaceOptions("PINDUODUO");
 assert.equal(unsupportedMarketplace.available, false);
 assert.equal(unsupportedMarketplace.supportedPlatforms?.length, workflowCatalog.rows.length);
+const shopeeOptions = await readMarketplaceOptions("SHOPEE");
+assert.equal(shopeeOptions.available,true);
+assert.deepEqual(shopeeOptions.options.map((option) => option.code),["TW","ID","TH"]);
+assert.equal(shopeeOptions.options.find((option) => option.code === "TH")?.preferredQueryLocale,"th-TH");
+assert.equal(shopeeOptions.options.find((option) => option.code === "TW")?.currency,"TWD");
+assert.equal(shopeeOptions.unavailableOptions.length,0);
+for (const option of shopeeOptions.options) {
+  assert.equal("qualityPolicy" in option,false,"model-facing market options must not expose quality thresholds");
+  assert.equal("profileId" in option,false,"model-facing market options must not expose internal profile ids");
+  assert.equal("profileRevision" in option,false,"model-facing market options must not expose internal revisions");
+}
 const ambiguousDouyin = await readMarketplaceOptions("DOUYIN");
 assert.equal(ambiguousDouyin.available, false);
 assert.equal(ambiguousDouyin.suggestedPlatforms?.some((platform) => platform.platform === "douyin_ec"), true);
@@ -165,6 +188,7 @@ console.log(JSON.stringify({
     label: platform.label,
   })),
   marketOptions: marketOptions.rows.length,
+  marketProfiles: Number(marketProfiles.rows[0]?.count ?? 0),
   immutableSourceBlobs: expectedBlobs,
   disabled: {
     deprecated: endpoints.filter((endpoint) => endpoint.catalogStatus === "deprecated").length,

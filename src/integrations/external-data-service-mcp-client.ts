@@ -9,6 +9,8 @@ export const EXTERNAL_DATA_SERVICE_REQUIRED_TOOLS = [
   "get_endpoint_schema",
   "preflight_endpoint",
   "preflight_marketplace_product_research",
+  "plan_marketplace_product_research",
+  "execute_marketplace_product_research_plan",
   "begin_marketplace_product_research",
   "resolve_marketplace_product_bindings",
   "complete_marketplace_product_research",
@@ -118,6 +120,14 @@ export class ExternalDataServiceMcpClient {
 
   preflightMarketplaceProductResearch(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
     return this.callCatalog("preflight_marketplace_product_research", args);
+  }
+
+  planMarketplaceProductResearch(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
+    return this.callCatalog("plan_marketplace_product_research", args);
+  }
+
+  executeMarketplaceProductResearchPlan(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
+    return this.callCatalog("execute_marketplace_product_research_plan", args);
   }
 
   beginMarketplaceProductResearch(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {

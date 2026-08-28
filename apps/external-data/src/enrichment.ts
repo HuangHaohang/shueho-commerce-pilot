@@ -1,6 +1,7 @@
 import { config } from "./config.js";
 import { LocalModelClient } from "./local-model-client.js";
-import { lexicalRelevance } from "./quality.js";
+import { expandMultilingualQueryTerms } from "./market-localization.js";
+import { lexicalRelevanceMany } from "./quality.js";
 import type { EnrichmentCandidate, EnrichmentDecision, ResearchIntent } from "./types.js";
 
 export async function enrichCandidates(input: {
@@ -10,7 +11,13 @@ export async function enrichCandidates(input: {
   models: LocalModelClient;
   additionalQueryTerms?: string[];
 }): Promise<{ decisions: EnrichmentDecision[]; embeddings: Map<string, number[]> }> {
-  const queryText = buildEnrichmentQueryText(input.requestText, input.intent, input.additionalQueryTerms);
+  const queryTerms = expandMultilingualQueryTerms([
+    input.intent.targetProduct,
+    input.intent.localizedKeyword,
+    ...(input.intent.localizedKeywords ?? []),
+    ...(input.additionalQueryTerms ?? []),
+  ]);
+  const queryText = buildEnrichmentQueryText(input.requestText, input.intent, queryTerms);
   const eligible = input.candidates.filter((candidate) => candidate.quality.status !== "rejected" && candidate.content.trim());
   const embeddings = new Map<string, number[]>();
   const embeddingScores = new Map<string, number>();
@@ -44,7 +51,7 @@ export async function enrichCandidates(input: {
     const lexicalDocument = candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value"
       ? candidate.quality.normalizedValue ?? ""
       : candidate.content;
-    const lexicalScore = lexicalRelevance(input.intent.targetProduct, input.requestText, lexicalDocument);
+    const lexicalScore = lexicalRelevanceMany(queryTerms, input.requestText, lexicalDocument);
     const embeddingScore = embeddingScores.get(candidate.entityId) ?? null;
     const rerankScore = rerankScores.get(candidate.entityId) ?? null;
     const semanticScore = embeddingScore === null ? 0 : clamp((embeddingScore + 1) / 2);
@@ -52,26 +59,37 @@ export async function enrichCandidates(input: {
     const zeroCount = (candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value") &&
       typeof candidate.metadata.itemCount === "number" && candidate.metadata.itemCount <= 0;
     const categoryMismatch = obviousCategoryMismatch(input.intent.targetProduct, candidate.content);
-    const passModel = (rerankScore ?? 0) >= config.localModels.rerankMinScore &&
-      (embeddingScore ?? -1) >= config.localModels.embeddingMinScore && !categoryMismatch;
+    const embeddingMinScore = policyNumber(input.intent.qualityPolicy?.embeddingMinScore, config.localModels.embeddingMinScore);
+    const rerankMinScore = policyNumber(input.intent.qualityPolicy?.rerankMinScore, config.localModels.rerankMinScore);
+    const lexicalPromoteMinScore = policyNumber(input.intent.qualityPolicy?.lexicalPromoteMinScore, 0.6);
+    const holdRelevanceMinScore = policyNumber(input.intent.qualityPolicy?.holdRelevanceMinScore, 0.2);
+    const passModel = (rerankScore ?? 0) >= rerankMinScore &&
+      (embeddingScore ?? -1) >= embeddingMinScore && !categoryMismatch;
     const exact = lexicalScore >= 0.999;
-    const adjacent = !exact && (lexicalScore >= 0.25 || passModel);
+    const lexicalSupported = lexicalScore >= lexicalPromoteMinScore &&
+      ((embeddingScore ?? -1) >= embeddingMinScore - 0.08 || (rerankScore ?? 0) >= 0.2);
+    const adjacent = !exact && (
+      lexicalScore >= 0.25 || passModel || lexicalSupported || relevanceScore >= holdRelevanceMinScore
+    );
     const reasons = new Set(candidate.quality.reasons);
     if (exact) reasons.add("EXACT_TARGET_MATCH");
-    else if (adjacent) reasons.add("SEMANTIC_TARGET_MATCH");
-    else reasons.add("TARGET_MISMATCH");
+    else if (passModel || lexicalSupported || lexicalScore >= 0.25) reasons.add("SEMANTIC_TARGET_MATCH");
+    else reasons.add("INSUFFICIENT_RELEVANCE_EVIDENCE");
     if (zeroCount) reasons.add("ZERO_PROVIDER_COUNT");
-    if (categoryMismatch) reasons.add("CROSS_CATEGORY_CONTAMINATION");
+    if (categoryMismatch) {
+      reasons.add("CROSS_CATEGORY_CONTAMINATION");
+      reasons.add("TARGET_MISMATCH");
+    }
     if (candidate.supportsPrice) reasons.add("SUPPORTS_PRICE_ANALYSIS");
     if (candidate.supportsSales) reasons.add("SUPPORTS_SALES_ANALYSIS");
 
     let decision: "promote" | "hold" | "reject";
     if (candidate.quality.status === "rejected" || categoryMismatch) decision = "reject";
     else if (candidate.quality.status === "suspicious" || zeroCount) decision = "hold";
-    else if (exact || passModel || (lexicalScore >= 0.5 && (rerankScore ?? 0) >= 0.4)) decision = "promote";
-    else decision = "reject";
+    else if (exact || passModel || lexicalSupported) decision = "promote";
+    else decision = "hold";
 
-    const entityMatch = categoryMismatch ? "irrelevant" : exact ? "exact" : adjacent ? "adjacent" : rerankScore === null ? "unknown" : "irrelevant";
+    const entityMatch = categoryMismatch ? "irrelevant" : exact ? "exact" : adjacent ? "adjacent" : "unknown";
     const confidence = decision === "reject" && candidate.quality.status === "rejected"
       ? 0.99
       : clamp(0.35 + Math.abs(relevanceScore - 0.5) + (candidate.quality.status === "valid" ? 0.1 : 0));
@@ -104,16 +122,25 @@ function obviousCategoryMismatch(target: string | null, content: string): boolea
 export function buildEnrichmentQueryText(
   requestText: string,
   intent: ResearchIntent,
-  additionalQueryTerms: string[] = [],
+  queryTerms: string[] = [],
 ): string {
+  const allTerms = expandMultilingualQueryTerms([
+    intent.targetProduct,
+    intent.localizedKeyword,
+    ...(intent.localizedKeywords ?? []),
+    ...queryTerms,
+  ]);
   return [
     requestText.trim(),
     intent.targetProduct ? `目标商品：${intent.targetProduct}` : "",
-    intent.localizedKeyword ? `本地市场等价检索词：${intent.localizedKeyword}` : "",
-    ...additionalQueryTerms.map((term) => `补充本地市场等价检索词：${term}`),
+    ...allTerms.map((term) => `等价检索词：${term}`),
     intent.metrics.length ? `需要支持的指标：${intent.metrics.join("、")}` : "",
     "证据可能使用目标市场当地语言；跨语言等价商品词应视为匹配。只接受与目标商品类目相符的公开市场证据，排除手机、电脑等跨类目污染。",
   ].filter(Boolean).join("；").slice(0, 4096);
+}
+
+function policyNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= -1 && value <= 1 ? value : fallback;
 }
 
 function cosine(left: number[], right: number[]): number {

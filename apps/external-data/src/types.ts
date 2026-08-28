@@ -14,6 +14,8 @@ export type ExternalDataScope = {
   businessIntent?: ExternalDataBusinessIntent | null;
   workflowExecutionId?: string | null;
   workflowStepId?: string | null;
+  workflowStepInstanceId?: string | null;
+  workflowTargetId?: string | null;
   enrichmentQueryTerms?: string[];
 };
 
@@ -38,6 +40,9 @@ export type ExternalDataBusinessIntent = {
   workflowStepId?: string | null;
   workflowStepRole?: "discovery" | "detail" | "price" | "reviews" | "sku" | null;
   localizedKeyword?: string | null;
+  localizedKeywords?: string[];
+  marketContext?: JsonObject | null;
+  qualityPolicy?: JsonObject | null;
 };
 
 export type ProviderEndpoint = {
@@ -89,6 +94,9 @@ export type ResearchIntent = {
   timeRange?: ExternalDataBusinessIntent["timeRange"];
   windowEnforcement?: string | null;
   localizedKeyword?: string | null;
+  localizedKeywords?: string[];
+  marketContext?: JsonObject | null;
+  qualityPolicy?: JsonObject | null;
 };
 
 export type QueryIdentity = {

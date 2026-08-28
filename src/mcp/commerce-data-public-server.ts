@@ -21,10 +21,12 @@ import {
 import { classifyExternalDataServiceOutcome } from "../integrations/external-data-outcome.js";
 import {
   MarketplaceProductResearchPreflightError,
-  preflightMarketplaceProductResearch,
-  type MarketplaceProductResearchInput,
-  type MarketplaceProductResearchPreflight,
 } from "../integrations/marketplace-product-research-preflight.js";
+import {
+  createMarketplaceProductResearchPlan,
+  executeMarketplaceProductResearchPlan,
+  parseMarketplaceProductResearchStepInstances,
+} from "../integrations/marketplace-product-research-plan.js";
 import {
   preflightSocialContentResearch,
   SocialContentResearchPreflightError,
@@ -67,10 +69,12 @@ const httpServer = createServer(async (request, response) => {
         },
         businessTools: [
           "search_business_data",
+          "list_marketplace_research_platforms",
           "get_marketplace_options",
           "get_research_result",
           "research_social_content",
-          "research_marketplace_products",
+          "plan_marketplace_research",
+          "execute_marketplace_research",
         ],
         controlConfigured: control.configured,
       });
@@ -122,7 +126,7 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
     { name: "shueho-commerce-data", version: "0.1.0" },
     {
       instructions:
-        "Use search_business_data first when existing curated evidence may be sufficient. Before proposing marketplace scope, call list_marketplace_research_platforms and use only its exact database-returned platform ids and labels; then use get_marketplace_options for selected platforms and never guess a market/site. Use research_social_content for public social evidence and research_marketplace_products for marketplace product evidence; supply business-level constraints only because SHUEHO selects and validates provider endpoints internally. Complete REST responses stay in the SQL warehouse and only curated evidence is returned. Paid research must never be retried after an uncertain result. This server cannot reveal provider credentials, provider endpoint controls or raw warehouse rows.",
+        "Use search_business_data first when existing curated evidence may be sufficient. Before marketplace research, read list_marketplace_research_platforms and get_marketplace_options, then create a free plan_marketplace_research receipt using only returned market-language metadata. Execute only that plan_id through execute_marketplace_research. Complete REST responses stay in the SQL warehouse and only curated evidence is returned. Paid research must never be retried after an uncertain result. This server cannot reveal provider credentials, provider endpoint controls or raw warehouse rows.",
     },
   );
   if (principal.scopes.includes("external_data.catalog.read")) {
@@ -177,7 +181,7 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
       "get_marketplace_options",
       {
         title: "读取电商平台站点选项",
-        description: "读取一个目录内平台的当前市场/站点选项；不存在的工作流返回 available=false，不调用供应商且不产生费用。",
+        description: "读取平台当前市场/站点与查询语言元数据；不返回内部质量阈值或样本上限，不调用供应商且不产生费用。",
         inputSchema: { platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/) },
         annotations: {
           readOnlyHint: true,
@@ -254,6 +258,9 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
             max_results,
           }, authorization);
         } catch (error) {
+          if (error instanceof ExternalDataControlError) {
+            return toolError(error.code,error.message,{ providerDispatched: false,...error.details });
+          }
           return toolError(
             error instanceof SocialContentResearchPreflightError ? error.code : "SOCIAL_RESEARCH_PREFLIGHT_FAILED",
             error instanceof Error ? error.message : "社交内容研究请求无法匹配当前数据能力。",
@@ -269,249 +276,233 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
       },
     );
     server.registerTool(
-      "research_marketplace_products",
+      "plan_marketplace_research",
       {
-        title: "研究公开电商商品（可能计费）",
+        title: "规划公开电商商品研究（免费）",
         description:
-          "按平台、关键词、价格范围和指标研究公开商品数据。SHUEHO 在内部选择并校验供应商接口，完整原始列表入库，MCP 只返回质量合格的商品、品牌、属性和聚合证据。",
+          "校验业务范围、市场语言档案、目录版本和代表样本规模，返回不可变计划 ID；不调用供应商且不产生费用。",
         inputSchema: {
           platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
           keyword: z.string().min(1).max(500),
-          localized_keyword: z.string().min(1).max(500).nullable().default(null),
+          localized_keywords: z.array(z.string().min(1).max(500)).max(8).default([]),
           market: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).nullable().default(null),
           tmall_only: z.boolean(),
           min_price_yuan: z.number().nonnegative().nullable(),
           max_price_yuan: z.number().nonnegative().nullable(),
           requested_metrics: z.array(z.enum(["price_band", "sales_level", "brand_competition", "property_distribution"])).min(1).max(4),
           max_results: z.number().int().min(1).max(100),
+          detail_sample_size: z.number().int().min(1).max(10).nullable().default(null),
+          idempotency_key: z.string().uuid(),
           research_request: z.string().min(1).max(50_000),
         },
         annotations: {
           readOnlyHint: false,
-          destructiveHint: true,
-          idempotentHint: false,
-          openWorldHint: true,
+          destructiveHint: false,
+          idempotentHint: true,
+          openWorldHint: false,
         },
       },
       async ({
-        platform, keyword, localized_keyword, market, tmall_only, min_price_yuan, max_price_yuan,
-        requested_metrics, max_results, research_request,
+        platform,keyword,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
+        requested_metrics,max_results,detail_sample_size,idempotency_key,research_request,
       }) => {
         const authorization = await control.authorizeCatalog(principal);
-        let preflight;
+        const sourceCallId = `mcp_plan_${idempotency_key.replaceAll("-", "")}`;
         try {
-          preflight = await preflightMarketplaceProductResearch(upstream, {
-            platform,
-            keyword,
-            localized_keyword,
-            market,
-            tmall_only,
-            min_price_yuan,
-            max_price_yuan,
-            requested_metrics,
-            max_results,
+          const planned = await createMarketplaceProductResearchPlan(upstream, {
+            platform,keyword,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
+            requested_metrics,max_results,detail_sample_size,
+          }, {
+            tenant_id: principal.tenantId,workspace_id: principal.workspaceId,user_id: principal.userId,
+            source: "external_mcp",source_call_id: sourceCallId,request_text: research_request,
+            top_n: max_results,business_intent: null,
           }, authorization);
+          const quote = await control.quote(principal, {
+            planId: planned.planId,
+            planKey: planned.planKey,
+            source: "external_mcp",
+            calls: planned.steps.map((step) => ({
+              endpointId: step.endpointId,
+              platform: step.catalogPlatform,
+              count: Object.keys(step.dynamicParameterBindings).length ? planned.detailSampleSize : 1,
+            })),
+          });
+          if (quote.providerCallCount !== planned.estimatedProviderCalls) {
+            return toolError("MARKETPLACE_PLAN_QUOTE_MISMATCH",
+              "Marketplace plan and billing quote call counts differ.",{ providerDispatched: false });
+          }
+          return toolSuccess({
+            success: true,state: "ready",plan_id: planned.planId,expires_at: planned.expiresAt,
+            market_context: planned.marketContext,detail_sample_size: planned.detailSampleSize,
+            estimated_provider_calls: planned.estimatedProviderCalls,coverage: planned.coverage,
+            quote: {
+              currency: quote.currency,provider_call_count: quote.providerCallCount,
+              priced: quote.unpricedEndpointIds.length === 0,
+              vendor_cost_micros: quote.vendorCostMicros,billable_amount_micros: quote.billableAmountMicros,
+              monthly_call_limit: quote.monthlyCallLimit,calls_used: quote.callsUsed,
+              monthly_spend_limit_micros: quote.monthlySpendLimitMicros,
+              spend_used_micros: quote.spendUsedMicros,approval_mode: quote.approvalMode,
+              per_call_auto_approval_micros: quote.perCallAutoApprovalMicros,
+            },
+          });
         } catch (error) {
+          if (error instanceof ExternalDataControlError) {
+            return toolError(error.code,error.message,{ providerDispatched: false,...error.details });
+          }
           return toolError(
-            error instanceof MarketplaceProductResearchPreflightError ? error.code : "MARKETPLACE_RESEARCH_PREFLIGHT_FAILED",
-            error instanceof Error ? error.message : "商品研究请求无法匹配当前数据能力。",
-            { providerDispatched: false },
+            error instanceof MarketplaceProductResearchPreflightError ? error.code : "MARKETPLACE_RESEARCH_PLAN_FAILED",
+            error instanceof Error ? error.message : "商品研究计划无法建立。",
+            { providerDispatched: false,...(error instanceof MarketplaceProductResearchPreflightError ? error.details : {}) },
           );
         }
-        return executePublicMarketplaceResearch(principal, {
-          preflight,
-          businessInput: {
-            platform,
-            keyword,
-            localized_keyword,
-            market,
-            tmall_only,
-            min_price_yuan,
-            max_price_yuan,
-            requested_metrics,
-            max_results,
-          },
-          researchRequest: research_request,
-        });
       },
+    );
+    server.registerTool(
+      "execute_marketplace_research",
+      {
+        title: "执行已固定商品研究计划（可能计费）",
+        description: "仅接受未过期的 plan_id；每个供应商步骤仍分别执行权限、预算、策略批准、精确一次分发、原始归档和结算。",
+        inputSchema: { plan_id: z.string().uuid() },
+        annotations: { readOnlyHint: false,destructiveHint: true,idempotentHint: false,openWorldHint: true },
+      },
+      async ({ plan_id }) => executePublicMarketplaceResearchPlan(principal, plan_id),
     );
   }
   return server;
 }
 
-async function executePublicMarketplaceResearch(
+async function executePublicMarketplaceResearchPlan(
   principal: AuthenticatedMcpPrincipal,
-  input: {
-    preflight: MarketplaceProductResearchPreflight;
-    businessInput: MarketplaceProductResearchInput;
-    researchRequest: string;
-  },
+  planId: string,
 ) {
-  const rootCallId = `mcp_${crypto.randomUUID().replaceAll("-", "")}`;
-  const businessIntent = {
-    ...input.preflight.businessIntent,
-    workflow_plan_key: input.preflight.planKey,
-  };
-  const began = await upstream.beginMarketplaceProductResearch({
-    ...input.businessInput,
-    workflow_id: input.preflight.workflowId,
-    research_plan_key: input.preflight.planKey,
-    _commerce_context: {
-      tenant_id: principal.tenantId,
-      workspace_id: principal.workspaceId,
-      user_id: principal.userId,
-      source: "external_mcp",
-      source_call_id: rootCallId,
-      request_text: input.researchRequest,
-      top_n: input.businessInput.max_results,
-      business_intent: businessIntent,
-    },
-  });
-  const executionId = typeof began.payload.workflow_execution_id === "string"
-    ? began.payload.workflow_execution_id
-    : "";
-  if (began.payload.success !== true || !/^[a-f0-9-]{36}$/.test(executionId)) {
+  const authorization = await control.authorizeCatalog(principal);
+  const rootCallId = `mcp_execute_${crypto.randomUUID().replaceAll("-", "")}`;
+  let executable;
+  try {
+    executable = await executeMarketplaceProductResearchPlan(upstream, planId, {
+      tenant_id: principal.tenantId,workspace_id: principal.workspaceId,user_id: principal.userId,
+      source: "external_mcp",source_call_id: rootCallId,
+      request_text: `Execute marketplace research plan ${planId}`,top_n: 50,business_intent: null,
+    }, authorization);
+  } catch (error) {
     return toolError(
-      typeof began.payload.code === "string" ? began.payload.code : "WORKFLOW_BEGIN_FAILED",
-      typeof began.payload.message === "string" ? began.payload.message : "Marketplace workflow could not be started.",
+      error instanceof MarketplaceProductResearchPreflightError ? error.code : "MARKETPLACE_PLAN_EXECUTION_FAILED",
+      error instanceof Error ? error.message : "Marketplace plan could not be executed.",
       { providerDispatched: false },
     );
   }
-  let bindings: Record<string, string | number> = {};
-  for (const step of input.preflight.steps) {
-    if (Object.keys(step.dynamicParameterBindings).length && !Object.keys(bindings).length) {
-      const resolved = await upstream.resolveMarketplaceProductBindings({
-        workflow_execution_id: executionId,
-        _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
-      });
-      if (resolved.payload.success !== true || !isRecord(resolved.payload.bindings)) {
-        const partial = await upstream.completeMarketplaceProductResearch({
-          workflow_execution_id: executionId,
-          _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
-        });
-        return toolError(
-          typeof resolved.payload.code === "string" ? resolved.payload.code : "WORKFLOW_BINDING_UNAVAILABLE",
-          typeof resolved.payload.message === "string" ? resolved.payload.message : "No quality-checked product identifier was available.",
-          partial.payload,
-        );
-      }
-      bindings = readPublicWorkflowBindings(resolved.payload.bindings);
-    }
+  const businessIntent = { ...executable.businessIntent,workflow_plan_key: executable.planKey };
+  let stepInstances = executable.stepInstances;
+  let stepIndex = 0;
+  while (stepIndex < stepInstances.length) {
+    const instance = stepInstances[stepIndex];
+    if (!instance) break;
+    const step = executable.steps.find((candidate) => candidate.stepId === instance.stepId);
+    if (!step) return toolError("WORKFLOW_STEP_TEMPLATE_MISSING", "Workflow step template is missing.");
     const params = structuredClone(step.parameterTemplate);
-    for (const [parameter, bindingName] of Object.entries(step.dynamicParameterBindings)) {
-      const value = bindings[bindingName];
+    for (const [parameter,bindingName] of Object.entries(step.dynamicParameterBindings)) {
+      const value = instance.bindings[bindingName];
       if (value === undefined) {
-        return toolError("WORKFLOW_BINDING_UNAVAILABLE", `Missing workflow binding ${bindingName}.`, { providerDispatched: false });
+        return toolError("WORKFLOW_BINDING_UNAVAILABLE", `Missing workflow binding ${bindingName}.`);
       }
       params[parameter] = value;
     }
-    const endpointPreflight = await upstream.preflightEndpoint({ endpoint_id: step.endpointId, params });
+    const endpointPreflight = await upstream.preflightEndpoint({ endpoint_id: step.endpointId,params });
     if (endpointPreflight.payload.success !== true || !isRecord(endpointPreflight.payload.normalized_params)) {
-      return toolError(
-        "WORKFLOW_STEP_PREFLIGHT_FAILED",
+      return toolError("WORKFLOW_STEP_PREFLIGHT_FAILED",
         typeof endpointPreflight.payload.message === "string" ? endpointPreflight.payload.message : "Workflow step parameters were rejected.",
-        { providerDispatched: false, role: step.role },
-      );
+        { providerDispatched: false,role: step.role,targetOrdinal: instance.targetOrdinal });
     }
     const normalizedParams = endpointPreflight.payload.normalized_params;
-    const authorization = await control.authorizeCatalog(principal);
-    assertEndpointAllowed(step.endpointId, authorization);
-    const callId = `${rootCallId}_${step.stepOrder}`;
+    const currentAuthorization = await control.authorizeCatalog(principal);
+    assertEndpointAllowed(step.endpointId,currentAuthorization);
+    const callId = `${rootCallId}_${instance.stepInstanceKey}`;
     const reservation = await control.reserve(principal, {
-      source: "external_mcp",
-      callId,
-      endpointId: step.endpointId,
-      platform: step.catalogPlatform,
+      source: "external_mcp",callId,endpointId: step.endpointId,platform: step.catalogPlatform,
       parameterHash: hashExternalDataParameters(normalizedParams),
-      parameterKeys: externalDataParameterKeys(normalizedParams),
-      requestedApprovalMode: "policy",
+      parameterKeys: externalDataParameterKeys(normalizedParams),requestedApprovalMode: "policy",
+      marketplacePlanId: executable.planId,workflowStepInstanceId: instance.stepInstanceId,
+      workflowTargetId: instance.targetId,workflowRole: step.role,
     });
     if (reservation.requiresApproval) {
-      await control.cancel(principal, reservation.reservationId, "approval_required");
+      await control.cancel(principal,reservation.reservationId,"approval_required");
       await upstream.cancelMarketplaceProductResearch({
-        workflow_execution_id: executionId,
+        workflow_execution_id: executable.executionId,
         reason: `Policy requires approval for ${step.role}.`,
-        _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
+        _commerce_context: { tenant_id: principal.tenantId,workspace_id: principal.workspaceId },
       }).catch(() => undefined);
-      return toolError(
-        "APPROVAL_REQUIRED",
-        "Workspace policy requires human approval for a workflow step. Use the Commerce Pilot web workbench; this MCP server will not bypass it.",
-        {
-          role: step.role,
-          pricingStatus: reservation.pricingStatus,
-          currency: reservation.currency,
-          billableAmountMicros: reservation.billableAmountMicros,
-        },
-      );
+      return toolError("APPROVAL_REQUIRED",
+        "Workspace policy requires human approval. Use the Commerce Pilot web workbench; this MCP server will not bypass it.",
+        { role: step.role,targetOrdinal: instance.targetOrdinal,pricingStatus: reservation.pricingStatus,
+          currency: reservation.currency,billableAmountMicros: reservation.billableAmountMicros });
     }
-    await control.dispatch(principal, reservation.reservationId, {
-      endpoint_id: step.endpointId,
-      params: normalizedParams,
-      workflow_execution_id: executionId,
-      workflow_step_id: step.stepId,
+    await control.dispatch(principal,reservation.reservationId, {
+      endpoint_id: step.endpointId,params: normalizedParams,workflow_execution_id: executable.executionId,
+      workflow_step_id: step.stepId,marketplace_plan_id: executable.planId,
+      workflow_step_instance_id: instance.stepInstanceId,workflow_target_id: instance.targetId,
     });
     let result: ExternalDataServiceToolResult;
     try {
       result = await upstream.callEndpoint({
-        endpoint_id: step.endpointId,
-        params: normalizedParams,
+        endpoint_id: step.endpointId,params: normalizedParams,
         _commerce_context: {
-          tenant_id: principal.tenantId,
-          workspace_id: principal.workspaceId,
-          user_id: principal.userId,
-          source: "external_mcp",
-          source_call_id: callId,
-          request_text: input.researchRequest,
-          top_n: input.businessInput.max_results,
-          workflow_execution_id: executionId,
-          workflow_step_id: step.stepId,
-          business_intent: {
-            ...businessIntent,
-            workflow_step_id: step.stepId,
-            workflow_step_role: step.role,
+          tenant_id: principal.tenantId,workspace_id: principal.workspaceId,user_id: principal.userId,
+          source: "external_mcp",source_call_id: callId,request_text: executable.requestText,
+          top_n: readPublicTopN(executable.businessIntent),workflow_execution_id: executable.executionId,
+          workflow_step_id: step.stepId,workflow_step_instance_id: instance.stepInstanceId,
+          workflow_target_id: instance.targetId,business_intent: {
+            ...businessIntent,workflow_step_id: step.stepId,workflow_step_role: step.role,
+            workflow_step_instance_id: instance.stepInstanceId,workflow_target_id: instance.targetId,
           },
         },
       });
     } catch (error) {
       const normalized = error instanceof ExternalDataServiceMcpError
         ? error
-        : new ExternalDataServiceMcpError("SHUEHO external-data workflow step failed.", "CALL_FAILED", true);
-      await control.settle(principal, reservation.reservationId, {
-        state: "unknown",
-        upstreamCode: null,
-        upstreamMessage: normalized.message,
-        resultBytes: null,
-        responsePayload: null,
+        : new ExternalDataServiceMcpError("SHUEHO external-data workflow step failed.","CALL_FAILED",true);
+      await control.settle(principal,reservation.reservationId, {
+        state: "unknown",upstreamCode: null,upstreamMessage: normalized.message,
+        resultBytes: null,responsePayload: null,
       }).catch(() => undefined);
-      return toolError("UPSTREAM_RESULT_UNKNOWN", normalized.message, { role: step.role });
+      return toolError("UPSTREAM_RESULT_UNKNOWN",normalized.message,
+        { role: step.role,targetOrdinal: instance.targetOrdinal });
     }
-    const outcome = classifyExternalDataServiceOutcome(result.payload, result.isError);
-    await control.settle(principal, reservation.reservationId, {
-      state: outcome.settlementState,
-      upstreamCode: outcome.upstreamCode,
+    const outcome = classifyExternalDataServiceOutcome(result.payload,result.isError);
+    await control.settle(principal,reservation.reservationId, {
+      state: outcome.settlementState,upstreamCode: outcome.upstreamCode,
       upstreamMessage: typeof result.payload.message === "string" ? result.payload.message : null,
-      resultBytes: result.resultBytes,
-      responsePayload: result.payload,
+      resultBytes: result.resultBytes,responsePayload: result.payload,
     });
-    if (!outcome.businessUsable) {
-      const partial = await upstream.completeMarketplaceProductResearch({
-        workflow_execution_id: executionId,
-        _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
+    if (outcome.businessUsable && step.role === "discovery") {
+      const resolved = await upstream.resolveMarketplaceProductBindings({
+        workflow_execution_id: executable.executionId,
+        _commerce_context: { tenant_id: principal.tenantId,workspace_id: principal.workspaceId },
       });
-      return toolError(
-        outcome.providerCompleted ? "WAREHOUSE_PROCESSING_FAILED" : "UPSTREAM_BUSINESS_ERROR",
-        typeof result.payload.message === "string" ? result.payload.message : "Marketplace workflow step failed.",
-        partial.payload,
-      );
+      if (resolved.payload.success !== true) {
+        const partial = await upstream.completeMarketplaceProductResearch({
+          workflow_execution_id: executable.executionId,
+          _commerce_context: { tenant_id: principal.tenantId,workspace_id: principal.workspaceId },
+        });
+        return toolError(typeof resolved.payload.code === "string" ? resolved.payload.code : "WORKFLOW_BINDING_UNAVAILABLE",
+          typeof resolved.payload.message === "string" ? resolved.payload.message : "No representative targets were available.",partial.payload);
+      }
+      stepInstances = parseMarketplaceProductResearchStepInstances(resolved.payload.step_instances);
+      executable.coverage.provider_calls_planned = 1 + stepInstances.length;
+      executable.coverage.detailed_products_selected = Array.isArray(resolved.payload.targets)
+        ? resolved.payload.targets.length
+        : new Set(stepInstances.map((item) => item.targetId).filter(Boolean)).size;
+      stepIndex = 0;
+      continue;
     }
+    stepIndex += 1;
   }
   const completed = await upstream.completeMarketplaceProductResearch({
-    workflow_execution_id: executionId,
-    _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
+    workflow_execution_id: executable.executionId,
+    _commerce_context: { tenant_id: principal.tenantId,workspace_id: principal.workspaceId },
   });
   return completed.payload.success === true
-    ? toolSuccess({ ...completed.payload, business_tool: "research_marketplace_products" })
-    : toolError("WORKFLOW_INCOMPLETE", "Marketplace workflow did not complete all required steps.", completed.payload);
+    ? toolSuccess({ ...completed.payload,business_tool: "execute_marketplace_research" })
+    : toolError("WORKFLOW_INCOMPLETE","Marketplace workflow completed only partially.",completed.payload);
 }
 
 async function executePublicResearch(
@@ -659,10 +650,9 @@ function endpointPlatform(endpointId: string): string {
   return endpointId.slice(0, endpointId.indexOf("."));
 }
 
-function readPublicWorkflowBindings(value: Record<string, unknown>): Record<string, string | number> {
-  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string | number] =>
-    (typeof entry[1] === "string" && entry[1].length <= 500) ||
-    (typeof entry[1] === "number" && Number.isSafeInteger(entry[1]))));
+function readPublicTopN(intent: Record<string, unknown>): number {
+  const value = intent.requested_top_n;
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 500 ? value : 50;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -29,7 +29,8 @@ describe("marketplace product research planning", () => {
       page: 1,
     });
     expect(plan.steps[1]?.dynamicParameterBindings).toEqual({ itemId: "item_id" });
-    expect(plan.coverage.provider_calls_planned).toBe(3);
+    expect(plan.coverage.provider_calls_planned).toBe(7);
+    expect(plan.coverage.detailed_products_planned).toBe(3);
   });
 
   it("requires a Shopee site before any provider plan is produced", () => {
@@ -88,6 +89,20 @@ describe("marketplace product research planning", () => {
       maxResults: 20,
     })).toThrowError(expect.objectContaining({ code: "LOCALIZED_KEYWORD_REQUIRED" }));
   });
+
+  it("rejects a localized keyword that does not use the selected market script", () => {
+    expect(() => selectMarketplaceProductResearchPlan([shopeeWorkflow()], {
+      platform: "SHOPEE",
+      keyword: "休闲运动裤",
+      localizedKeyword: "休闲运动裤",
+      market: "TH",
+      tmallOnly: false,
+      minPriceYuan: null,
+      maxPriceYuan: null,
+      requestedMetrics: ["price_band"],
+      maxResults: 20,
+    })).toThrowError(expect.objectContaining({ code: "LOCALIZED_KEYWORD_INVALID" }));
+  });
 });
 
 function workflow(): ProviderBusinessWorkflow {
@@ -104,6 +119,7 @@ function workflow(): ProviderBusinessWorkflow {
     inputSchema: {},
     maximumProviderCalls: 3,
     definitionSha256: "a".repeat(64),
+    sourceCatalogImportId: "00000000-0000-4000-8000-000000000001",
     marketOptions: [],
     steps: [
       {
@@ -218,9 +234,20 @@ function shopeeWorkflow(): ProviderBusinessWorkflow {
     inputSchema: {},
     maximumProviderCalls: 1,
     definitionSha256: "b".repeat(64),
+    sourceCatalogImportId: "00000000-0000-4000-8000-000000000001",
     marketOptions: buildProviderMarketOptions([search]).map((option) => ({
       code: option.marketCode,
       displayName: option.displayName,
+      profileId: `00000000-0000-4000-8000-00000000000${option.sortOrder + 2}`,
+      profileRevision: "c".repeat(64),
+      preferredQueryLocale: option.marketCode === "TW" ? "zh-Hant-TW" : option.marketCode === "TH" ? "th-TH" : "id-ID",
+      queryLocales: [option.marketCode === "TW" ? "zh-Hant-TW" : option.marketCode === "TH" ? "th-TH" : "id-ID"],
+      acceptedQueryLanguages: [option.marketCode === "TW" ? "zh" : option.marketCode === "TH" ? "th" : "id"],
+      timezone: option.marketCode === "TW" ? "Asia/Taipei" : option.marketCode === "TH" ? "Asia/Bangkok" : "Asia/Jakarta",
+      currency: option.marketCode === "TW" ? "TWD" : option.marketCode === "TH" ? "THB" : "IDR",
+      keywordLocalizationPolicy: "agent_generated_validated" as const,
+      expectedScripts: [option.marketCode === "TW" ? "Hant" : option.marketCode === "TH" ? "Thai" : "Latn"],
+      qualityPolicy: { detailSampleSize: 3, maxDetailSampleSize: 5 },
     })),
     steps: [{
       stepId: "discover",

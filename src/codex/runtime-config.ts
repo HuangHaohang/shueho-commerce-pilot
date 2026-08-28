@@ -4,6 +4,10 @@ import { cwd, execPath } from "node:process";
 
 import type { GatewayConfig } from "../gateway/config.js";
 import {
+  createRuntimeProviderProxyIdentity,
+  runtimeProviderActorAuthorizationHeader,
+} from "../provider/runtime-provider-proxy.js";
+import {
   MANAGED_WORKFLOW_IDS,
   managedWorkflowSkillDirectory,
   managedWorkflowSkillPath,
@@ -91,6 +95,7 @@ function renderConfig(
   hookAuditPath: string,
   commerceWebMcpPath: string,
 ): string {
+  const runtimeProviderProxy = createRuntimeProviderProxyIdentity(config);
   const hookCommandArguments = [execPath, hookScriptPath, hookAuditPath];
   const hookCommand = hookCommandArguments
     .map((value) => quoteHookCommandArgument(value, "linux"))
@@ -203,10 +208,10 @@ function renderConfig(
   lines.push(
     `[model_providers.${config.provider.id}]`,
     `name = ${tomlString(config.provider.name)}`,
-    `base_url = ${tomlString(config.provider.baseUrl)}`,
-    `env_key = ${tomlString(config.provider.apiKeyEnvName)}`,
+    `base_url = ${tomlString(runtimeProviderProxy.baseUrl)}`,
     'wire_api = "responses"',
     "requires_openai_auth = false",
+    `http_headers = { ${tomlString(runtimeProviderActorAuthorizationHeader)} = ${tomlString(runtimeProviderProxy.actorAuthorization)} }`,
     "request_max_retries = 4",
     "stream_max_retries = 5",
     "stream_idle_timeout_ms = 300000",
@@ -260,6 +265,12 @@ const allowedTools = new Set([
   "commerce_data.research_marketplace_products",
   "commerce_data_research_marketplace_products",
   "commerce_dataresearch_marketplace_products",
+  "commerce_data.plan_marketplace_research",
+  "commerce_data_plan_marketplace_research",
+  "commerce_dataplan_marketplace_research",
+  "commerce_data.execute_marketplace_research",
+  "commerce_data_execute_marketplace_research",
+  "commerce_dataexecute_marketplace_research",
   "commerce_data.list_marketplace_research_platforms",
   "commerce_data_list_marketplace_research_platforms",
   "commerce_datalist_marketplace_research_platforms",
@@ -283,6 +294,8 @@ const allowedTools = new Set([
   "search",
   "research_social_content",
   "research_marketplace_products",
+  "plan_marketplace_research",
+  "execute_marketplace_research",
   "list_marketplace_research_platforms",
   "get_marketplace_options",
 ]);

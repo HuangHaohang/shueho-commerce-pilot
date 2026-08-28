@@ -12,6 +12,10 @@ describe("provider business workflow catalog", () => {
     ]);
     expect(workflows).toHaveLength(1);
     expect(workflows[0]?.workflowId).toBe("jd.products_by_keyword_v1");
+    expect(workflows[0]?.workflowVersion).toBe("2.0.0");
+    expect(workflows[0]?.inputSchema).toMatchObject({
+      required: expect.arrayContaining(["localized_keywords","detail_sample_size"]),
+    });
     expect(workflows[0]?.steps.map((step) => [step.role, step.endpointId])).toEqual([
       ["discovery", "jd.search_item_list_v2"],
       ["detail", "jd.get_item_detail_v3"],

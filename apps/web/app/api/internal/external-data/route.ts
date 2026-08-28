@@ -9,6 +9,7 @@ import {
   cancelExternalDataCall,
   dispatchExternalDataCall,
   ExternalDataGovernanceError,
+  quoteExternalDataPlan,
   reserveExternalDataCall,
   settleExternalDataCall,
 } from "@/lib/enterprise/external-data";
@@ -34,10 +35,28 @@ const reserveSchema = scopeSchema.extend({
   parameterHash: z.string().regex(/^[a-f0-9]{64}$/),
   parameterKeys: z.array(z.string().regex(/^[A-Za-z0-9_.-]{1,80}$/)).max(64),
   requestedApprovalMode: z.enum(["always_ask", "task", "policy"]),
+  marketplacePlanId: z.string().uuid().nullable().optional(),
+  workflowStepInstanceId: z.string().uuid().nullable().optional(),
+  workflowTargetId: z.string().uuid().nullable().optional(),
+  workflowRole: z.enum(["discovery", "detail", "price", "reviews", "sku"]).nullable().optional(),
 });
 
 const catalogSchema = scopeSchema.extend({
   action: z.literal("catalog"),
+});
+
+const quoteSchema = scopeSchema.extend({
+  action: z.literal("quote"),
+  planId: z.string().uuid(),
+  planKey: z.string().regex(/^[a-f0-9]{64}$/),
+  source: z.enum(["codex_harness", "external_mcp"]),
+  threadId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).nullable().optional(),
+  turnId: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/).nullable().optional(),
+  calls: z.array(z.object({
+    endpointId: z.string().regex(/^[a-z0-9_]+\.[A-Za-z0-9_.-]+$/).max(180),
+    platform: z.string().regex(/^[a-z0-9_]+$/).max(64),
+    count: z.number().int().min(1).max(100),
+  }).strict()).min(1).max(20),
 });
 
 const approveSchema = scopeSchema.extend({
@@ -70,6 +89,7 @@ const settleSchema = scopeSchema.extend({
 const bodySchema = z.discriminatedUnion("action", [
   reserveSchema,
   catalogSchema,
+  quoteSchema,
   approveSchema,
   dispatchSchema,
   cancelSchema,
@@ -101,6 +121,10 @@ export async function POST(request: Request) {
       const authorization = await authorizeExternalDataCatalog(scope);
       return NextResponse.json({ authorized: true, authorization }, { headers: { "Cache-Control": "no-store" } });
     }
+    if (parsed.data.action === "quote") {
+      const quote = await quoteExternalDataPlan(scope,parsed.data);
+      return NextResponse.json({ quoted: true,quote },{ headers: { "Cache-Control": "no-store" } });
+    }
     if (parsed.data.action === "reserve") {
       const reservation = await reserveExternalDataCall(scope, parsed.data);
       return NextResponse.json({ reserved: true, reservation }, { headers: { "Cache-Control": "no-store" } });
@@ -124,7 +148,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
     }
     if (error instanceof ExternalDataGovernanceError) {
-      return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
+      return NextResponse.json({ error: error.message, code: error.code,details: error.details }, { status: error.status });
     }
     return NextResponse.json({ error: "External-data control request failed." }, { status: 503 });
   }

@@ -86,6 +86,10 @@ export type ExternalDataGovernanceView = {
     approvalState: string;
     pricingStatus: "priced" | "unpriced";
     billableAmountMicros: number | null;
+    marketplacePlanId: string | null;
+    workflowStepInstanceId: string | null;
+    workflowTargetId: string | null;
+    workflowRole: string | null;
     currency: string;
     upstreamCode: number | null;
     createdAt: string;
@@ -107,6 +111,10 @@ export type ReserveExternalDataCallInput = {
   parameterHash: string;
   parameterKeys: string[];
   requestedApprovalMode: ExternalDataApprovalMode;
+  marketplacePlanId?: string | null;
+  workflowStepInstanceId?: string | null;
+  workflowTargetId?: string | null;
+  workflowRole?: "discovery" | "detail" | "price" | "reviews" | "sku" | null;
 };
 
 export type ExternalDataReservation = {
@@ -126,6 +134,29 @@ export type ExternalDataReservation = {
 export type ExternalDataCatalogAuthorization = {
   allowedPlatforms: string[];
   allowedEndpointIds: string[];
+};
+
+export type ExternalDataPlanQuote = {
+  currency: string;
+  providerCallCount: number;
+  vendorCostMicros: number | null;
+  billableAmountMicros: number | null;
+  unpricedEndpointIds: string[];
+  monthlyCallLimit: number;
+  callsUsed: number;
+  monthlySpendLimitMicros: number | null;
+  spendUsedMicros: number;
+  approvalMode: ExternalDataApprovalMode;
+  perCallAutoApprovalMicros: number | null;
+};
+
+export type QuoteExternalDataPlanInput = {
+  planId: string;
+  planKey: string;
+  source: ExternalDataCallSource;
+  threadId?: string | null;
+  turnId?: string | null;
+  calls: Array<{ endpointId: string; platform: string; count: number }>;
 };
 
 type PolicyRow = {
@@ -155,6 +186,7 @@ export class ExternalDataGovernanceError extends Error {
     message: string,
     readonly code: string,
     readonly status: number,
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "ExternalDataGovernanceError";
@@ -195,6 +227,118 @@ export async function authorizeExternalDataCatalog(
       }).catch(() => undefined);
     }
     throw error;
+  });
+}
+
+export async function quoteExternalDataPlan(
+  scope: ExternalDataCallScope,
+  input: QuoteExternalDataPlanInput,
+): Promise<ExternalDataPlanQuote> {
+  if (!/^[0-9a-f-]{36}$/i.test(input.planId) || !/^[a-f0-9]{64}$/.test(input.planKey) ||
+    !input.calls.length || input.calls.length > 20 || input.calls.some((call) =>
+    !/^[a-z0-9_]+\.[A-Za-z0-9_.-]+$/.test(call.endpointId) ||
+    !/^[a-z0-9_]+$/.test(call.platform) || !Number.isInteger(call.count) || call.count < 1 || call.count > 100)) {
+    throw new ExternalDataGovernanceError("外部数据计划报价参数无效。", "EXTERNAL_DATA_QUOTE_INVALID", 400);
+  }
+  return withEnterpriseTenantDatabaseContext(scope, async (client) => {
+    if (!(await hasEffectivePermission(client, scope, "external_data.call"))) {
+      throw new ExternalDataGovernanceError("当前角色没有调用外部付费数据源的权限。", "EXTERNAL_DATA_PERMISSION_DENIED", 403);
+    }
+    const policy = await ensurePolicy(client, scope.tenantId, scope.workspaceId, true);
+    if (policy.status !== "enabled") {
+      throw new ExternalDataGovernanceError("当前工作区未启用外部数据服务。", "EXTERNAL_DATA_DISABLED", 403);
+    }
+    const providerCallCount = input.calls.reduce((sum, call) => sum + call.count, 0);
+    const usage = await readPeriodUsage(client, scope, policy);
+    if (usage.callsUsed + providerCallCount > policy.monthly_call_limit) {
+      throw new ExternalDataGovernanceError("当前计划超过本计费周期剩余调用额度。", "EXTERNAL_DATA_CALL_LIMIT", 429, {
+        providerCallCount,monthlyCallsRemaining: Math.max(0,policy.monthly_call_limit - usage.callsUsed),
+        ...recommendedSampleDetails(input.calls,Math.max(0,policy.monthly_call_limit - usage.callsUsed)),
+      });
+    }
+    if (input.source === "codex_harness" && policy.per_turn_call_limit !== null) {
+      const turnUsage = await client.query<{ calls_used: string }>(`
+        SELECT count(*)::text AS calls_used FROM commerce_external_data_call
+        WHERE tenant_id=$1 AND workspace_id=$2 AND source='codex_harness'
+          AND thread_id=$3 AND turn_id=$4 AND state <> 'cancelled'
+      `,[scope.tenantId,scope.workspaceId,input.threadId ?? null,input.turnId ?? null]);
+      const existingTurnCalls = parseCount(turnUsage.rows[0]?.calls_used);
+      if (existingTurnCalls + providerCallCount > policy.per_turn_call_limit) {
+        throw new ExternalDataGovernanceError(
+          `当前计划需要 ${providerCallCount} 次调用，连同本任务已使用的 ${existingTurnCalls} 次将超过单任务上限 ${policy.per_turn_call_limit}。`,
+          "EXTERNAL_DATA_TURN_CALL_LIMIT",
+          429,
+          {
+            providerCallCount,existingTurnCalls,perTurnCallLimit: policy.per_turn_call_limit,
+            ...recommendedSampleDetails(input.calls,Math.max(0,policy.per_turn_call_limit - existingTurnCalls)),
+          },
+        );
+      }
+    }
+    let vendorCostMicros = 0;
+    let billableAmountMicros = 0;
+    let fixedBillableAmountMicros = 0;
+    let repeatedBillableAmountPerSampleMicros = 0;
+    const unpricedEndpointIds: string[] = [];
+    for (const call of input.calls) {
+      if (!policy.allowed_platforms.includes(call.platform)) {
+        throw new ExternalDataGovernanceError("计划包含未获授权的数据平台。", "EXTERNAL_DATA_PLATFORM_DENIED", 403);
+      }
+      if (policy.allowed_endpoint_ids.length && !policy.allowed_endpoint_ids.includes(call.endpointId)) {
+        throw new ExternalDataGovernanceError("计划包含未获授权的数据接口。", "EXTERNAL_DATA_ENDPOINT_DENIED", 403);
+      }
+      const rate = await readEffectiveRate(client, scope, call.endpointId);
+      if (!rate) {
+        unpricedEndpointIds.push(call.endpointId);
+        continue;
+      }
+      if (rate.currency !== policy.currency) {
+        throw new ExternalDataGovernanceError("计划费率币种与企业策略不一致。", "EXTERNAL_DATA_CURRENCY_MISMATCH", 409);
+      }
+      vendorCostMicros += Number(rate.vendor_unit_cost_micros ?? 0) * call.count;
+      billableAmountMicros += Number(rate.customer_unit_price_micros) * call.count;
+      if (call.count > 1) repeatedBillableAmountPerSampleMicros += Number(rate.customer_unit_price_micros);
+      else fixedBillableAmountMicros += Number(rate.customer_unit_price_micros);
+    }
+    if (unpricedEndpointIds.length && policy.monthly_spend_limit_micros !== null) {
+      throw new ExternalDataGovernanceError(
+        "计划包含未配置费率的接口，无法在金额预算下执行。",
+        "EXTERNAL_DATA_RATE_CARD_REQUIRED",
+        409,
+      );
+    }
+    if (
+      policy.monthly_spend_limit_micros !== null &&
+      usage.spendUsedMicros + billableAmountMicros > Number(policy.monthly_spend_limit_micros)
+    ) {
+      const spendRemainingMicros = Math.max(0,Number(policy.monthly_spend_limit_micros) - usage.spendUsedMicros);
+      const maximumDetailSampleSizeBySpend = repeatedBillableAmountPerSampleMicros > 0
+        ? Math.max(0,Math.floor((spendRemainingMicros - fixedBillableAmountMicros) / repeatedBillableAmountPerSampleMicros))
+        : 0;
+      throw new ExternalDataGovernanceError("当前计划超过本计费周期剩余金额额度。", "EXTERNAL_DATA_SPEND_LIMIT", 402, {
+        billableAmountMicros,spendRemainingMicros,fixedBillableAmountMicros,
+        repeatedBillableAmountPerSampleMicros,maximumDetailSampleSizeBySpend,
+      });
+    }
+    await insertAudit(client,scope,"external_data.plan.quote","marketplace_research_plan",input.planId,"allowed",{
+      planKey: input.planKey,
+      providerCallCount,
+      endpointCounts: input.calls.map((call) => ({ endpointId: call.endpointId,count: call.count })),
+      priced: unpricedEndpointIds.length === 0,
+    });
+    return {
+      currency: policy.currency,
+      providerCallCount,
+      vendorCostMicros: unpricedEndpointIds.length ? null : vendorCostMicros,
+      billableAmountMicros: unpricedEndpointIds.length ? null : billableAmountMicros,
+      unpricedEndpointIds,
+      monthlyCallLimit: policy.monthly_call_limit,
+      callsUsed: usage.callsUsed,
+      monthlySpendLimitMicros: nullableNumber(policy.monthly_spend_limit_micros),
+      spendUsedMicros: usage.spendUsedMicros,
+      approvalMode: policy.approval_mode,
+      perCallAutoApprovalMicros: nullableNumber(policy.per_call_auto_approval_micros),
+    };
   });
 }
 
@@ -252,13 +396,18 @@ export async function getExternalDataGovernance(
       approval_state: string;
       pricing_status: "priced" | "unpriced";
       billable_amount_micros: string | number | null;
+      marketplace_plan_id: string | null;
+      workflow_step_instance_id: string | null;
+      workflow_target_id: string | null;
+      workflow_role: string | null;
       currency: string;
       upstream_code: number | null;
       created_at: Date;
     }>(
       `
-        SELECT id, endpoint_id, platform, source, state, approval_state,
-               pricing_status, billable_amount_micros, currency, upstream_code, created_at
+        SELECT id,endpoint_id,platform,source,state,approval_state,pricing_status,
+               billable_amount_micros,marketplace_plan_id,workflow_step_instance_id,
+               workflow_target_id,workflow_role,currency,upstream_code,created_at
         FROM commerce_external_data_call
         WHERE tenant_id = $1 AND workspace_id = $2
         ORDER BY created_at DESC
@@ -337,6 +486,10 @@ export async function getExternalDataGovernance(
         approvalState: row.approval_state,
         pricingStatus: row.pricing_status,
         billableAmountMicros: nullableNumber(row.billable_amount_micros),
+        marketplacePlanId: row.marketplace_plan_id,
+        workflowStepInstanceId: row.workflow_step_instance_id,
+        workflowTargetId: row.workflow_target_id,
+        workflowRole: row.workflow_role,
         currency: row.currency,
         upstreamCode: row.upstream_code,
         createdAt: row.created_at.toISOString(),
@@ -518,10 +671,15 @@ export async function reserveExternalDataCall(
       currency: string;
       vendor_cost_micros: string | number | null;
       billable_amount_micros: string | number | null;
+      marketplace_plan_id: string | null;
+      workflow_step_instance_id: string | null;
+      workflow_target_id: string | null;
+      workflow_role: string | null;
     }>(
       `
-        SELECT id, endpoint_id, parameter_hash, state, approval_state, pricing_status,
-               currency, vendor_cost_micros, billable_amount_micros
+        SELECT id,endpoint_id,parameter_hash,state,approval_state,pricing_status,
+               currency,vendor_cost_micros,billable_amount_micros,marketplace_plan_id,
+               workflow_step_instance_id,workflow_target_id,workflow_role
         FROM commerce_external_data_call
         WHERE tenant_id = $1 AND source = $2 AND call_id = $3
         LIMIT 1
@@ -530,7 +688,13 @@ export async function reserveExternalDataCall(
     );
     const existingCall = existing.rows[0];
     if (existingCall) {
-      if (existingCall.endpoint_id !== input.endpointId || existingCall.parameter_hash !== input.parameterHash) {
+      if (
+        existingCall.endpoint_id !== input.endpointId || existingCall.parameter_hash !== input.parameterHash ||
+        existingCall.marketplace_plan_id !== (input.marketplacePlanId ?? null) ||
+        existingCall.workflow_step_instance_id !== (input.workflowStepInstanceId ?? null) ||
+        existingCall.workflow_target_id !== (input.workflowTargetId ?? null) ||
+        existingCall.workflow_role !== (input.workflowRole ?? null)
+      ) {
         throw new ExternalDataGovernanceError("调用标识已绑定到其他参数。", "EXTERNAL_DATA_IDEMPOTENCY_CONFLICT", 409);
       }
       if (existingCall.state !== "reserved") {
@@ -604,13 +768,14 @@ export async function reserveExternalDataCall(
           tenant_id, workspace_id, user_id, mcp_access_token_id, provider, source,
           root_thread_id, thread_id, turn_id, call_id, endpoint_id, platform,
           parameter_hash, parameter_keys, requested_approval_mode, approval_state,
-          pricing_status, currency, vendor_cost_micros, billable_amount_micros
+          pricing_status,currency,vendor_cost_micros,billable_amount_micros,
+          marketplace_plan_id,workflow_step_instance_id,workflow_target_id,workflow_role
         )
         VALUES (
           $1, $2, $3, $4, 'justoneapi', $5,
           $6, $7, $8, $9, $10, $11,
           $12, $13::text[], $14, $15,
-          $16, $17, $18, $19
+          $16,$17,$18,$19,$20,$21,$22,$23
         )
         RETURNING id, approval_state, pricing_status, currency, vendor_cost_micros,
                   billable_amount_micros, endpoint_id, parameter_hash, state
@@ -635,6 +800,10 @@ export async function reserveExternalDataCall(
         rateCard?.currency ?? policy.currency,
         rateCard?.vendor_unit_cost_micros ?? null,
         rateCard?.customer_unit_price_micros ?? null,
+        input.marketplacePlanId ?? null,
+        input.workflowStepInstanceId ?? null,
+        input.workflowTargetId ?? null,
+        input.workflowRole ?? null,
       ],
     );
     const row = inserted.rows[0];
@@ -646,6 +815,10 @@ export async function reserveExternalDataCall(
       pricingStatus: row.pricing_status,
       requiresApproval,
       parameterKeys: input.parameterKeys,
+      marketplacePlanId: input.marketplacePlanId ?? null,
+      workflowStepInstanceId: input.workflowStepInstanceId ?? null,
+      workflowTargetId: input.workflowTargetId ?? null,
+      workflowRole: input.workflowRole ?? null,
     });
     return reservationView(row, policy, usage);
   }).catch(async (error) => {
@@ -704,6 +877,9 @@ export async function dispatchExternalDataCall(
       root_thread_id: string | null;
       thread_id: string | null;
       turn_id: string | null;
+      marketplace_plan_id: string | null;
+      workflow_step_instance_id: string | null;
+      workflow_target_id: string | null;
     }>(
       `
         UPDATE commerce_external_data_call
@@ -711,14 +887,25 @@ export async function dispatchExternalDataCall(
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3 AND user_id = $4
           AND state = 'reserved' AND approval_state IN ('approved', 'not_required')
-        RETURNING id, endpoint_id, platform, source, call_id,
-                  root_thread_id, thread_id, turn_id
+        RETURNING id,endpoint_id,platform,source,call_id,root_thread_id,thread_id,turn_id,
+                  marketplace_plan_id,workflow_step_instance_id,workflow_target_id
       `,
       [reservationId, scope.tenantId, scope.workspaceId, scope.userId],
     );
     const row = result.rows[0];
     if (!row) {
       throw new ExternalDataGovernanceError("外部数据调用未获准或已发送。", "EXTERNAL_DATA_DISPATCH_DENIED", 409);
+    }
+    if (
+      row.marketplace_plan_id !== nullableUuidValue(requestPayload.marketplace_plan_id) ||
+      row.workflow_step_instance_id !== nullableUuidValue(requestPayload.workflow_step_instance_id) ||
+      row.workflow_target_id !== nullableUuidValue(requestPayload.workflow_target_id)
+    ) {
+      throw new ExternalDataGovernanceError(
+        "外部数据分发载荷与计划步骤预留不一致。",
+        "EXTERNAL_DATA_PLAN_LINEAGE_MISMATCH",
+        409,
+      );
     }
     const archiveId = await recordExternalDataArchiveDispatch(client, scope, {
       externalCallId: row.id,
@@ -1061,6 +1248,41 @@ function validateCallIdentity(input: ReserveExternalDataCallInput): void {
   ) {
     throw new ExternalDataGovernanceError("Harness 调用缺少任务绑定。", "EXTERNAL_DATA_HARNESS_BINDING_INVALID", 400);
   }
+  const hasPlanLineage = Boolean(
+    input.marketplacePlanId || input.workflowStepInstanceId || input.workflowTargetId || input.workflowRole,
+  );
+  if (
+    hasPlanLineage &&
+    (!input.marketplacePlanId || !input.workflowStepInstanceId || !input.workflowRole)
+  ) {
+    throw new ExternalDataGovernanceError(
+      "市场研究调用缺少完整计划步骤绑定。",
+      "EXTERNAL_DATA_PLAN_LINEAGE_INVALID",
+      400,
+    );
+  }
+  if (input.workflowRole === "discovery" && input.workflowTargetId) {
+    throw new ExternalDataGovernanceError(
+      "商品发现步骤不能绑定下游代表目标。",
+      "EXTERNAL_DATA_PLAN_TARGET_INVALID",
+      400,
+    );
+  }
+}
+
+function recommendedSampleDetails(
+  calls: QuoteExternalDataPlanInput["calls"],
+  availableCalls: number,
+): Record<string, unknown> {
+  const repeated = calls.filter((call) => call.count > 1);
+  if (!repeated.length) return {};
+  const fixedCalls = calls.filter((call) => call.count === 1).reduce((sum,call) => sum + call.count,0);
+  const maximumDetailSampleSize = Math.max(0,Math.floor((availableCalls - fixedCalls) / repeated.length));
+  return { fixedProviderCalls: fixedCalls,repeatedProviderSteps: repeated.length,maximumDetailSampleSize };
+}
+
+function nullableUuidValue(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f-]{36}$/i.test(value) ? value : null;
 }
 
 function toPolicyView(row: PolicyRow): ExternalDataPolicyView {

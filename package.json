@@ -20,6 +20,7 @@
     "test:gateway": "npm run build && node --test dist/src/gateway/*.test.js dist/src/integrations/*.test.js dist/src/provider/*.test.js",
     "dev": "npm run build && node dist/src/gateway/server.js",
     "smoke:codex": "npm run build && node dist/scripts/smoke-codex-app-server.js",
+    "smoke:image-tool": "npm run build && node dist/scripts/smoke-native-image-tool.js",
     "smoke:provider": "npm run build && node dist/scripts/smoke-commerce-provider.js",
     "smoke:web-search": "npm run build && node dist/scripts/smoke-commerce-web-mcp.js",
     "dev:mcp": "npm run build && node dist/src/mcp/commerce-data-public-server.js",
@@ -35,6 +36,8 @@
     "external-data:infra:down": "docker compose stop external-data-postgres elasticsearch",
     "external-data:migrate": "npm --workspace @shueho-commerce-pilot/external-data run migrate",
     "external-data:import-catalog": "npm --workspace @shueho-commerce-pilot/external-data run import:catalog",
+    "external-data:import-market-profiles": "npm --workspace @shueho-commerce-pilot/external-data run import:market-profiles",
+    "external-data:import-business-workflows": "npm --workspace @shueho-commerce-pilot/external-data run import:business-workflows",
     "external-data:dev": "npm --workspace @shueho-commerce-pilot/external-data run dev",
     "external-data:start": "npm --workspace @shueho-commerce-pilot/external-data run start",
     "external-data:check": "npm --workspace @shueho-commerce-pilot/external-data run check",
@@ -64,7 +67,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@openai/codex": "0.149.0",
+    "@openai/codex": "0.150.1",
     "dotenv": "^17.2.2",
     "exceljs": "^4.4.0",
     "file-type": "^21.3.2",
@@ -79,6 +82,8 @@
   "overrides": {
     "exceljs": {
       "uuid": "11.1.1"
-    }
+    },
+    "postcss": "8.5.26",
+    "sharp": "0.35.4"
   }
 }

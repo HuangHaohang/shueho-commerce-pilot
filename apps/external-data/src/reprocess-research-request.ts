@@ -44,6 +44,8 @@ const stored = await owner.query<{
   requested_params: JsonObject;
   workflow_execution_id: string | null;
   workflow_step_id: string | null;
+  workflow_step_instance_id: string | null;
+  workflow_target_id: string | null;
   workflow_step_role: ExternalDataBusinessIntent["workflowStepRole"];
   workflow_step_state: string | null;
   workflow_plan_key: string | null;
@@ -53,6 +55,7 @@ const stored = await owner.query<{
          request.request_text,request.structured_intent,request.top_n,
          query.endpoint_id,query.requested_params,
          step.workflow_execution_id,step.step_id AS workflow_step_id,
+         step.id AS workflow_step_instance_id,step.target_id AS workflow_target_id,
          step.role AS workflow_step_role,step.state AS workflow_step_state,
          execution.plan_key AS workflow_plan_key
   FROM research_request request
@@ -80,6 +83,8 @@ const scope: ExternalDataScope = {
   businessIntent: toBusinessIntent(row.structured_intent, row),
   workflowExecutionId: row.workflow_execution_id,
   workflowStepId: row.workflow_step_id,
+  workflowStepInstanceId: row.workflow_step_instance_id,
+  workflowTargetId: row.workflow_target_id,
   enrichmentQueryTerms: localizedKeyword ? [localizedKeyword.normalize("NFKC").trim()] : [],
 };
 
@@ -94,6 +99,7 @@ try {
       await completeMarketplaceWorkflowStep(scope, {
         executionId: row.workflow_execution_id,
         stepId: row.workflow_step_id,
+        stepInstanceId: row.workflow_step_instance_id,
         endpointId: row.endpoint_id,
         researchRequestId: result.research_request_id,
         providerCompleted: result.provider_completed,
@@ -117,6 +123,8 @@ try {
     processingState: result.processing_state,
     acceptedProducts: numberValue(result.coverage.acceptedProducts),
     acceptedEvidence: numberValue(result.coverage.acceptedEvidence),
+    heldEvidence: numberValue(result.coverage.held),
+    rejectedEvidence: numberValue(result.coverage.rejected),
     workflowExecutionId: row.workflow_execution_id,
     workflowState: workflowResult?.processing_state ?? null,
     workflowAcceptedEvidence: numberValue(workflowResult?.coverage.acceptedEvidence),
@@ -152,6 +160,9 @@ function toBusinessIntent(
     workflowStepId: workflow.workflow_step_id,
     workflowStepRole: workflow.workflow_step_role,
     localizedKeyword: typeof intent.localizedKeyword === "string" ? intent.localizedKeyword : null,
+    localizedKeywords: stringArray(intent.localizedKeywords),
+    marketContext: isRecord(intent.marketContext) ? intent.marketContext : null,
+    qualityPolicy: isRecord(intent.qualityPolicy) ? intent.qualityPolicy : null,
   };
 }
 

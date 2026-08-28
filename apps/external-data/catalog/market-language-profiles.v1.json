@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "1.0.0",
+  "sourceName": "SHUEHO marketplace search-language profiles",
+  "defaults": {
+    "displayLocale": "zh-CN",
+    "keywordLocalizationPolicy": "agent_generated_validated",
+    "detailSampleSize": 3,
+    "maxDetailSampleSize": 5,
+    "qualityPolicy": {
+      "embeddingMinScore": 0.42,
+      "rerankMinScore": 0.55,
+      "lexicalPromoteMinScore": 0.6,
+      "holdRelevanceMinScore": 0.2
+    }
+  },
+  "profiles": [
+    { "platform": "amazon", "market": "AE", "preferredQueryLocale": "ar-AE", "queryLocales": ["ar-AE", "en-AE"], "acceptedQueryLanguages": ["ar", "en"], "timezone": "Asia/Dubai", "currency": "AED", "expectedScripts": ["Arab", "Latn"] },
+    { "platform": "amazon", "market": "AU", "preferredQueryLocale": "en-AU", "queryLocales": ["en-AU"], "acceptedQueryLanguages": ["en"], "timezone": "Australia/Sydney", "currency": "AUD", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "BE", "preferredQueryLocale": "nl-BE", "queryLocales": ["nl-BE", "fr-BE"], "acceptedQueryLanguages": ["nl", "fr"], "timezone": "Europe/Brussels", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "BR", "preferredQueryLocale": "pt-BR", "queryLocales": ["pt-BR"], "acceptedQueryLanguages": ["pt"], "timezone": "America/Sao_Paulo", "currency": "BRL", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "CA", "preferredQueryLocale": "en-CA", "queryLocales": ["en-CA", "fr-CA"], "acceptedQueryLanguages": ["en", "fr"], "timezone": "America/Toronto", "currency": "CAD", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "CN", "preferredQueryLocale": "zh-Hans-CN", "queryLocales": ["zh-Hans-CN"], "acceptedQueryLanguages": ["zh"], "timezone": "Asia/Shanghai", "currency": "CNY", "expectedScripts": ["Hans", "Latn"] },
+    { "platform": "amazon", "market": "DE", "preferredQueryLocale": "de-DE", "queryLocales": ["de-DE"], "acceptedQueryLanguages": ["de"], "timezone": "Europe/Berlin", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "EG", "preferredQueryLocale": "ar-EG", "queryLocales": ["ar-EG", "en-EG"], "acceptedQueryLanguages": ["ar", "en"], "timezone": "Africa/Cairo", "currency": "EGP", "expectedScripts": ["Arab", "Latn"] },
+    { "platform": "amazon", "market": "ES", "preferredQueryLocale": "es-ES", "queryLocales": ["es-ES"], "acceptedQueryLanguages": ["es"], "timezone": "Europe/Madrid", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "FR", "preferredQueryLocale": "fr-FR", "queryLocales": ["fr-FR"], "acceptedQueryLanguages": ["fr"], "timezone": "Europe/Paris", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "GB", "preferredQueryLocale": "en-GB", "queryLocales": ["en-GB"], "acceptedQueryLanguages": ["en"], "timezone": "Europe/London", "currency": "GBP", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "IE", "preferredQueryLocale": "en-IE", "queryLocales": ["en-IE"], "acceptedQueryLanguages": ["en"], "timezone": "Europe/Dublin", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "IN", "preferredQueryLocale": "en-IN", "queryLocales": ["en-IN", "hi-IN"], "acceptedQueryLanguages": ["en", "hi"], "timezone": "Asia/Kolkata", "currency": "INR", "expectedScripts": ["Latn", "Deva"] },
+    { "platform": "amazon", "market": "IT", "preferredQueryLocale": "it-IT", "queryLocales": ["it-IT"], "acceptedQueryLanguages": ["it"], "timezone": "Europe/Rome", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "JP", "preferredQueryLocale": "ja-JP", "queryLocales": ["ja-JP"], "acceptedQueryLanguages": ["ja"], "timezone": "Asia/Tokyo", "currency": "JPY", "expectedScripts": ["Jpan", "Latn"] },
+    { "platform": "amazon", "market": "MX", "preferredQueryLocale": "es-MX", "queryLocales": ["es-MX"], "acceptedQueryLanguages": ["es"], "timezone": "America/Mexico_City", "currency": "MXN", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "NL", "preferredQueryLocale": "nl-NL", "queryLocales": ["nl-NL"], "acceptedQueryLanguages": ["nl"], "timezone": "Europe/Amsterdam", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "PL", "preferredQueryLocale": "pl-PL", "queryLocales": ["pl-PL"], "acceptedQueryLanguages": ["pl"], "timezone": "Europe/Warsaw", "currency": "PLN", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "SA", "preferredQueryLocale": "ar-SA", "queryLocales": ["ar-SA", "en-SA"], "acceptedQueryLanguages": ["ar", "en"], "timezone": "Asia/Riyadh", "currency": "SAR", "expectedScripts": ["Arab", "Latn"] },
+    { "platform": "amazon", "market": "SE", "preferredQueryLocale": "sv-SE", "queryLocales": ["sv-SE"], "acceptedQueryLanguages": ["sv"], "timezone": "Europe/Stockholm", "currency": "SEK", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "SG", "preferredQueryLocale": "en-SG", "queryLocales": ["en-SG", "zh-Hans-SG"], "acceptedQueryLanguages": ["en", "zh"], "timezone": "Asia/Singapore", "currency": "SGD", "expectedScripts": ["Latn", "Hans"] },
+    { "platform": "amazon", "market": "TR", "preferredQueryLocale": "tr-TR", "queryLocales": ["tr-TR"], "acceptedQueryLanguages": ["tr"], "timezone": "Europe/Istanbul", "currency": "TRY", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "US", "preferredQueryLocale": "en-US", "queryLocales": ["en-US"], "acceptedQueryLanguages": ["en"], "timezone": "America/Los_Angeles", "currency": "USD", "expectedScripts": ["Latn"] },
+    { "platform": "amazon", "market": "ZA", "preferredQueryLocale": "en-ZA", "queryLocales": ["en-ZA"], "acceptedQueryLanguages": ["en"], "timezone": "Africa/Johannesburg", "currency": "ZAR", "expectedScripts": ["Latn"] },
+
+    { "platform": "shopee", "market": "ID", "preferredQueryLocale": "id-ID", "queryLocales": ["id-ID"], "acceptedQueryLanguages": ["id"], "timezone": "Asia/Jakarta", "currency": "IDR", "expectedScripts": ["Latn"] },
+    { "platform": "shopee", "market": "SG", "preferredQueryLocale": "en-SG", "queryLocales": ["en-SG", "zh-Hans-SG"], "acceptedQueryLanguages": ["en", "zh"], "timezone": "Asia/Singapore", "currency": "SGD", "expectedScripts": ["Latn", "Hans"] },
+    { "platform": "shopee", "market": "TH", "preferredQueryLocale": "th-TH", "queryLocales": ["th-TH"], "acceptedQueryLanguages": ["th"], "timezone": "Asia/Bangkok", "currency": "THB", "expectedScripts": ["Thai", "Latn"] },
+    { "platform": "shopee", "market": "TW", "preferredQueryLocale": "zh-Hant-TW", "queryLocales": ["zh-Hant-TW"], "acceptedQueryLanguages": ["zh"], "timezone": "Asia/Taipei", "currency": "TWD", "expectedScripts": ["Hant", "Latn"] },
+
+    { "platform": "tiktok_shop", "market": "FR", "preferredQueryLocale": "fr-FR", "queryLocales": ["fr-FR"], "acceptedQueryLanguages": ["fr"], "timezone": "Europe/Paris", "currency": "EUR", "expectedScripts": ["Latn"] },
+    { "platform": "tiktok_shop", "market": "GB", "preferredQueryLocale": "en-GB", "queryLocales": ["en-GB"], "acceptedQueryLanguages": ["en"], "timezone": "Europe/London", "currency": "GBP", "expectedScripts": ["Latn"] },
+    { "platform": "tiktok_shop", "market": "ID", "preferredQueryLocale": "id-ID", "queryLocales": ["id-ID"], "acceptedQueryLanguages": ["id"], "timezone": "Asia/Jakarta", "currency": "IDR", "expectedScripts": ["Latn"] },
+    { "platform": "tiktok_shop", "market": "MY", "preferredQueryLocale": "ms-MY", "queryLocales": ["ms-MY", "en-MY"], "acceptedQueryLanguages": ["ms", "en"], "timezone": "Asia/Kuala_Lumpur", "currency": "MYR", "expectedScripts": ["Latn"] },
+    { "platform": "tiktok_shop", "market": "PH", "preferredQueryLocale": "en-PH", "queryLocales": ["en-PH", "fil-PH"], "acceptedQueryLanguages": ["en", "fil"], "timezone": "Asia/Manila", "currency": "PHP", "expectedScripts": ["Latn"] },
+    { "platform": "tiktok_shop", "market": "SG", "preferredQueryLocale": "en-SG", "queryLocales": ["en-SG", "zh-Hans-SG"], "acceptedQueryLanguages": ["en", "zh"], "timezone": "Asia/Singapore", "currency": "SGD", "expectedScripts": ["Latn", "Hans"] },
+    { "platform": "tiktok_shop", "market": "TH", "preferredQueryLocale": "th-TH", "queryLocales": ["th-TH"], "acceptedQueryLanguages": ["th"], "timezone": "Asia/Bangkok", "currency": "THB", "expectedScripts": ["Thai", "Latn"] },
+    { "platform": "tiktok_shop", "market": "US", "preferredQueryLocale": "en-US", "queryLocales": ["en-US"], "acceptedQueryLanguages": ["en"], "timezone": "America/Los_Angeles", "currency": "USD", "expectedScripts": ["Latn"] },
+    { "platform": "tiktok_shop", "market": "VN", "preferredQueryLocale": "vi-VN", "queryLocales": ["vi-VN"], "acceptedQueryLanguages": ["vi"], "timezone": "Asia/Ho_Chi_Minh", "currency": "VND", "expectedScripts": ["Latn"] }
+  ]
+}

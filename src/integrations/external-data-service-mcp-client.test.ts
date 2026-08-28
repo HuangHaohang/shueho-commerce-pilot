@@ -53,11 +53,13 @@ test("verifies the hosted tool contract and calls catalog tools", async () => {
       "call_endpoint",
       "cancel_marketplace_product_research",
       "complete_marketplace_product_research",
+      "execute_marketplace_product_research_plan",
       "get_endpoint_schema",
       "get_marketplace_options",
       "get_research_result",
       "list_marketplace_research_platforms",
       "list_platforms",
+      "plan_marketplace_product_research",
       "preflight_endpoint",
       "preflight_marketplace_product_research",
       "preflight_social_content_research",
@@ -143,6 +145,19 @@ function createClient(maxResultBytes: number): ExternalDataServiceMcpClient {
 
 function createMockServer(): McpServer {
   const server = new McpServer({ name: "mock-shueho-external-data", version: "2.0.0" });
+  server.registerTool(
+    "plan_marketplace_product_research",
+    { inputSchema: { platform: z.string(),keyword: z.string() } },
+    async () => result({ success: true,plan_id: "00000000-0000-4000-8000-000000000011" }),
+  );
+  server.registerTool(
+    "execute_marketplace_product_research_plan",
+    { inputSchema: { plan_id: z.string() } },
+    async () => result({
+      success: true,plan_id: "00000000-0000-4000-8000-000000000011",
+      workflow_execution_id: "00000000-0000-4000-8000-000000000010",
+    }),
+  );
   server.registerTool(
     "begin_marketplace_product_research",
     { inputSchema: { workflow_id: z.string(), research_plan_key: z.string() } },

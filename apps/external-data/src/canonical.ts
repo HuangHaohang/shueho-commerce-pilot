@@ -132,6 +132,15 @@ function buildResearchIntent(input: {
       ...(input.businessIntent.localizedKeyword
         ? { localizedKeyword: input.businessIntent.localizedKeyword }
         : {}),
+      ...(input.businessIntent.localizedKeywords?.length
+        ? { localizedKeywords: input.businessIntent.localizedKeywords }
+        : {}),
+      ...(input.businessIntent.marketContext
+        ? { marketContext: input.businessIntent.marketContext }
+        : {}),
+      ...(input.businessIntent.qualityPolicy
+        ? { qualityPolicy: input.businessIntent.qualityPolicy }
+        : {}),
     } : {}),
   };
 }

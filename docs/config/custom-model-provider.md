@@ -41,10 +41,10 @@ view_image = false
 
 [model_providers.luusmosh_cpa]
 name = "Luusmosh CPA"
-base_url = "https://cpa.luusmosh.com/v1"
-env_key = "COMMERCE_PROVIDER_API_KEY"
+base_url = "http://127.0.0.1:8787/api/internal/provider/v1"
 wire_api = "responses"
 requires_openai_auth = false
+http_headers = { "x-openai-actor-authorization" = "<gateway-derived-runtime-actor>" }
 request_max_retries = 4
 stream_max_retries = 5
 stream_idle_timeout_ms = 300000
@@ -58,7 +58,7 @@ export CODEX_HOME="/var/lib/shueho-commerce-pilot/codex"
 npm run dev
 ```
 
-The gateway renders this definition into the application-owned `$CODEX_HOME/config.toml` at startup. The rendered TOML contains only the environment variable name, never the secret value.
+The gateway renders this definition into the application-owned `$CODEX_HOME/config.toml` at startup. The actor value is HMAC-derived from application-owned secret material and scoped to the tenant, Provider id, and upstream base URL. It authenticates only the loopback relay and is never accepted by browser/BFF routes. The upstream Provider key remains in the service process environment and the explicit managed-MCP environment allowlist; it is never written to the Codex Provider definition or exposed to the browser.
 
 Where supported, provision and rotate a separate provider credential per Enterprise tenant so upstream revocation, spend controls, and incident containment follow the Commerce Pilot tenant boundary. If the upstream account must be shared, it remains an infrastructure credential and does not weaken the requirement for a tenant-dedicated App Server, `CODEX_HOME`, artifacts, outbox, BFF authorization, or usage ledger.
 
@@ -104,11 +104,13 @@ The model id is not added to the end-user model selector. Gateway verifies the e
 
 ## Image Generation
 
-The app-owned Codex runtime synchronizes the built-in `imagegen` system Skill and enables `features.image_generation`. Gateway verifies `modelProvider/capabilities/read.imageGeneration` before reporting the runtime ready. Image requests use the native Harness tool and Item lifecycle:
+The app-owned Codex runtime synchronizes the built-in `imagegen` system Skill and enables `features.image_generation`. Codex 0.150.1 exposes that extension only to Codex-backend or actor-authorized Providers, so the generated custom Provider points at the Gateway's actor-authenticated loopback relay. Gateway verifies both `modelProvider/capabilities/read.imageGeneration` and namespace-tool support before reporting native image generation available. Image requests use the native Harness tool and Item lifecycle:
 
 ```text
 image_gen -> native imageGeneration Item -> tenant artifact storage
 ```
+
+The relay accepts only model listing, Responses, Responses compaction, image generation, and image edit routes. It validates the runtime actor, strips that header, injects the upstream CPA key, and streams the one upstream response. It does not run a second model call or create an application-owned image tool.
 
 Codex owns image intent detection, Skill instructions, provider execution, item lifecycle, usage and Turn continuation. Gateway consumes the completed native Item, saves the base64 result under `$CODEX_HOME/generated_images`, and stores non-PII metadata under `$CODEX_HOME/generated_image_metadata`. Before SSE or history reaches the BFF, Gateway removes image bytes and `savedPath`; the browser receives only an ownership-checked artifact URL.
 
@@ -168,6 +170,6 @@ Use a project-specific provider id such as `commerce_proxy`, `azure_commerce`, o
 - Keep write-capable commerce tools behind explicit approval and readback.
 - Provider identity, `cwd`, sandbox, permissions, instructions, raw input items, and tool definitions are server-owned and cannot be overridden by browser requests.
 - The model can call only tools in the Commerce Pilot registry; it cannot use shell or deployment-host files as a fallback.
-- Harness usage, including native image generation, is recorded from Codex 0.149 `rawResponse/completed`; managed MCP and legacy host Web Search have separate source-attributed rows. Cached input and cache-write input remain subsets of input, and reasoning output remains a subset of output; do not add those classifications twice or infer currency cost without an effective provider/contract rate card and provider reconciliation.
+- Harness usage, including native image generation, is recorded from Codex 0.150.1 `rawResponse/completed`; managed MCP and legacy host Web Search have separate source-attributed rows. Cached input and cache-write input remain subsets of input, and reasoning output remains a subset of output; do not add those classifications twice or infer currency cost without an effective provider/contract rate card and provider reconciliation.
 
 See [Enterprise Tenancy Foundation](../architecture/enterprise-tenancy.md) for the exact usage fields, idempotency rule, contract quotas, and tenant-dedicated runtime boundary.

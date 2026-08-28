@@ -396,9 +396,24 @@ function resolveMaybeRef(document: JsonObject, value: unknown, seen = new Set<st
 }
 
 async function fetchChecked(fetchImpl: typeof fetch, url: string): Promise<Response> {
-  const response = await fetchImpl(url, { headers: { Accept: "application/json,text/html,application/xml", "User-Agent": "SHUEHO-Catalog-Importer/0.1" }, signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new Error(`Unable to fetch ${url}: HTTP ${response.status}.`);
-  return response;
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const response = await fetchImpl(url, {
+        headers: { Accept: "application/json,text/html,application/xml", "User-Agent": "SHUEHO-Catalog-Importer/0.1" },
+        signal: AbortSignal.timeout(45_000),
+      });
+      if (response.ok) return response;
+      if (response.status < 500 && response.status !== 429) {
+        throw new Error(`Unable to fetch ${url}: HTTP ${response.status}.`);
+      }
+      lastError = new Error(`Unable to fetch ${url}: HTTP ${response.status}.`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve,250));
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Unable to fetch ${url}.`);
 }
 
 async function concurrentMap<T, R>(values: T[], concurrency: number, worker: (value: T) => Promise<R>): Promise<R[]> {

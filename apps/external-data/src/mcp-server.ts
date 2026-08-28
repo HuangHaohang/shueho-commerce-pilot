@@ -11,6 +11,11 @@ import {
   planMarketplaceProductResearch,
 } from "./marketplace-research-planner.js";
 import {
+  loadExecutableMarketplaceResearchPlan,
+  MarketplaceResearchPlanError,
+  persistMarketplaceResearchPlan,
+} from "./marketplace-research-plan-store.js";
+import {
   beginMarketplaceWorkflowExecution,
   cancelMarketplaceWorkflowExecution,
   completeMarketplaceWorkflowExecution,
@@ -48,8 +53,13 @@ const businessIntentSchema = z.object({
   workflow_version: z.string().min(1).max(40).nullable().optional(),
   workflow_plan_key: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   workflow_step_id: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/).nullable().optional(),
+  workflow_step_instance_id: z.string().uuid().nullable().optional(),
+  workflow_target_id: z.string().uuid().nullable().optional(),
   workflow_step_role: z.enum(["discovery", "detail", "price", "reviews", "sku"]).nullable().optional(),
   localized_keyword: z.string().min(1).max(500).nullable().optional(),
+  localized_keywords: z.array(z.string().min(1).max(500)).max(8).optional(),
+  market_context: z.record(z.unknown()).nullable().optional(),
+  quality_policy: z.record(z.unknown()).nullable().optional(),
 });
 
 const scopeSchema = z.object({
@@ -66,6 +76,8 @@ const scopeSchema = z.object({
   business_intent: businessIntentSchema.nullable().optional(),
   workflow_execution_id: z.string().uuid().nullable().optional(),
   workflow_step_id: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/).nullable().optional(),
+  workflow_step_instance_id: z.string().uuid().nullable().optional(),
+  workflow_target_id: z.string().uuid().nullable().optional(),
 });
 
 export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline()): McpServer {
@@ -73,7 +85,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
     { name: "shueho-external-data", version: "0.1.0" },
     {
       instructions:
-        "This is the internal SHUEHO external-data service. It calls allowlisted JustOneAPI REST endpoints, stores complete raw responses in PostgreSQL, normalizes every returned field, uses local Qwen3 retrieval models, and returns only curated business evidence. Marketplace scope must come from list_marketplace_research_platforms and never from model memory. Never request or expose provider credentials and never retry an uncertain paid call.",
+        "This is the internal SHUEHO external-data service. It stores complete JustOneAPI REST responses, normalizes every field and returns only curated evidence. Marketplace scope and query language come from database catalogs. New collection uses plan_marketplace_product_research followed by execute_marketplace_product_research_plan; every target step remains separately governed by Commerce Pilot. Never expose credentials or retry an uncertain paid call.",
     },
   );
   server.registerTool(
@@ -103,7 +115,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
     "get_marketplace_options",
     {
       title: "读取电商平台市场选项",
-      description: "从数据库供应商主数据读取一个已登记商品研究平台的国家或站点选项；不存在的工作流明确返回 available=false，不调用供应商，也不产生费用。",
+      description: "读取平台国家/站点与查询语言元数据；不返回内部质量阈值或代表样本上限，不调用供应商，也不产生费用。",
       inputSchema: {
         platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
       },
@@ -166,6 +178,161 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
         normalizer_version: endpoint.normalizerVersion,
         pricing_status: endpoint.pricingStatus,
       });
+    },
+  );
+  server.registerTool(
+    "plan_marketplace_product_research",
+    {
+      title: "建立版本化商品研究计划",
+      description: "免费校验平台、市场语言档案、业务筛选和代表样本规模，持久化绑定目录版本的计划；不调用供应商，也不产生费用。",
+      inputSchema: {
+        platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
+        keyword: z.string().min(1).max(500),
+        localized_keywords: z.array(z.string().min(1).max(500)).max(8).default([]),
+        market: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).nullable().default(null),
+        tmall_only: z.boolean(),
+        min_price_yuan: z.number().nonnegative().nullable(),
+        max_price_yuan: z.number().nonnegative().nullable(),
+        requested_metrics: z.array(z.enum(["price_band", "sales_level", "brand_competition", "property_distribution"])).min(1).max(4),
+        max_results: z.number().int().min(1).max(100),
+        detail_sample_size: z.number().int().min(1).max(10).nullable().default(null),
+        allowed_catalog_platforms: z.array(z.string().regex(/^[a-z0-9_]{1,64}$/)).max(100).optional(),
+        allowed_endpoint_ids: z.array(z.string().regex(/^[a-z0-9_]+\.[A-Za-z0-9_.-]+$/)).max(500).optional(),
+        _commerce_context: scopeSchema,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async ({
+      platform,keyword,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
+      requested_metrics,max_results,detail_sample_size,allowed_catalog_platforms,
+      allowed_endpoint_ids,_commerce_context,
+    }) => {
+      const request = {
+        platform,
+        keyword,
+        localizedKeyword: localized_keywords[0] ?? null,
+        localizedKeywords: localized_keywords,
+        market,
+        tmallOnly: tmall_only,
+        minPriceYuan: min_price_yuan,
+        maxPriceYuan: max_price_yuan,
+        requestedMetrics: requested_metrics,
+        maxResults: max_results,
+        detailSampleSize: detail_sample_size,
+      };
+      try {
+        const plan = await planMarketplaceProductResearch(request, {
+          allowedCatalogPlatforms: allowed_catalog_platforms,
+          allowedEndpointIds: allowed_endpoint_ids,
+        });
+        const persisted = await persistMarketplaceResearchPlan(mapScope(_commerce_context), request, plan);
+        return toolSuccess({
+          success: true,
+          state: "ready",
+          business_tool: "execute_marketplace_research",
+          plan_id: persisted.planId,
+          request_text: _commerce_context.request_text,
+          research_plan_key: persisted.planKey,
+          expires_at: persisted.expiresAt,
+          workflow_id: plan.workflow.workflowId,
+          workflow_version: plan.workflow.workflowVersion,
+          market_context: persisted.marketContext,
+          detail_sample_size: persisted.detailSampleSize,
+          estimated_provider_calls: persisted.estimatedProviderCalls,
+          business_input: plan.businessInput,
+          business_intent: plan.businessIntent,
+          coverage: plan.coverage,
+          steps: plan.steps.map((step) => ({
+            step_id: step.stepId,
+            step_order: step.stepOrder,
+            role: step.role,
+            endpoint_id: step.endpoint.endpointId,
+            platform: step.endpoint.platformId,
+            parameter_template: step.parameterTemplate,
+            dynamic_parameter_bindings: step.dynamicParameterBindings,
+            output_bindings: step.outputBindings,
+            required: step.required,
+          })),
+        });
+      } catch (error) {
+        return toolSuccess({
+          success: false,
+          state: "needs_input",
+          provider_completed: false,
+          processing_state: "planning_failed",
+          code: error instanceof MarketplaceResearchPlanningError || error instanceof MarketplaceResearchPlanError
+            ? error.code
+            : "MARKETPLACE_RESEARCH_PLAN_FAILED",
+          message: safeToolMessage(error),
+          details: error instanceof MarketplaceResearchPlanningError ? error.details : {},
+        });
+      }
+    },
+  );
+  server.registerTool(
+    "execute_marketplace_product_research_plan",
+    {
+      title: "执行已固定商品研究计划",
+      description: "加载未过期且绑定当前租户、目录、市场档案和工作流版本的计划并建立执行；实际供应商步骤仍分别审批、预留、调用和结算。",
+      inputSchema: {
+        plan_id: z.string().uuid(),
+        allowed_catalog_platforms: z.array(z.string().regex(/^[a-z0-9_]{1,64}$/)).max(100).optional(),
+        allowed_endpoint_ids: z.array(z.string().regex(/^[a-z0-9_]+\.[A-Za-z0-9_.-]+$/)).max(500).optional(),
+        _commerce_context: scopeSchema,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    },
+    async ({ plan_id,allowed_catalog_platforms,allowed_endpoint_ids,_commerce_context }) => {
+      try {
+        const scope = mapScope(_commerce_context);
+        const loaded = await loadExecutableMarketplaceResearchPlan(scope, plan_id, {
+          allowedCatalogPlatforms: allowed_catalog_platforms,
+          allowedEndpointIds: allowed_endpoint_ids,
+        });
+        const executionScope = {
+          ...scope,
+          requestText: loaded.stored.request_text,
+          topN: loaded.plan.businessIntent.requested_top_n as number,
+        };
+        const began = await beginMarketplaceWorkflowExecution(executionScope, loaded.plan, { researchPlanId: plan_id });
+        return toolSuccess({
+          success: true,
+          plan_id,
+          request_text: loaded.stored.request_text,
+          expires_at: loaded.stored.expires_at.toISOString(),
+          ...began,
+          workflow_id: loaded.plan.workflow.workflowId,
+          workflow_version: loaded.plan.workflow.workflowVersion,
+          research_plan_key: loaded.plan.planKey,
+          business_input: loaded.plan.businessInput,
+          business_intent: loaded.plan.businessIntent,
+          coverage: loaded.plan.coverage,
+          market_context: loaded.plan.marketContext,
+          detail_sample_size: loaded.plan.detailSampleSize,
+          estimated_provider_calls: loaded.plan.estimatedProviderCalls,
+          steps: loaded.plan.steps.map((step) => ({
+            step_id: step.stepId,
+            step_order: step.stepOrder,
+            role: step.role,
+            endpoint_id: step.endpoint.endpointId,
+            platform: step.endpoint.platformId,
+            parameter_template: step.parameterTemplate,
+            dynamic_parameter_bindings: step.dynamicParameterBindings,
+            output_bindings: step.outputBindings,
+            required: step.required,
+          })),
+        });
+      } catch (error) {
+        return toolSuccess({
+          success: false,
+          provider_completed: false,
+          processing_state: "plan_execution_failed",
+          code: error instanceof MarketplaceResearchPlanError || error instanceof WorkflowExecutionError
+            ? error.code
+            : "MARKETPLACE_PLAN_EXECUTION_FAILED",
+          message: safeToolMessage(error),
+        });
+      }
     },
   );
   server.registerTool(
@@ -462,6 +629,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       const scope = mapScope(_commerce_context);
       const workflowExecutionId = _commerce_context.workflow_execution_id ?? null;
       const workflowStepId = _commerce_context.workflow_step_id ?? null;
+      const workflowStepInstanceId = _commerce_context.workflow_step_instance_id ?? null;
       try {
         if ((workflowExecutionId === null) !== (workflowStepId === null)) {
           throw new WorkflowExecutionError("Workflow execution and step identifiers must be supplied together.", "WORKFLOW_CONTEXT_INVALID");
@@ -470,6 +638,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
           await startMarketplaceWorkflowStep(scope, {
             executionId: workflowExecutionId,
             stepId: workflowStepId,
+            stepInstanceId: workflowStepInstanceId,
             endpointId: endpoint_id,
             params: params as JsonObject,
           });
@@ -479,6 +648,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
           await completeMarketplaceWorkflowStep(scope, {
             executionId: workflowExecutionId,
             stepId: workflowStepId,
+            stepInstanceId: workflowStepInstanceId,
             endpointId: endpoint_id,
             researchRequestId: result.research_request_id,
             providerCompleted: result.provider_completed,
@@ -494,6 +664,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
           await markMarketplaceWorkflowStepUnknown(scope, {
             executionId: workflowExecutionId,
             stepId: workflowStepId,
+            stepInstanceId: workflowStepInstanceId,
             endpointId: endpoint_id,
             message: safeToolMessage(error),
           }).catch(() => undefined);
@@ -501,6 +672,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
           await failMarketplaceWorkflowStep(scope, {
             executionId: workflowExecutionId,
             stepId: workflowStepId,
+            stepInstanceId: workflowStepInstanceId,
             endpointId: endpoint_id,
             code: error instanceof WorkflowExecutionError ? error.code : error instanceof LocalModelError ? "LOCAL_MODEL_FAILED" : "WORKFLOW_STEP_FAILED",
             message: safeToolMessage(error),
@@ -596,7 +768,12 @@ function mapScope(value: z.infer<typeof scopeSchema>): ExternalDataScope {
       workflowStepId: value.business_intent.workflow_step_id ?? null,
       workflowStepRole: value.business_intent.workflow_step_role ?? null,
       localizedKeyword: value.business_intent.localized_keyword ?? null,
+      localizedKeywords: value.business_intent.localized_keywords ?? [],
+      marketContext: value.business_intent.market_context ?? null,
+      qualityPolicy: value.business_intent.quality_policy ?? null,
     } : null,
+    workflowStepInstanceId: value.workflow_step_instance_id ?? null,
+    workflowTargetId: value.workflow_target_id ?? null,
   };
 }
 

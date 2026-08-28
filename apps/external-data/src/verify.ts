@@ -37,6 +37,7 @@ const archived = await source.query<{
          endpoint_id, request_payload, response_payload, upstream_request_id, provider_recorded_at
   FROM commerce_external_data_archive
   WHERE endpoint_id='taobao.search_item_list_v1' AND state='succeeded'
+    AND response_payload #> '{data,model}' IS NOT NULL
   ORDER BY completed_at DESC
   LIMIT 1
 `);

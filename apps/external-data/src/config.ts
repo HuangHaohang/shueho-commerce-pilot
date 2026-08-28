@@ -27,6 +27,7 @@ const envSchema = z.object({
   EXTERNAL_DATA_EMBEDDING_MIN_SCORE: z.coerce.number().min(-1).max(1).default(0.42),
   EXTERNAL_DATA_RERANK_MIN_SCORE: z.coerce.number().min(0).max(1).default(0.55),
   EXTERNAL_DATA_INDEX_WORKER_INTERVAL_MS: z.coerce.number().int().min(1_000).max(60_000).default(5_000),
+  EXTERNAL_DATA_MARKETPLACE_PLAN_TTL_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
 });
 
 const parsed = envSchema.parse(process.env);
@@ -77,4 +78,5 @@ export const config = {
     rerankMinScore: parsed.EXTERNAL_DATA_RERANK_MIN_SCORE,
   },
   indexWorkerIntervalMs: parsed.EXTERNAL_DATA_INDEX_WORKER_INTERVAL_MS,
+  marketplacePlanTtlMs: parsed.EXTERNAL_DATA_MARKETPLACE_PLAN_TTL_MINUTES * 60_000,
 };

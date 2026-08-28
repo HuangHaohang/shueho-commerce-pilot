@@ -6,6 +6,10 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { ensureAppOwnedCodexConfig } from "../src/codex/runtime-config.js";
 import { readThreadContextUsage, shouldAutoCompact } from "../src/gateway/compaction-policy.js";
 import { readGatewayConfig } from "../src/gateway/config.js";
+import {
+  createRuntimeProviderProxyIdentity,
+  runtimeProviderActorAuthorizationHeader,
+} from "../src/provider/runtime-provider-proxy.js";
 
 const config = readGatewayConfig();
 const configPath = await ensureAppOwnedCodexConfig(config);
@@ -24,7 +28,9 @@ const workbenchSource = await readFile(
 );
 const copywritingBriefSource = await readFile(resolve("apps/web/lib/copywriting/brief.ts"), "utf8");
 const providerClientSource = await readFile(resolve("src/provider/commerce-provider-client.ts"), "utf8");
+const providerProxySource = await readFile(resolve("src/provider/runtime-provider-proxy.ts"), "utf8");
 const runtimeRelativePath = relative(config.codexHome, config.runtimeRoot);
+const runtimeProviderProxy = createRuntimeProviderProxyIdentity(config);
 
 if (!runtimeRelativePath || runtimeRelativePath.startsWith("..") || isAbsolute(runtimeRelativePath)) {
   throw new Error("Commerce runtimeRoot must be a child of CODEX_HOME.");
@@ -54,6 +60,8 @@ const requiredLines = [
   '"COMMERCE_WEB_SEARCH_TIMEOUT_MS"',
   '"COMMERCE_WEB_SEARCH_MAX_ATTEMPTS"',
   'inherit = "none"',
+  `base_url = ${JSON.stringify(runtimeProviderProxy.baseUrl)}`,
+  JSON.stringify(runtimeProviderActorAuthorizationHeader),
 ];
 
 const missingLines = requiredLines.filter((line) => !generatedConfig.includes(line));
@@ -102,6 +110,27 @@ if (!gatewaySource.includes('item.type !== "imageGeneration"')) {
 }
 if (providerClientSource.includes('"images/generations"')) {
   throw new Error("Provider client must not duplicate native Harness image generation.");
+}
+if (generatedConfig.includes(`env_key = ${JSON.stringify(config.provider.apiKeyEnvName)}`)) {
+  throw new Error("Codex App Server config must not receive the upstream Provider key directly.");
+}
+for (const route of [
+  'suffix: "/models"',
+  'suffix: "/responses"',
+  'suffix: "/responses/compact"',
+  'suffix: "/images/generations"',
+  'suffix: "/images/edits"',
+]) {
+  if (!providerProxySource.includes(route)) {
+    throw new Error(`Runtime Provider relay is missing allowlisted route ${route}.`);
+  }
+}
+if (
+  !providerProxySource.includes('name === ACTOR_AUTHORIZATION_HEADER') ||
+  !providerProxySource.includes('authorization: `Bearer ${apiKey}`') ||
+  !gatewaySource.includes("runtimeProviderProxy.matches")
+) {
+  throw new Error("Runtime Provider relay does not enforce actor auth and server-side upstream credential injection.");
 }
 if (agentThreadSource.includes("failActiveTurn") || agentThreadSource.includes("shouldExpireActiveTurn")) {
   throw new Error("Browser code must not fabricate a terminal Harness Turn state.");
@@ -182,7 +211,13 @@ if (!managedHookSource.includes('"commerce_data.research_social_content"')) {
   throw new Error("Managed Hook runner does not allow governed social-content research.");
 }
 if (!managedHookSource.includes('"commerce_data.research_marketplace_products"')) {
-  throw new Error("Managed Hook runner does not allow governed marketplace-product research.");
+  throw new Error("Managed Hook runner does not preserve legacy marketplace-product research calls.");
+}
+if (!managedHookSource.includes('"commerce_data.plan_marketplace_research"')) {
+  throw new Error("Managed Hook runner does not allow free marketplace planning.");
+}
+if (!managedHookSource.includes('"commerce_data.execute_marketplace_research"')) {
+  throw new Error("Managed Hook runner does not allow governed marketplace plan execution.");
 }
 if (!managedHookSource.includes('"commerce_data.search_business_data"')) {
   throw new Error("Managed Hook runner does not allow curated business-data retrieval.");
@@ -234,6 +269,7 @@ console.log(
       defaultModeRequestUserInput: true,
       nativeProviderWebSearch: true,
       nativeImageGeneration: true,
+      actorAuthorizedProviderRelay: true,
       multiAgent: true,
       localPathImageReader: false,
       managedHooks: true,
@@ -243,7 +279,7 @@ console.log(
       compactionTimeoutMs: config.compactionTimeoutMs,
       developmentHookTrust: "app-owned-bypass",
       productionHookTrust: "requirements-managed-only",
-      checkedControls: requiredLines.length + 3,
+      checkedControls: requiredLines.length + 4,
     },
     null,
     2,

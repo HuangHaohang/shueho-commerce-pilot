@@ -59,7 +59,11 @@ test("maps market research to Harness tools without a parallel output loop", () 
   assert.match(skill, /commerce_data\.research_social_content/);
   assert.match(skill, /latest_content/);
   assert.match(skill, /interaction_ranked/);
-  assert.match(skill, /commerce_data\.research_marketplace_products/);
+  assert.match(skill, /commerce_data\.plan_marketplace_research/);
+  assert.match(skill, /commerce_data\.execute_marketplace_research/);
+  assert.match(skill, /detail_sample_size=null/);
+  assert.match(skill, /immediate next action MUST be native request_user_input/);
+  assert.match(skill, /Never render those choices in an assistant message or numbered list/);
   assert.match(skill, /commerce_data\.list_marketplace_research_platforms/);
   assert.match(skill, /commerce_data\.get_marketplace_options/);
   assert.match(skill, /platform choices only from the exact database-returned ids and labels/);
@@ -70,7 +74,7 @@ test("maps market research to Harness tools without a parallel output loop", () 
   assert.match(skill, /do not silently substitute Web Search/);
   assert.match(skill, /user does not need to name JustOneAPI/);
   assert.match(skill, /Do not make a paid external-data call merely because the tool is available/);
-  assert.match(skill, /Never retry a completed or uncertain paid call automatically/);
+  assert.match(skill, /Never retry a completed, stale, expired or uncertain paid plan automatically/);
   assert.match(skill, /Do not use shell, arbitrary network requests/);
   assert.doesNotMatch(skill, /scripts\//);
 });

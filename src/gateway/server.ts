@@ -40,11 +40,19 @@ import {
   type MarketplaceProductResearchStep,
 } from "../integrations/marketplace-product-research-preflight.js";
 import {
+  createMarketplaceProductResearchPlan,
+  executeMarketplaceProductResearchPlan,
+  parseMarketplaceProductResearchStepInstances,
+  type MarketplaceProductResearchPlanInput,
+  type MarketplaceProductResearchStepInstance,
+} from "../integrations/marketplace-product-research-plan.js";
+import {
   preflightSocialContentResearch,
   type SocialContentResearchInput,
 } from "../integrations/social-content-research-preflight.js";
 import { CommerceProviderClient, CommerceProviderError } from "../provider/commerce-provider-client.js";
 import { normalizeProviderUsage } from "../provider/provider-usage.js";
+import { RuntimeProviderProxy } from "../provider/runtime-provider-proxy.js";
 import { readGatewayConfig } from "./config.js";
 import {
   readThreadContextUsage,
@@ -63,6 +71,7 @@ import {
   parseMarketplacePlatformCatalog,
   type MarketplacePlatformCatalog,
 } from "./marketplace-platform-catalog.js";
+import { marketplacePlanFailureInstruction } from "./marketplace-plan-guidance.js";
 import { ThreadOperationQueue } from "./thread-operation-queue.js";
 import {
   CODEX_REQUEST_USER_INPUT_METHOD,
@@ -139,12 +148,23 @@ type PendingSkillPublishApproval = {
 
 type MarketplaceWorkflowRuntime = {
   executionId: string;
+  planId: string | null;
   sourceCallId: string;
   input: MarketplaceProductResearchInput;
   preflight: MarketplaceProductResearchPreflight;
   nextStepIndex: number;
   resolvedBindings: Record<string, string | number>;
   completedStepCount: number;
+  stepInstances: MarketplaceProductResearchStepInstance[] | null;
+};
+
+type MarketplaceWorkflowRuntimeStep = MarketplaceProductResearchStep & {
+  stepInstanceId: string | null;
+  stepInstanceKey: string;
+  targetId: string | null;
+  targetOrdinal: number | null;
+  instanceOrder: number;
+  bindings: Record<string, string | number>;
 };
 
 type PendingExternalDataApproval = {
@@ -162,7 +182,7 @@ type PendingExternalDataApproval = {
   businessIntent: Record<string, unknown>;
   planCoverage: Record<string, unknown>;
   workflow: MarketplaceWorkflowRuntime | null;
-  workflowStep: MarketplaceProductResearchStep | null;
+  workflowStep: MarketplaceWorkflowRuntimeStep | null;
 };
 
 class GatewayRequestError extends Error {
@@ -173,6 +193,7 @@ class GatewayRequestError extends Error {
 }
 
 const config = readGatewayConfig();
+const runtimeProviderProxy = new RuntimeProviderProxy(config);
 await ensureAppOwnedCodexConfig(config);
 const gatewayInstanceId = randomUUID();
 const agentEventDeliveryEnabled = Boolean(config.agentEventSinkUrl && config.internalToken);
@@ -197,9 +218,9 @@ const pendingNativeImageArtifacts = new Map<string, Promise<void>>();
 const codexEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   CODEX_HOME: config.codexHome,
-  OPENAI_BASE_URL: process.env.OPENAI_BASE_URL || config.provider.baseUrl,
-  OPENAI_API_KEY: process.env.OPENAI_API_KEY || config.provider.apiKey,
 };
+delete codexEnvironment.OPENAI_BASE_URL;
+delete codexEnvironment.OPENAI_API_KEY;
 const codex = new CodexAppServerClient({
   codexBin: config.codexBin,
   cwd: config.runtimeRoot,
@@ -363,6 +384,10 @@ const server = createServer(async (req, res) => {
     }
 
     const url = new URL(req.url, `http://${req.headers.host ?? "localhost"}`);
+    if (runtimeProviderProxy.matches(url.pathname)) {
+      await runtimeProviderProxy.handle(req, res, url);
+      return;
+    }
     if (!isAuthorizedGatewayRequest(req)) {
       sendJson(res, 401, { error: "Unauthorized Gateway request." });
       return;
@@ -389,6 +414,10 @@ const server = createServer(async (req, res) => {
         provider: {
           id: config.provider.id,
           configured: Boolean(config.provider.apiKey),
+          runtimeProxy: {
+            actorAuthorized: true,
+            loopbackOnly: true,
+          },
           imageModel: config.provider.imageModel,
           webSearchModel: config.provider.webSearchModel,
           titleModel: config.titleModel,
@@ -413,7 +442,8 @@ const server = createServer(async (req, res) => {
           legacyDynamicWebSearchHandler: true,
           multiAgent: true,
           localPathImageReader: false,
-          nativeImageGeneration: modelProviderCapabilities.imageGeneration,
+          nativeImageGeneration:
+            modelProviderCapabilities.imageGeneration && modelProviderCapabilities.namespaceTools,
           hooks: process.env.NODE_ENV === "production" ? "managed-only" : "app-owned-development",
           maxTurnDurationMs: config.maxTurnDurationMs,
           maxAgentThreadsPerSession: config.maxAgentThreadsPerSession,
@@ -3369,6 +3399,146 @@ async function handleCommerceDataHostToolRequest(
   }
 
   const authorization = await externalDataControl.authorizeCatalog(principal);
+  if (tool === "plan_marketplace_research") {
+    const businessInput = readMarketplaceProductResearchPlanInput(args);
+    assertMarketplacePlatformCatalogEntry(turnMarketplacePlatformCatalogs.get(turnId), businessInput.platform);
+    const requestText = turnResearchRequestTexts.get(turnId) ?? await readResearchRequestText(threadId, turnId);
+    try {
+      const planned = await createMarketplaceProductResearchPlan(
+        externalDataService,
+        businessInput,
+        {
+          tenant_id: principal.tenantId,
+          workspace_id: principal.workspaceId,
+          user_id: principal.userId,
+          source: "codex_harness",
+          source_call_id: callId,
+          root_thread_id: principal.rootThreadId ?? null,
+          thread_id: threadId,
+          turn_id: turnId,
+          request_text: requestText,
+          top_n: businessInput.max_results,
+          business_intent: null,
+        },
+        authorization,
+      );
+      const quote = await externalDataControl.quote(principal, {
+        planId: planned.planId,
+        planKey: planned.planKey,
+        source: "codex_harness",
+        threadId,
+        turnId,
+        calls: planned.steps.map((step) => ({
+          endpointId: step.endpointId,
+          platform: step.catalogPlatform,
+          count: Object.keys(step.dynamicParameterBindings).length ? planned.detailSampleSize : 1,
+        })),
+      });
+      if (quote.providerCallCount !== planned.estimatedProviderCalls) {
+        throw new CommerceDataToolError(
+          "商品研究计划的调用次数与计费报价不一致。",
+          "MARKETPLACE_PLAN_QUOTE_MISMATCH",
+          "Do not execute this plan. Report the internal planning mismatch; no paid provider call was dispatched.",
+        );
+      }
+      respondWithCommerceDataResult(event.id, {
+        success: true,
+        state: "ready",
+        plan_id: planned.planId,
+        expires_at: planned.expiresAt,
+        market_context: planned.marketContext,
+        detail_sample_size: planned.detailSampleSize,
+        estimated_provider_calls: planned.estimatedProviderCalls,
+        quote: {
+          currency: quote.currency,
+          provider_call_count: quote.providerCallCount,
+          priced: quote.unpricedEndpointIds.length === 0,
+          vendor_cost_micros: quote.vendorCostMicros,
+          billable_amount_micros: quote.billableAmountMicros,
+          monthly_call_limit: quote.monthlyCallLimit,
+          calls_used: quote.callsUsed,
+          monthly_spend_limit_micros: quote.monthlySpendLimitMicros,
+          spend_used_micros: quote.spendUsedMicros,
+          approval_mode: quote.approvalMode,
+          per_call_auto_approval_micros: quote.perCallAutoApprovalMicros,
+        },
+        coverage: planned.coverage,
+        instruction: "The free immutable plan is ready. Call execute_marketplace_research once with only this plan_id after respecting the configured approval policy. Do not repeat planning or alter the market/localized terms.",
+      });
+      return;
+    } catch (error) {
+      if (error instanceof ExternalDataControlError || error instanceof CommerceDataToolError) throw error;
+      const preflightError = error instanceof MarketplaceProductResearchPreflightError ? error : null;
+      const code = preflightError?.code ?? "MARKETPLACE_RESEARCH_PLAN_FAILED";
+      const instruction = code === "MARKET_SELECTION_REQUIRED"
+        ? "Call get_marketplace_options for the exact platform and use native request_user_input with only its ready options. Then create a new free plan in the same Turn."
+        : code === "MARKET_UNSUPPORTED"
+          ? "State that the requested site is unsupported and list only ready database options. Do not substitute another market."
+          : code === "LOCALIZED_KEYWORD_REQUIRED" || code === "LOCALIZED_KEYWORD_INVALID"
+            ? "Use the marketContext returned in details to generate one concise query in preferredQueryLocale, then create a new free plan. Do not ask the user to translate."
+            : "Correct the business-level planning arguments once. No provider reservation, approval or paid dispatch occurred.";
+      throw new CommerceDataToolError(
+        error instanceof Error ? error.message : "商品研究计划无法建立。",
+        code,
+        instruction,
+        preflightError?.details ?? {},
+      );
+    }
+  }
+  if (tool === "execute_marketplace_research") {
+    const planId = typeof args.plan_id === "string" ? args.plan_id : "";
+    if (!isUuid(planId)) {
+      throw new CommerceDataToolError(
+        "plan_id 无效。",
+        "INVALID_MARKETPLACE_PLAN_ID",
+        "Use the plan_id returned by a successful free plan_marketplace_research call in this Turn.",
+      );
+    }
+    const requestText = turnResearchRequestTexts.get(turnId) ?? await readResearchRequestText(threadId, turnId);
+    let executable;
+    try {
+      executable = await executeMarketplaceProductResearchPlan(
+        externalDataService,
+        planId,
+        {
+          tenant_id: principal.tenantId,
+          workspace_id: principal.workspaceId,
+          user_id: principal.userId,
+          source: "codex_harness",
+          source_call_id: callId,
+          root_thread_id: principal.rootThreadId ?? null,
+          thread_id: threadId,
+          turn_id: turnId,
+          request_text: requestText,
+          top_n: 50,
+          business_intent: null,
+        },
+        authorization,
+      );
+    } catch (error) {
+      const planError = error instanceof MarketplaceProductResearchPreflightError ? error : null;
+      throw new CommerceDataToolError(
+        error instanceof Error ? error.message : "商品研究计划不可执行。",
+        planError?.code ?? "MARKETPLACE_PLAN_EXECUTION_FAILED",
+        "Do not retry this plan. Create a new free plan only when it is stale or expired; otherwise report the exact ownership, policy or execution-state failure.",
+        planError?.details ?? {},
+      );
+    }
+    for (const step of executable.steps) assertEndpointAllowed(step.endpointId, authorization);
+    const input = readMarketplaceProductResearchInputFromPlan(executable.businessInput);
+    await advanceMarketplaceWorkflow(event.id, scope, principal, {
+      executionId: executable.executionId,
+      planId,
+      sourceCallId: callId,
+      input,
+      preflight: executable,
+      nextStepIndex: 0,
+      resolvedBindings: {},
+      completedStepCount: 0,
+      stepInstances: executable.stepInstances,
+    }, { threadId,turnId,callId,requestText });
+    return;
+  }
   if (tool === "research_marketplace_products") {
     const businessInput = readMarketplaceProductResearchInput(args);
     assertMarketplacePlatformCatalogEntry(turnMarketplacePlatformCatalogs.get(turnId), businessInput.platform);
@@ -3427,12 +3597,14 @@ async function handleCommerceDataHostToolRequest(
     }
     await advanceMarketplaceWorkflow(event.id, scope, principal, {
       executionId,
+      planId: null,
       sourceCallId: callId,
       input: businessInput,
       preflight: { ...workflowPreflight, businessIntent },
       nextStepIndex: 0,
       resolvedBindings: {},
       completedStepCount: 0,
+      stepInstances: null,
     }, {
       threadId,
       turnId,
@@ -3567,13 +3739,39 @@ async function advanceMarketplaceWorkflow(
   workflow: MarketplaceWorkflowRuntime,
   research: { threadId: string; turnId: string; callId: string; requestText: string },
 ): Promise<void> {
-  if (workflow.nextStepIndex >= workflow.preflight.steps.length) {
+  const currentInstance = workflow.stepInstances?.[workflow.nextStepIndex] ?? null;
+  if (workflow.stepInstances && !currentInstance) {
     await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow);
     return;
   }
-  const step = workflow.preflight.steps[workflow.nextStepIndex];
-  if (!step) throw new Error("Marketplace workflow step is missing.");
-  if (Object.keys(step.dynamicParameterBindings).length && !Object.keys(workflow.resolvedBindings).length) {
+  if (!workflow.stepInstances && workflow.nextStepIndex >= workflow.preflight.steps.length) {
+    await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow);
+    return;
+  }
+  const template = currentInstance
+    ? workflow.preflight.steps.find((candidate) => candidate.stepId === currentInstance.stepId)
+    : workflow.preflight.steps[workflow.nextStepIndex];
+  if (!template) throw new Error("Marketplace workflow step template is missing.");
+  let step: MarketplaceWorkflowRuntimeStep = currentInstance
+    ? {
+        ...template,
+        stepInstanceId: currentInstance.stepInstanceId,
+        stepInstanceKey: currentInstance.stepInstanceKey,
+        targetId: currentInstance.targetId,
+        targetOrdinal: currentInstance.targetOrdinal,
+        instanceOrder: currentInstance.instanceOrder,
+        bindings: currentInstance.bindings,
+      }
+    : {
+        ...template,
+        stepInstanceId: null,
+        stepInstanceKey: template.stepId,
+        targetId: null,
+        targetOrdinal: null,
+        instanceOrder: template.stepOrder,
+        bindings: workflow.resolvedBindings,
+      };
+  if (!workflow.stepInstances && Object.keys(step.dynamicParameterBindings).length && !Object.keys(workflow.resolvedBindings).length) {
     const resolved = await externalDataService.resolveMarketplaceProductBindings({
       workflow_execution_id: workflow.executionId,
       _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
@@ -3588,8 +3786,9 @@ async function advanceMarketplaceWorkflow(
       return;
     }
     workflow.resolvedBindings = readWorkflowBindingValues(resolved.payload.bindings);
+    step = { ...step,bindings: workflow.resolvedBindings };
   }
-  const params = materializeWorkflowStepParameters(step, workflow.resolvedBindings);
+  const params = materializeWorkflowStepParameters(step, step.bindings);
   const endpointPreflight = await externalDataService.preflightEndpoint({
     endpoint_id: step.endpointId,
     params,
@@ -3621,6 +3820,12 @@ async function advanceMarketplaceWorkflow(
     parameterHash: hashExternalDataParameters(normalizedParams),
     parameterKeys: externalDataParameterKeys(normalizedParams),
     requestedApprovalMode,
+    ...(workflow.planId && step.stepInstanceId ? {
+      marketplacePlanId: workflow.planId,
+      workflowStepInstanceId: step.stepInstanceId,
+      workflowTargetId: step.targetId,
+      workflowRole: step.role,
+    } : {}),
   });
   if (!reservation.requiresApproval) {
     await executeMarketplaceWorkflowStep(
@@ -3644,7 +3849,7 @@ async function advanceMarketplaceWorkflow(
       {
         id: "external_data_call",
         header: "外部数据调用",
-        question: `允许 Commerce Pilot 执行第 ${step.stepOrder + 1}/${workflow.preflight.steps.length} 次调用（${roleLabel}）？`,
+        question: `允许 Commerce Pilot 执行第 ${workflow.completedStepCount + 1}/${plannedMarketplaceProviderCalls(workflow)} 次调用（${roleLabel}${step.targetOrdinal === null ? "" : `，代表商品 ${step.targetOrdinal + 1}`}）？`,
         isOther: false,
         isSecret: false,
         options: [
@@ -3701,7 +3906,7 @@ async function executeMarketplaceWorkflowStep(
   reservation: ExternalDataReservation,
   params: Record<string, unknown>,
   workflow: MarketplaceWorkflowRuntime,
-  step: MarketplaceProductResearchStep,
+  step: MarketplaceWorkflowRuntimeStep,
   research: { threadId: string; turnId: string; callId: string; requestText: string },
 ): Promise<void> {
   await externalDataControl.dispatch(principal, reservation.reservationId, {
@@ -3709,6 +3914,9 @@ async function executeMarketplaceWorkflowStep(
     params,
     workflow_execution_id: workflow.executionId,
     workflow_step_id: step.stepId,
+    marketplace_plan_id: workflow.planId,
+    workflow_step_instance_id: step.stepInstanceId,
+    workflow_target_id: step.targetId,
   });
   let result: ExternalDataServiceToolResult;
   try {
@@ -3728,11 +3936,15 @@ async function executeMarketplaceWorkflowStep(
         top_n: readBusinessIntentTopN(workflow.preflight.businessIntent),
         workflow_execution_id: workflow.executionId,
         workflow_step_id: step.stepId,
+        workflow_step_instance_id: step.stepInstanceId,
+        workflow_target_id: step.targetId,
         business_intent: {
           ...workflow.preflight.businessIntent,
           workflow_plan_key: workflow.preflight.planKey,
           workflow_step_id: step.stepId,
           workflow_step_role: step.role,
+          workflow_step_instance_id: step.stepInstanceId,
+          workflow_target_id: step.targetId,
         },
       },
     });
@@ -3762,8 +3974,17 @@ async function executeMarketplaceWorkflowStep(
     responsePayload: result.payload,
   });
   workflow.completedStepCount += 1;
-  workflow.nextStepIndex += 1;
   if (!outcome.businessUsable) {
+    if (workflow.stepInstances) {
+      workflow.nextStepIndex += 1;
+      await advanceMarketplaceWorkflow(requestId, scope, principal, workflow, {
+        threadId: research.threadId,
+        turnId: research.turnId,
+        callId: workflowSourceCallId(workflow),
+        requestText: research.requestText,
+      });
+      return;
+    }
     await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
       code: typeof result.payload.code === "string" || typeof result.payload.code === "number"
         ? String(result.payload.code)
@@ -3773,6 +3994,37 @@ async function executeMarketplaceWorkflowStep(
         : `${marketplaceWorkflowRoleLabel(step.role)}没有形成可用业务结果。`,
     });
     return;
+  }
+  if (workflow.stepInstances && step.role === "discovery") {
+    const resolved = await externalDataService.resolveMarketplaceProductBindings({
+      workflow_execution_id: workflow.executionId,
+      _commerce_context: { tenant_id: principal.tenantId, workspace_id: principal.workspaceId },
+    });
+    if (resolved.payload.success !== true) {
+      await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
+        code: typeof resolved.payload.code === "string" ? resolved.payload.code : "WORKFLOW_BINDING_UNAVAILABLE",
+        message: typeof resolved.payload.message === "string"
+          ? resolved.payload.message
+          : "搜索结果没有形成可验证的代表商品实例。",
+      });
+      return;
+    }
+    try {
+      workflow.stepInstances = parseMarketplaceProductResearchStepInstances(resolved.payload.step_instances);
+      workflow.preflight.coverage.provider_calls_planned = 1 + workflow.stepInstances.length;
+      workflow.preflight.coverage.detailed_products_selected = Array.isArray(resolved.payload.targets)
+        ? resolved.payload.targets.length
+        : new Set(workflow.stepInstances.map((instance) => instance.targetId).filter(Boolean)).size;
+    } catch (error) {
+      await respondWithCompletedMarketplaceWorkflow(requestId, principal, workflow, {
+        code: "INVALID_MARKETPLACE_STEP_INSTANCES",
+        message: error instanceof Error ? error.message : "代表商品步骤实例无效。",
+      });
+      return;
+    }
+    workflow.nextStepIndex = 0;
+  } else {
+    workflow.nextStepIndex += 1;
   }
   await advanceMarketplaceWorkflow(requestId, scope, principal, workflow, {
     threadId: research.threadId,
@@ -3839,13 +4091,20 @@ function readWorkflowBindingValues(value: Record<string, unknown>): Record<strin
 function marketplaceWorkflowChildCallId(
   sourceCallId: string,
   planKey: string,
-  step: MarketplaceProductResearchStep,
+  step: MarketplaceWorkflowRuntimeStep,
 ): string {
   const digest = createHash("sha256")
-    .update(`${sourceCallId}:${planKey}:${step.stepId}`, "utf8")
+    .update(`${sourceCallId}:${planKey}:${step.stepInstanceKey}`, "utf8")
     .digest("hex")
     .slice(0, 20);
   return `wf_${step.stepOrder}_${digest}`;
+}
+
+function plannedMarketplaceProviderCalls(workflow: MarketplaceWorkflowRuntime): number {
+  const planned = workflow.preflight.coverage.provider_calls_planned;
+  return typeof planned === "number" && Number.isInteger(planned) && planned > 0
+    ? planned
+    : workflow.stepInstances?.length ?? workflow.preflight.steps.length;
 }
 
 function marketplaceWorkflowApprovalRequestId(childCallId: string): string {
@@ -4116,7 +4375,8 @@ function readExternalDataBrowserStatus(): Record<string, unknown> {
       "get_marketplace_options",
       "get_research_result",
       "research_social_content",
-      "research_marketplace_products",
+      "plan_marketplace_research",
+      "execute_marketplace_research",
     ],
   };
 }
@@ -4128,15 +4388,23 @@ function respondWithCommerceDataFailure(
   if (!isRecord(event.params) || event.params.namespace !== "commerce_data") return false;
   const tool = typeof event.params.tool === "string" ? event.params.tool : "";
   const catalogTool = tool === "search_business_data" || tool === "list_marketplace_research_platforms" ||
-    tool === "get_marketplace_options" || tool === "get_research_result";
+    tool === "get_marketplace_options" || tool === "get_research_result" || tool === "plan_marketplace_research";
   const knownError =
     error instanceof CommerceDataToolError ||
     error instanceof ExternalDataControlError ||
     error instanceof ExternalDataServiceMcpError;
   const code = knownError ? error.code : "COMMERCE_DATA_FAILED";
   const message = knownError ? error.message : "外部数据调用失败。";
+  const details = error instanceof CommerceDataToolError || error instanceof ExternalDataControlError
+    ? error.details
+    : {};
+  const planInstruction = tool === "plan_marketplace_research"
+    ? marketplacePlanFailureInstruction(code, details)
+    : null;
   const instruction = error instanceof CommerceDataToolError
     ? error.instruction
+    : planInstruction
+      ? planInstruction
     : catalogTool
       ? "This read-only business-data call did not dispatch a paid endpoint. Use the exact error to correct the arguments at most once in the same turn."
       : "Explain this exact failure reason to the user. Do not retry an uncertain or completed paid call automatically.";
@@ -4150,6 +4418,9 @@ function respondWithCommerceDataFailure(
           code,
           error: message,
           instruction,
+          ...(Object.keys(details).length
+            ? { details }
+            : {}),
         }),
       },
     ],
@@ -4255,6 +4526,61 @@ function readMarketplaceProductResearchInput(value: Record<string, unknown>): Ma
     requested_metrics: requestedMetrics,
     max_results: maxResults,
   };
+}
+
+function readMarketplaceProductResearchPlanInput(value: Record<string, unknown>): MarketplaceProductResearchPlanInput {
+  const legacy = readMarketplaceProductResearchInput({
+    ...value,
+    localized_keyword: Array.isArray(value.localized_keywords) ? value.localized_keywords[0] ?? null : null,
+  });
+  const localizedKeywords = Array.isArray(value.localized_keywords)
+    ? value.localized_keywords
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.normalize("NFKC").trim())
+        .filter(Boolean)
+    : [];
+  const detailSampleSize = value.detail_sample_size === null || value.detail_sample_size === undefined
+    ? null
+    : typeof value.detail_sample_size === "number" && Number.isInteger(value.detail_sample_size)
+      ? value.detail_sample_size
+      : 0;
+  if (
+    !Array.isArray(value.localized_keywords) || localizedKeywords.length !== value.localized_keywords.length ||
+    localizedKeywords.length > 8 || localizedKeywords.some((keyword) => keyword.length > 500) ||
+    (detailSampleSize !== null && (detailSampleSize < 1 || detailSampleSize > 10))
+  ) {
+    throw new CommerceDataToolError(
+      "商品研究计划参数无效。",
+      "INVALID_MARKETPLACE_RESEARCH_PLAN_REQUEST",
+      "Correct localized_keywords or detail_sample_size once. This free planning call did not dispatch a provider request.",
+    );
+  }
+  return {
+    platform: legacy.platform,
+    keyword: legacy.keyword,
+    localized_keywords: [...new Set(localizedKeywords)],
+    market: legacy.market,
+    tmall_only: legacy.tmall_only,
+    min_price_yuan: legacy.min_price_yuan,
+    max_price_yuan: legacy.max_price_yuan,
+    requested_metrics: legacy.requested_metrics,
+    max_results: legacy.max_results,
+    detail_sample_size: detailSampleSize,
+  };
+}
+
+function readMarketplaceProductResearchInputFromPlan(value: Record<string, unknown>): MarketplaceProductResearchInput {
+  return readMarketplaceProductResearchInput({
+    platform: value.platform,
+    keyword: value.keyword,
+    localized_keyword: value.localized_keyword ?? null,
+    market: value.market ?? null,
+    tmall_only: value.tmall_only,
+    min_price_yuan: value.min_price_yuan ?? null,
+    max_price_yuan: value.max_price_yuan ?? null,
+    requested_metrics: value.requested_metrics,
+    max_results: value.max_results,
+  });
 }
 
 function endpointPlatform(endpointId: string): string {
@@ -4455,7 +4781,7 @@ function createCommerceDataToolSpec(): DynamicToolSpec {
         type: "function",
         name: "list_marketplace_research_platforms",
         description:
-          "Read the authoritative database-backed list of marketplaces that currently have a complete, active keyword-product research workflow. This is free and read-only. Call it before proposing platform choices, before get_marketplace_options, and before research_marketplace_products. Platform questions must contain only exact ids and labels returned by this tool; never add a familiar marketplace from general knowledge.",
+          "Read the authoritative database-backed list of marketplaces that currently have a complete, active keyword-product research workflow. This is free and read-only. Call it before proposing platform choices, before get_marketplace_options, and before plan_marketplace_research. Platform questions must contain only exact ids and labels returned by this tool; never add a familiar marketplace from general knowledge.",
         deferLoading: false,
         inputSchema: {
           type: "object",
@@ -4468,7 +4794,7 @@ function createCommerceDataToolSpec(): DynamicToolSpec {
         type: "function",
         name: "get_marketplace_options",
         description:
-          "Read the current database-backed country/site choices for one exact platform returned by list_marketplace_research_platforms, without calling a paid provider. A missing workflow returns available=false. When requiresSelection is true and the user did not specify a market, use native request_user_input with exactly the returned options. Never guess or embed a platform or site option list.",
+          "Read current country/site choices and query-language metadata for one exact platform without a paid call. Use only ready options. When market is missing, use native request_user_input with exactly those options. This tool does not define or expose representative sample limits; never ask about sample size or choose a maximum from this result.",
         deferLoading: false,
         inputSchema: {
           type: "object",
@@ -4529,9 +4855,9 @@ function createCommerceDataToolSpec(): DynamicToolSpec {
       },
       {
         type: "function",
-        name: "research_marketplace_products",
+        name: "plan_marketplace_research",
         description:
-          "Collect public marketplace product evidence for prices, sales levels, brands and product properties. Supply only business-level marketplace filters; the SHUEHO service selects and validates the provider endpoint, archives every returned source list and returns quality-checked products and aggregates. This may incur a fee and must never be retried after a completed or uncertain result.",
+          "Create a free, persisted marketplace research plan bound to the current database catalog, market-language profile, workflow version, representative sample size and estimated provider-call count. This does not call JustOneAPI. Use only market options and locale metadata returned by get_marketplace_options; correct needs-input results before execution.",
         deferLoading: false,
         inputSchema: {
           type: "object",
@@ -4539,9 +4865,11 @@ function createCommerceDataToolSpec(): DynamicToolSpec {
           properties: {
             platform: { type: "string", description: "Requested marketplace in uppercase form, for example TAOBAO." },
             keyword: { type: "string", description: "Concise product or category keyword." },
-            localized_keyword: {
-              type: ["string", "null"],
-              description: "Agent-generated concise search term in the selected market's catalog language. Preserve keyword as the user's original concept. Required when get_marketplace_options returns requiresSelection=true; use null for marketplaces without a market dimension.",
+            localized_keywords: {
+              type: "array",
+              items: { type: "string" },
+              maxItems: 8,
+              description: "Validated concise query variants in the selected market's returned queryLocales. Keep empty only when the platform has no localization requirement; preserve keyword as the original concept.",
             },
             market: {
               type: ["string", "null"],
@@ -4559,8 +4887,27 @@ function createCommerceDataToolSpec(): DynamicToolSpec {
               description: "Business metrics materially required by the user.",
             },
             max_results: { type: "integer", minimum: 1, maximum: 100, description: "Maximum curated product evidence rows requested." },
+            detail_sample_size: {
+              type: ["integer", "null"], minimum: 1, maximum: 10,
+              description: "Representative products for dependent calls. Unless the user explicitly requested a count, MUST use null for the profile default. Never choose the profile maximum or ask the user to reduce coverage before this free plan returns its quote.",
+            },
           },
-          required: ["platform", "keyword", "localized_keyword", "market", "tmall_only", "min_price_yuan", "max_price_yuan", "requested_metrics", "max_results"],
+          required: ["platform", "keyword", "localized_keywords", "market", "tmall_only", "min_price_yuan", "max_price_yuan", "requested_metrics", "max_results", "detail_sample_size"],
+        },
+      },
+      {
+        type: "function",
+        name: "execute_marketplace_research",
+        description:
+          "Execute one unexpired marketplace plan created in this Turn. Supply only plan_id. The Gateway revalidates tenant ownership, catalog and policy, then applies authorization, approval, exact-once dispatch, raw archival and billing settlement separately to every planned provider call. Never retry a completed, expired, stale or uncertain plan.",
+        deferLoading: false,
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            plan_id: { type: "string", description: "UUID returned by plan_marketplace_research." },
+          },
+          required: ["plan_id"],
         },
       },
     ],
@@ -4590,6 +4937,7 @@ function createRuntimeDeveloperInstructions(): string {
     "If a requested capability has no registered tool, explain that it is unavailable instead of attempting a local workaround.",
     "Codex Harness provides its native `image_gen` tool for bitmap image generation and owns the imageGeneration Item lifecycle.",
     `It uses the configured application provider and image model ${config.provider.imageModel}.`,
+    "The current native tool catalog is authoritative over earlier conversation messages that claimed image generation was unavailable.",
     "Use the native image_gen tool for image requests. Never look for or call an application dynamic tool named commerce_image.generate, and never retry a completed native imageGeneration Item.",
     "Commerce Pilot provides the host tool `commerce_skill.publish` for creating or updating instruction-only Skills through an application-owned validator and explicit user approval.",
     "When the user asks to create or update a Skill, use the bundled `skill-creator` Skill, gather the required purpose and trigger boundaries with request_user_input when needed, then call commerce_skill.publish with the complete draft.",
@@ -4605,12 +4953,13 @@ function createRuntimeDeveloperInstructions(): string {
           "Use search_business_data first when previously curated workspace evidence may answer the request; it is read-only and free of provider charges. Use get_research_result to revisit an id returned by a prior collection.",
           "Use research_social_content for public social-platform content evidence. Supply only the business platform, keyword, inclusive Asia/Shanghai dates, objective, required metrics and result limit; never choose or mention a provider endpoint or provider parameter.",
           "Use objective latest_content for exact date-bounded discovery and interaction_ranked for provider-ranked engagement evidence. If the user materially requires both, each objective is a separate governed paid call and each approval must be respected.",
-          "Use research_marketplace_products for marketplace prices, sales levels, brand competition, property distributions and keyword-based product details. Supply only the marketplace, keyword, optional country/site market code, Tmall and price filters, required metrics and result limit. Never ask the user for itemId, ASIN, shopId or another provider identifier: SHUEHO discovers a quality-checked identifier and executes the bounded search-to-detail workflow internally.",
+          "Marketplace product collection is two-phase. Call free plan_marketplace_research first; unless the user explicitly requested a representative count, detail_sample_size MUST be null. Never choose a profile maximum or ask about reducing coverage before the free quote. Execute only its unexpired plan_id through execute_marketplace_research.",
           "Before proposing or asking about marketplace scope, call the free list_marketplace_research_platforms tool. Build native request_user_input platform choices only from its exact database-returned ids and labels. Never add a familiar marketplace from general knowledge, memory, geography, language, or prior conversation; an absent platform is unavailable and must not appear as a selectable or researched platform.",
           "For each selected platform, call the free get_marketplace_options tool using the exact catalog id. If available=false, do not continue with that platform. If requiresSelection is true and the user omitted the market, use native request_user_input with the exact returned labels and codes; when two or three options are returned, include every option in the card. If the user's requested site is absent, clearly state that it is unsupported and do not call the paid tool. Never hard-code, memorize, guess, or silently default market options.",
-          "When get_marketplace_options returns requiresSelection=true, generate one concise localized_keyword in the selected market's catalog language. Preserve keyword as the user's original concept and do not ask the user to translate. A missing localized keyword is a free preflight failure and must be corrected before any paid dispatch.",
+          "Use only ready get_marketplace_options entries. Generate concise localized_keywords from preferredQueryLocale/queryLocales, preserve keyword as the original concept, and never infer language from the country label. Correct missing or invalid localization only by creating a new free plan.",
+          "If a free marketplace quote returns maximumDetailSampleSize below effective coverage, your immediate next action MUST be native request_user_input with one question and two choices: accept the explicit lower sample or pause for an administrator policy change. Never emit a normal assistant message or numbered choices. Create a new free plan only after the answer.",
           "The SHUEHO service deterministically selects and validates the provider capability before any reservation. If it returns a capability gap, zero date-valid evidence or missing metrics, report that exact limitation; do not silently substitute public Web Search or invent values.",
-          "A research_social_content or research_marketplace_products collection may incur a fee and is not idempotent for billing. Never retry an uncertain or completed paid call automatically.",
+          "A research_social_content or execute_marketplace_research collection may incur a fee and is not idempotent for billing. Never retry an uncertain, stale, expired or completed paid plan automatically.",
           "External data results can be incomplete, delayed, or affected by third-party platform changes. State the platform, requested scope, freshness, and material limitations in research outputs.",
           "Commerce Pilot, SHUEHO service, and JustOneAPI credentials are never user inputs and must never be requested, displayed, or included in tool parameters.",
         ]

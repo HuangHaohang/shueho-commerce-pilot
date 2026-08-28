@@ -10,13 +10,19 @@ import type { LocalModelClient } from "./local-model-client.js";
 import {
   materializeMarketplaceStepParams,
   planMarketplaceProductResearch,
+  type MarketplaceResearchRequest,
 } from "./marketplace-research-planner.js";
+import {
+  loadExecutableMarketplaceResearchPlan,
+  persistMarketplaceResearchPlan,
+} from "./marketplace-research-plan-store.js";
 import {
   beginMarketplaceWorkflowExecution,
   completeMarketplaceWorkflowExecution,
   completeMarketplaceWorkflowStep,
   resolveMarketplaceWorkflowBindings,
   startMarketplaceWorkflowStep,
+  WorkflowExecutionError,
 } from "./marketplace-workflow-execution.js";
 import { ExternalDataPipeline } from "./pipeline.js";
 import type { JsonObject } from "./types.js";
@@ -143,6 +149,7 @@ try {
   await verifyGenericCatalogPipeline(fakeModels);
   await verifyGenericPostCatalogPipeline(fakeModels);
   await verifyMarketplaceKeywordWorkflow(fakeModels);
+  await verifyMarketplaceBindingFailureState(fakeModels);
   console.log(JSON.stringify({ ok: true, counts }, null, 2));
 } finally {
   await cleanupTenant(tenantId);
@@ -159,7 +166,8 @@ async function cleanupTenant(targetTenantId: string): Promise<void> {
     for (const table of [
       "service_audit_event", "index_outbox", "research_evidence", "research_metric",
       "research_workflow_business_evidence", "research_workflow_binding_evidence",
-      "research_workflow_step_execution", "research_workflow_execution",
+      "research_workflow_step_execution", "research_workflow_target", "research_workflow_execution",
+      "marketplace_research_plan",
       "business_evidence_observation",
       "business_product_observation", "business_brand_observation", "business_property_observation",
       "business_content_observation", "business_product", "semantic_document", "ai_decision_review",
@@ -421,7 +429,7 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
     topN: 20,
   };
   try {
-    const plan = await planMarketplaceProductResearch({
+    const request: MarketplaceResearchRequest = {
       platform: "JD",
       keyword: "轻量通勤双肩包",
       localizedKeyword: null,
@@ -431,42 +439,71 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
       maxPriceYuan: null,
       requestedMetrics: ["price_band", "sales_level"],
       maxResults: 20,
-    });
+      detailSampleSize: 2,
+    };
+    const plan = await planMarketplaceProductResearch(request);
     assert.equal(plan.workflow.workflowId, "jd.products_by_keyword_v1");
+    assert.equal(plan.estimatedProviderCalls,5);
+    const planScope = {
+      ...baseScope,
+      sourceCallId: `${rootCallId}_plan`,
+      businessIntent: toExternalBusinessIntent(plan.businessIntent),
+    };
+    const persisted = await persistMarketplaceResearchPlan(planScope,request,plan);
+    const loaded = await loadExecutableMarketplaceResearchPlan(baseScope,persisted.planId);
+    assert.equal(loaded.plan.planKey,plan.planKey);
     const execution = await beginMarketplaceWorkflowExecution({
       ...baseScope,
       businessIntent: toExternalBusinessIntent(plan.businessIntent),
-    }, plan);
+    },loaded.plan,{ researchPlanId: persisted.planId });
     const pipeline = new ExternalDataPipeline(undefined, models);
-    let bindings: Record<string, string | number> = {};
-    const payloads: Record<string, JsonObject> = {
-      discover: {
-        code: 0,
-        message: "",
-        data: { items: [{ itemId: "100012345", title: "轻量通勤双肩包", price: 129, sales: 2800 }] },
+    const discoveryInstance = execution.step_instances[0];
+    assert.ok(discoveryInstance);
+    const discoveryStep = plan.steps.find((step) => step.stepId === discoveryInstance.stepId);
+    assert.ok(discoveryStep);
+    const discoveryParams = materializeMarketplaceStepParams(discoveryStep,{});
+    await startMarketplaceWorkflowStep(baseScope, {
+      executionId: execution.workflow_execution_id,stepId: discoveryStep.stepId,
+      stepInstanceId: discoveryInstance.stepInstanceId,endpointId: discoveryStep.endpoint.endpointId,
+      params: discoveryParams,
+    });
+    const discoveryResult = await pipeline.ingestArchived({
+      ...baseScope,sourceCallId: `${rootCallId}_discover`,
+      businessIntent: {
+        ...toExternalBusinessIntent(plan.businessIntent),workflowPlanKey: plan.planKey,
+        workflowStepId: discoveryStep.stepId,workflowStepRole: discoveryStep.role,
       },
-      detail: {
-        code: 0,
-        message: "",
-        data: { itemId: "100012345", title: "轻量通勤双肩包", weightGrams: 570, capacityLiters: 18 },
-      },
-      price: {
-        code: 0,
-        message: "",
-        data: { itemId: "100012345", price: 129, originalPrice: 199 },
-      },
-    };
-    for (const step of plan.steps) {
-      const params = materializeMarketplaceStepParams(step, bindings);
+    },discoveryStep.endpoint.endpointId,discoveryParams,{
+      code: 0,message:"",data:{ items:[
+        { itemId:"100012345",title:"轻量通勤双肩包 18L",price:129,sales:2800 },
+        { itemId:"100067890",title:"轻量通勤双肩包 22L",price:159,sales:1800 },
+        { itemId:"100099999",title:"轻量通勤双肩包 18L 同店铺重复款",price:139,sales:900 },
+      ] },
+    });
+    await completeMarketplaceWorkflowStep(baseScope, {
+      executionId: execution.workflow_execution_id,stepId: discoveryStep.stepId,
+      stepInstanceId: discoveryInstance.stepInstanceId,endpointId: discoveryStep.endpoint.endpointId,
+      researchRequestId: discoveryResult.research_request_id,providerCompleted: discoveryResult.provider_completed,
+      processingState: discoveryResult.processing_state,success: discoveryResult.success,
+      code: discoveryResult.code,message: discoveryResult.message,
+    });
+    const resolved = await resolveMarketplaceWorkflowBindings(baseScope,execution.workflow_execution_id);
+    assert.equal(resolved.targets.length,2);
+    assert.equal(resolved.step_instances.length,4);
+    for (const instance of resolved.step_instances) {
+      const step = plan.steps.find((candidate) => candidate.stepId === instance.stepId);
+      assert.ok(step);
+      const params = materializeMarketplaceStepParams(step,instance.bindings);
       await startMarketplaceWorkflowStep(baseScope, {
         executionId: execution.workflow_execution_id,
         stepId: step.stepId,
+        stepInstanceId: instance.stepInstanceId,
         endpointId: step.endpoint.endpointId,
         params,
       });
       const stepScope = {
         ...baseScope,
-        sourceCallId: `${rootCallId}_${step.stepOrder}`,
+        sourceCallId: `${rootCallId}_${instance.stepInstanceKey}`,
         businessIntent: {
           ...toExternalBusinessIntent(plan.businessIntent),
           workflowPlanKey: plan.planKey,
@@ -474,15 +511,20 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
           workflowStepRole: step.role,
         },
       };
+      const itemId = String(params.itemId);
+      const payload = step.role === "detail"
+        ? { code:0,message:"",data:{ itemId,title:`轻量通勤双肩包 ${itemId}`,weightGrams:570,capacityLiters:18 } }
+        : { code:0,message:"",data:{ itemId,price:itemId === "100012345" ? 129 : 159,originalPrice:199 } };
       const result = await pipeline.ingestArchived(
         stepScope,
         step.endpoint.endpointId,
         params,
-        payloads[step.stepId]!,
+        payload,
       );
       await completeMarketplaceWorkflowStep(baseScope, {
         executionId: execution.workflow_execution_id,
         stepId: step.stepId,
+        stepInstanceId: instance.stepInstanceId,
         endpointId: step.endpoint.endpointId,
         researchRequestId: result.research_request_id,
         providerCompleted: result.provider_completed,
@@ -491,31 +533,38 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
         code: result.code,
         message: result.message,
       });
-      if (step.role === "discovery") {
-        bindings = (await resolveMarketplaceWorkflowBindings(baseScope, execution.workflow_execution_id)).bindings;
-        assert.equal(bindings.item_id, "100012345");
-      }
     }
     const completed = await completeMarketplaceWorkflowExecution(baseScope, execution.workflow_execution_id);
     assert.equal(completed.success, true);
     assert.equal(completed.processing_state, "completed");
-    assert.equal(completed.research_request_ids.length, 3);
+    assert.equal(completed.research_request_ids.length,5);
     assert.ok(completed.products.length > 0);
-    assert.ok(isRecord(completed.metrics.discovery));
-    assert.ok(isRecord(completed.metrics.discovery.price_band));
+    assert.ok(Array.isArray(completed.metrics.discovery));
+    assert.ok(Array.isArray(completed.metrics.detail));
+    assert.equal((completed.metrics.detail as unknown[]).length,2);
     assert.ok(completed.evidence.some((row) => row.quality_basis === "deterministic_structured_metric"));
     const evidence = await withScope(baseScope, async (client) => client.query<{
       bindings: string;
       structured: string;
+      targets: string;
+      plan_state: string;
     }>(`
       SELECT
         (SELECT count(*)::text FROM research_workflow_binding_evidence
           WHERE workflow_execution_id=$1) AS bindings,
         (SELECT count(*)::text FROM research_workflow_business_evidence
-          WHERE workflow_execution_id=$1) AS structured
-    `, [execution.workflow_execution_id]));
-    assert.equal(Number(evidence.rows[0]?.bindings), 1);
+          WHERE workflow_execution_id=$1) AS structured,
+        (SELECT count(*)::text FROM research_workflow_target
+          WHERE workflow_execution_id=$1) AS targets,
+        (SELECT state FROM marketplace_research_plan WHERE id=$2) AS plan_state
+    `, [execution.workflow_execution_id,persisted.planId]));
+    assert.equal(Number(evidence.rows[0]?.bindings),2);
     assert.ok(Number(evidence.rows[0]?.structured) >= 3);
+    assert.equal(Number(evidence.rows[0]?.targets),2);
+    assert.equal(evidence.rows[0]?.plan_state,"completed");
+    await assert.rejects(() => withScope(baseScope, async (client) => client.query(`
+      UPDATE marketplace_research_plan SET requested_input='{}'::jsonb WHERE id=$1
+    `,[persisted.planId])));
     const crossTenantVisible = await withScope({
       tenantId: randomUUID(),
       workspaceId: randomUUID(),
@@ -523,6 +572,74 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
       SELECT count(*)::text AS count FROM research_workflow_execution WHERE id=$1
     `, [execution.workflow_execution_id]));
     assert.equal(Number(crossTenantVisible.rows[0]?.count), 0);
+    const crossTenantPlan = await withScope({
+      tenantId: randomUUID(),workspaceId: randomUUID(),
+    },async (client) => client.query<{ count: string }>(`
+      SELECT count(*)::text AS count FROM marketplace_research_plan WHERE id=$1
+    `,[persisted.planId]));
+    assert.equal(Number(crossTenantPlan.rows[0]?.count),0);
+  } finally {
+    await cleanupTenant(tenantId);
+  }
+}
+
+async function verifyMarketplaceBindingFailureState(models: LocalModelClient): Promise<void> {
+  const tenantId = randomUUID();
+  const rootCallId = `workflow_failure_${randomUUID().replaceAll("-", "")}`;
+  const requestText = "调研京东砂锅商品详情和价格";
+  const baseScope = {
+    tenantId,workspaceId: randomUUID(),userId: "workflow-failure-verifier",
+    source: "external_mcp" as const,sourceCallId: rootCallId,requestText,topN: 20,
+  };
+  try {
+    const request: MarketplaceResearchRequest = {
+      platform: "JD",keyword: "砂锅",localizedKeyword: null,market: null,
+      tmallOnly: false,minPriceYuan: null,maxPriceYuan: null,
+      requestedMetrics: ["price_band"],maxResults: 20,detailSampleSize: 2,
+    };
+    const plan = await planMarketplaceProductResearch(request);
+    const planScope = { ...baseScope,sourceCallId: `${rootCallId}_plan`,businessIntent: toExternalBusinessIntent(plan.businessIntent) };
+    const persisted = await persistMarketplaceResearchPlan(planScope,request,plan);
+    const execution = await beginMarketplaceWorkflowExecution({
+      ...baseScope,businessIntent: toExternalBusinessIntent(plan.businessIntent),
+    },plan,{ researchPlanId: persisted.planId });
+    const instance = execution.step_instances[0];
+    const step = plan.steps[0];
+    assert.ok(instance && step);
+    const params = materializeMarketplaceStepParams(step,{});
+    await startMarketplaceWorkflowStep(baseScope,{
+      executionId: execution.workflow_execution_id,stepId: step.stepId,
+      stepInstanceId: instance.stepInstanceId,endpointId: step.endpoint.endpointId,params,
+    });
+    const result = await new ExternalDataPipeline(undefined,models).ingestArchived({
+      ...baseScope,sourceCallId: `${rootCallId}_discover`,
+      businessIntent: {
+        ...toExternalBusinessIntent(plan.businessIntent),workflowPlanKey: plan.planKey,
+        workflowStepId: step.stepId,workflowStepRole: step.role,
+      },
+    },step.endpoint.endpointId,params,{
+      code:0,message:"",data:{ items:[
+        { itemId:"900000001",title:"RTX5090 高性能游戏笔记本电脑",price:9999,sales:500 },
+      ] },
+    });
+    await completeMarketplaceWorkflowStep(baseScope,{
+      executionId: execution.workflow_execution_id,stepId: step.stepId,
+      stepInstanceId: instance.stepInstanceId,endpointId: step.endpoint.endpointId,
+      researchRequestId: result.research_request_id,providerCompleted: result.provider_completed,
+      processingState: result.processing_state,success: result.success,code: result.code,message: result.message,
+    });
+    await assert.rejects(
+      () => resolveMarketplaceWorkflowBindings(baseScope,execution.workflow_execution_id),
+      (error: unknown) => error instanceof WorkflowExecutionError && error.code === "WORKFLOW_BINDING_UNAVAILABLE",
+    );
+    const completed = await completeMarketplaceWorkflowExecution(baseScope,execution.workflow_execution_id);
+    assert.equal(completed.success,false);
+    assert.equal(completed.processing_state,"partial");
+    assert.ok(Array.isArray(completed.coverage.unresolved_step_templates));
+    const storedPlan = await withScope(baseScope,async (client) => client.query<{ state: string }>(`
+      SELECT state FROM marketplace_research_plan WHERE id=$1
+    `,[persisted.planId]));
+    assert.equal(storedPlan.rows[0]?.state,"partial");
   } finally {
     await cleanupTenant(tenantId);
   }
@@ -542,6 +659,12 @@ function toExternalBusinessIntent(value: JsonObject) {
     requestedTopN: typeof value.requested_top_n === "number" ? value.requested_top_n : null,
     workflowId: typeof value.workflow_id === "string" ? value.workflow_id : null,
     workflowVersion: typeof value.workflow_version === "string" ? value.workflow_version : null,
+    localizedKeyword: typeof value.localized_keyword === "string" ? value.localized_keyword : null,
+    localizedKeywords: Array.isArray(value.localized_keywords)
+      ? value.localized_keywords.filter((item): item is string => typeof item === "string")
+      : [],
+    marketContext: isRecord(value.market_context) ? value.market_context : null,
+    qualityPolicy: isRecord(value.quality_policy) ? value.quality_policy : null,
   };
 }
 

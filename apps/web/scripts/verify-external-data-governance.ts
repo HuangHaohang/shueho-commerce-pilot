@@ -33,6 +33,7 @@ try {
     cancelExternalDataCall,
     dispatchExternalDataCall,
     getExternalDataGovernance,
+    quoteExternalDataPlan,
     reserveExternalDataCall,
     settleExternalDataCall,
     updateExternalDataPolicy,
@@ -84,6 +85,9 @@ try {
     },
   };
   const scope = { tenantId, workspaceId, userId, rootThreadId: threadId, mcpAccessTokenId: null };
+  const marketplacePlanId = randomUUID();
+  const workflowStepInstanceId = randomUUID();
+  const marketplacePlanKey = createHash("sha256").update(`marketplace-plan-${suffix}`).digest("hex");
   await updateExternalDataPolicy(context, {
     status: "enabled",
     approvalMode: "always_ask",
@@ -95,6 +99,16 @@ try {
     perTurnCallLimit: null,
     retentionDays: 180,
   });
+  const quote = await quoteExternalDataPlan(scope, {
+    planId: marketplacePlanId,
+    planKey: marketplacePlanKey,
+    source: "codex_harness",
+    threadId,
+    turnId: "turn-verify-0001",
+    calls: [{ endpointId: "taobao.verify_v1",platform: "taobao",count: 1 }],
+  });
+  assert(quote.providerCallCount === 1 && quote.unpricedEndpointIds.includes("taobao.verify_v1"),
+    "plan quote did not preserve unpriced call coverage");
   const first = await reserveExternalDataCall(scope, {
     source: "codex_harness",
     threadId,
@@ -105,12 +119,19 @@ try {
     parameterHash: "ab".repeat(32),
     parameterKeys: ["keyword"],
     requestedApprovalMode: "always_ask",
+    marketplacePlanId,
+    workflowStepInstanceId,
+    workflowTargetId: null,
+    workflowRole: "discovery",
   });
   assert(first.requiresApproval && first.pricingStatus === "unpriced", "default reservation did not require approval");
   await approveExternalDataCall(scope, first.reservationId);
   await dispatchExternalDataCall(scope, first.reservationId, {
     endpoint_id: "taobao.verify_v1",
     params: { keyword: "通勤包" },
+    marketplace_plan_id: marketplacePlanId,
+    workflow_step_instance_id: workflowStepInstanceId,
+    workflow_target_id: null,
   });
   await settleExternalDataCall(scope, first.reservationId, {
     state: "succeeded",
@@ -125,6 +146,15 @@ try {
       requestId: "verification-request",
     },
   });
+  const planLineage = await owner.query<{
+    marketplace_plan_id: string | null; workflow_step_instance_id: string | null; workflow_role: string | null;
+  }>(`
+    SELECT marketplace_plan_id,workflow_step_instance_id,workflow_role
+    FROM commerce_external_data_call WHERE id=$1
+  `,[first.reservationId]);
+  assert(planLineage.rows[0]?.marketplace_plan_id === marketplacePlanId &&
+    planLineage.rows[0]?.workflow_step_instance_id === workflowStepInstanceId &&
+    planLineage.rows[0]?.workflow_role === "discovery","plan call lineage was not retained");
   const archived = await owner.query<{
     state: string;
     request_payload: Record<string, unknown>;
@@ -318,6 +348,8 @@ try {
   console.log(JSON.stringify({
     ok: true,
     stateMachine: "reserve-approve-dispatch-settle",
+    noReservationPlanQuoteReadback: true,
+    planStepLineageReadback: true,
     pricedPolicyReadback: true,
     taskGrantReadback: true,
     perTurnCallLimitReadback: true,

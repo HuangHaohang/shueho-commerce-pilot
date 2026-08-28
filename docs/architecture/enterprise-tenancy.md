@@ -52,6 +52,7 @@ The current Enterprise schema is migrations `001` through `032`. Versioned migra
 - `025` makes provider master data read-only to the long-running application role; only the migration/operator credential can import or replace snapshots.
 - `026` adds tenant/user-scoped current Agent-message feedback plus an append-only feedback-event history keyed to authoritative Harness thread, Turn, and message-item ids.
 - `027` adds the independently retained raw JustOneAPI request/response archive, payload hashes, legal hold, RLS and archive retention worker function.
+- `033` links every governed marketplace provider call to its opaque immutable plan, target and step-instance ids without exposing the independent warehouse.
 - `028` removes all product read/delete permissions and keeps the raw archive SQL-only.
 - `029` adds SQL-only `/api/search/v1` request indexes and a query view over stable request and response-envelope fields.
 - `030` reads provider `requestId` and `recordTime` from either the direct response envelope or the MCP `raw` envelope and backfills existing archives.
@@ -74,7 +75,7 @@ The current Enterprise schema is migrations `001` through `032`. Versioned migra
 | Terminal ordering | `commerce_agent_turn_completion` | Idempotent terminal event and stale-update protection |
 | Audit | `commerce_enterprise_audit_event` | Tenant/workspace-scoped security events |
 | External data policy | `commerce_external_data_policy` and rate cards | Platform/endpoint allowlist, approval mode, call/spend limits |
-| External data billing | `commerce_external_data_call` | Reservation, approval, dispatch, upstream result and price state |
+| External data billing | `commerce_external_data_call` | Plan/target lineage, reservation, approval, dispatch, upstream result and price state |
 | External data warehouse | `commerce_external_data_archive` and SQL-only search view | Complete request/response JSON retained independently from conversation deletion |
 | External MCP access | `commerce_mcp_access_token` | Hashed, revocable, workspace-bound customer credentials |
 | Replay protection | `commerce_idempotency_record` and turn request ids | Tenant-scoped idempotency |
@@ -247,9 +248,9 @@ The remaining Enterprise gaps are deliberately narrow:
 - Workspace-shared thread UI and its sharing policy are not implemented; current conversation routes remain creator-only.
 - Provider invoice/rate-card reconciliation is not implemented. Missing provider usage is surfaced explicitly and must not be treated as zero-cost usage.
 
-## Codex 0.149 Usage Accounting
+## Codex 0.150.1 Usage Accounting
 
-The repository pins `@openai/codex` `0.149.0`. Commerce Pilot preserves the Harness usage categories instead of inferring usage from message text.
+The repository pins `@openai/codex` `0.150.1`. Commerce Pilot preserves the Harness usage categories instead of inferring usage from message text.
 
 `thread/tokenUsage/updated` contains:
 
@@ -267,7 +268,7 @@ tokenUsage.modelContextWindow
 - cumulative `total` values must never be repeatedly summed into billing;
 - `last` must not be treated as the total for a multi-response turn.
 
-For Harness model calls, Gateway enables raw experimental events and consumes one `rawResponse/completed` notification per completed Responses call. Its exact 0.149 usage breakdown is:
+For Harness model calls, Gateway enables raw experimental events and consumes one `rawResponse/completed` notification per completed Responses call. Its exact 0.150.1 usage breakdown is:
 
 ```text
 totalTokens

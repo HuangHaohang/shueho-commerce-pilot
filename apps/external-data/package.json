@@ -9,6 +9,8 @@
     "test": "vitest run",
     "migrate": "tsx src/migrate.ts",
     "import:catalog": "tsx src/import-justoneapi-catalog.ts",
+    "import:market-profiles": "tsx src/import-market-profiles.ts",
+    "import:business-workflows": "tsx src/import-business-workflows.ts",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "evaluate": "tsx src/evaluate.ts",
@@ -22,6 +24,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "ajv": "^8.20.0",
     "dotenv": "^17.2.2",
+    "opencc-js": "^1.4.2",
     "pg": "^8.23.0",
     "zod": "^3.25.76"
   },

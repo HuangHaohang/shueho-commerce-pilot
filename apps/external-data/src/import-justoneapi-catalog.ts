@@ -10,6 +10,7 @@ import { syncProviderBusinessWorkflows } from "./business-workflows.js";
 import { catalogSha256, discoverJustOneApiCatalog, mergeCatalog, type PricingCatalogRow } from "./catalog-import.js";
 import { config } from "./config.js";
 import { syncProviderMarketOptions } from "./market-options.js";
+import { syncProviderMarketProfiles } from "./market-profiles.js";
 
 if (!config.migrationDatabaseUrl) throw new Error("EXTERNAL_DATA_MIGRATION_DATABASE_URL is required.");
 const pricingDatabaseUrl = process.env.JUSTONEAPI_PRICING_DATABASE_URL ?? readWebMigrationUrl();
@@ -172,6 +173,7 @@ try {
   `, [receiptId]);
   const marketCatalog = await syncProviderMarketOptions(warehouse, receiptId, endpoints);
   const workflowCatalog = await syncProviderBusinessWorkflows(warehouse, receiptId, endpoints);
+  const marketProfiles = await syncProviderMarketProfiles(warehouse, receiptId);
   const readback = await warehouse.query<{ total: string; enabled: string; deprecated: string; missing_pricing: string; missing_openapi: string }>(`
     SELECT count(*)::text AS total,count(*) FILTER (WHERE enabled)::text AS enabled,
            count(*) FILTER (WHERE catalog_status='deprecated')::text AS deprecated,
@@ -186,6 +188,8 @@ try {
     pricingCount: pricingRows.length,workflowCount: workflowCatalog.workflowCount,
     workflowStepCount: workflowCatalog.stepCount,workflowDefinitionSha256: workflowCatalog.definitionSha256,
     marketOptionCount: marketCatalog.optionCount,marketPlatformCount: marketCatalog.platformCount,
+    marketProfileReceiptId: marketProfiles.receiptId,marketProfileCount: marketProfiles.profileCount,
+    linkedMarketOptionCount: marketProfiles.linkedOptionCount,missingMarketProfiles: marketProfiles.missingOptions,
     ...readback.rows[0],
   }, null, 2));
 } catch (error) {

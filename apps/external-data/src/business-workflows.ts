@@ -34,8 +34,24 @@ export type ProviderBusinessWorkflow = {
   inputSchema: JsonObject;
   maximumProviderCalls: number;
   definitionSha256: string;
-  marketOptions: Array<{ code: string; displayName: string }>;
+  sourceCatalogImportId: string;
+  marketOptions: ProviderWorkflowMarketOption[];
   steps: ProviderBusinessWorkflowStep[];
+};
+
+export type ProviderWorkflowMarketOption = {
+  code: string;
+  displayName: string;
+  profileId: string;
+  profileRevision: string;
+  preferredQueryLocale: string;
+  queryLocales: string[];
+  acceptedQueryLanguages: string[];
+  timezone: string;
+  currency: string;
+  keywordLocalizationPolicy: "none" | "agent_generated_validated";
+  expectedScripts: string[];
+  qualityPolicy: JsonObject;
 };
 
 type EndpointLike = Pick<ProviderEndpoint, "endpointId" | "platformId" | "enabled" | "requestSchema">;
@@ -61,7 +77,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "jd.products_by_keyword_v1",
     platformId: "jd",
     displayName: "京东关键词商品详情",
-    capability: "按关键词发现京东商品，再读取质量通过的首个商品详情与实时价格。",
+    capability: "按关键词发现京东商品，再对质量通过且去重后的代表性商品读取详情与实时价格。",
     steps: [
       {
         stepId: "discover",
@@ -88,7 +104,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "taobao.products_by_keyword_v1",
     platformId: "taobao",
     displayName: "淘宝天猫关键词商品详情",
-    capability: "按关键词和业务筛选发现淘宝或天猫商品，再读取质量通过的首个商品详情与评价。",
+    capability: "按关键词和业务筛选发现淘宝或天猫商品，再对质量通过且去重后的代表性商品读取详情与评价。",
     steps: [
       {
         stepId: "discover",
@@ -120,7 +136,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "1688.products_by_keyword_v1",
     platformId: "1688",
     displayName: "1688关键词商品详情",
-    capability: "按关键词发现 1688 商品，再读取质量通过的首个商品详情。",
+    capability: "按关键词发现 1688 商品，再对质量通过且去重后的代表性商品读取详情。",
     steps: [
       {
         stepId: "discover",
@@ -141,7 +157,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "amazon.products_by_keyword_v1",
     platformId: "amazon",
     displayName: "亚马逊关键词商品详情",
-    capability: "按关键词和市场站点发现亚马逊商品，再读取质量通过的首个商品详情与热门评价。",
+    capability: "按关键词和市场站点发现亚马逊商品，再对质量通过且去重后的代表性商品读取详情与热门评价。",
     steps: [
       {
         stepId: "discover",
@@ -168,7 +184,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "douyin_ec.products_by_keyword_v1",
     platformId: "douyin_ec",
     displayName: "抖音电商关键词商品详情",
-    capability: "按关键词发现抖音电商商品，再读取质量通过的首个商品详情与 SKU。",
+    capability: "按关键词发现抖音电商商品，再对质量通过且去重后的代表性商品读取详情与 SKU。",
     steps: [
       {
         stepId: "discover",
@@ -195,7 +211,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "tiktok_shop.products_by_keyword_v1",
     platformId: "tiktok_shop",
     displayName: "TikTok Shop关键词商品详情",
-    capability: "按关键词和市场站点发现 TikTok Shop 商品，再读取质量通过的首个商品详情。",
+    capability: "按关键词和市场站点发现 TikTok Shop 商品，再对质量通过且去重后的代表性商品读取详情。",
     steps: [
       {
         stepId: "discover",
@@ -216,7 +232,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "shopee.products_by_keyword_v1",
     platformId: "shopee",
     displayName: "Shopee关键词商品详情",
-    capability: "按关键词和市场站点发现 Shopee 商品，再读取质量通过的首个商品详情与评价。",
+    capability: "按关键词和市场站点发现 Shopee 商品，再对质量通过且去重后的代表性商品读取详情与评价。",
     steps: [
       {
         stepId: "discover",
@@ -254,7 +270,7 @@ const workflowSpecs: WorkflowSpec[] = [
     workflowId: "xianyu.products_by_keyword_v1",
     platformId: "xianyu",
     displayName: "闲鱼关键词商品详情",
-    capability: "按关键词发现闲鱼商品，再读取质量通过的首个商品详情。",
+    capability: "按关键词发现闲鱼商品，再对质量通过且去重后的代表性商品读取详情。",
     steps: [
       {
         stepId: "discover",
@@ -276,17 +292,19 @@ const workflowSpecs: WorkflowSpec[] = [
 const workflowInputSchema: JsonObject = {
   type: "object",
   additionalProperties: false,
-  required: ["platform", "keyword", "localized_keyword", "tmall_only", "min_price_yuan", "max_price_yuan", "requested_metrics", "max_results"],
+  required: ["platform", "keyword", "localized_keyword", "localized_keywords", "tmall_only", "min_price_yuan", "max_price_yuan", "requested_metrics", "max_results", "detail_sample_size"],
   properties: {
     platform: { type: "string" },
     keyword: { type: "string", minLength: 1, maxLength: 500 },
     localized_keyword: { type: ["string", "null"], maxLength: 500 },
+    localized_keywords: { type: "array", items: { type: "string", maxLength: 500 }, maxItems: 8 },
     market: { type: ["string", "null"] },
     tmall_only: { type: "boolean" },
     min_price_yuan: { type: ["number", "null"], minimum: 0 },
     max_price_yuan: { type: ["number", "null"], minimum: 0 },
     requested_metrics: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 4 },
     max_results: { type: "integer", minimum: 1, maximum: 100 },
+    detail_sample_size: { type: "integer", minimum: 1, maximum: 10 },
   },
 };
 
@@ -324,7 +342,7 @@ export function buildCuratedMarketplaceWorkflows<T extends EndpointLike>(endpoin
         if (!(parameter in step.inputBindings)) throw new Error(`${spec.workflowId}.${step.stepId} does not bind required parameter ${parameter}.`);
       }
     }
-    const workflowVersion = "1.0.0";
+    const workflowVersion = "2.0.0";
     const steps = resolved.map((step) => ({
       stepId: step.stepId,
       stepOrder: step.stepOrder,

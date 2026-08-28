@@ -215,6 +215,10 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260828_032_agent_tool_contract_version",
       path: resolve(process.cwd(), "migrations/032_agent_tool_contract_version.sql"),
     },
+    {
+      version: "20260828_033_external_data_plan_lineage",
+      path: resolve(process.cwd(), "migrations/033_external_data_plan_lineage.sql"),
+    },
   ];
 
   for (const migration of migrations) {
