@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { readExplicitSkillMessage, readVisibleAttachmentMessage } from "@/lib/agent/skill-invocation";
+import { readNativeSkillMessage, readVisibleAttachmentMessage } from "@/lib/agent/skill-invocation";
 import {
   listAgentMessageFeedback,
   type AgentMessageFeedback,
@@ -35,7 +35,15 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
   }
 
   try {
-    const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(threadId)}`), {
+    const requestUrl = new URL(request.url);
+    const cursor = requestUrl.searchParams.get("cursor");
+    if (cursor && (cursor.length > 2_048 || /[\u0000-\u001f\u007f]/.test(cursor))) {
+      return NextResponse.json({ error: "历史分页标识无效。" }, { status: 400 });
+    }
+    const gatewayPath = `/api/threads/${encodeURIComponent(threadId)}${
+      cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""
+    }`;
+    const response = await fetch(gatewayUrl(gatewayPath), {
       headers: gatewayHeaders(undefined, enterpriseContext),
       cache: "no-store",
       signal: AbortSignal.timeout(30_000),
@@ -57,18 +65,20 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
       listAgentMessageFeedback(enterpriseContext, threadId),
     ]);
     const normalized = normalizeThreadHistory(payload, record, userInputAnswers, messageFeedback);
-    await updateAgentThreadStatus(
-      threadId,
-      enterpriseContext,
-      normalized.thread.status,
-      normalized.thread.durationMs,
-    );
-    if (normalized.thread.status !== "running" && normalized.thread.lastTurnId) {
-      await releaseAgentTurnLeaseForTurn(
-        enterpriseContext,
+    if (!cursor) {
+      await updateAgentThreadStatus(
         threadId,
-        normalized.thread.lastTurnId,
+        enterpriseContext,
+        normalized.thread.status,
+        normalized.thread.durationMs,
       );
+      if (normalized.thread.status !== "running" && normalized.thread.lastTurnId) {
+        await releaseAgentTurnLeaseForTurn(
+          enterpriseContext,
+          threadId,
+          normalized.thread.lastTurnId,
+        );
+      }
     }
     return NextResponse.json(normalized, {
       headers: { "Cache-Control": "no-store" },
@@ -146,8 +156,13 @@ function normalizeThreadHistory(
           .map((entry) => entry.text as string)
           .join("\n")
           .trim();
-        const explicitSkillMessage = readExplicitSkillMessage(rawText);
+        const nativeSkill = content.find(
+          (entry) => entry.type === "skill" && typeof entry.name === "string",
+        );
+        const nativeSkillName = nativeSkill && typeof nativeSkill.name === "string" ? nativeSkill.name : null;
+        const explicitSkillMessage = readNativeSkillMessage(rawText, nativeSkillName);
         const text = readVisibleAttachmentMessage(explicitSkillMessage.content);
+        const skillName = nativeSkillName ?? explicitSkillMessage.skillName;
         if (text || turnAttachments.length) {
           const clientId = typeof item.clientId === "string" ? item.clientId : null;
           const variant = userMessageIndex++ === 0 ? "default" : "steer";
@@ -157,7 +172,7 @@ function normalizeThreadHistory(
             turnId,
             role: "user",
             content: text,
-            skillName: explicitSkillMessage.skillName,
+            skillName,
             attachments: variant === "default" ? turnAttachments.map(({ turnId: _turnId, ...attachment }) => attachment) : [],
             clientId,
             delivery: "committed",
@@ -225,6 +240,7 @@ function normalizeThreadHistory(
     messages,
     activities,
     images,
+    nextCursor: typeof payload.nextCursor === "string" && payload.nextCursor ? payload.nextCursor : null,
   };
 }
 
@@ -303,6 +319,17 @@ function normalizeActivity(
       label: "完成了搜索",
       durationMs,
       ...(sources.length > 0 ? { sources } : {}),
+      status,
+    };
+  }
+  if (item.type === "imageGeneration") {
+    return {
+      id,
+      sequence,
+      turnId,
+      kind: "image",
+      label: status === "failed" ? "图片生成未完成" : "图片生成完成",
+      durationMs,
       status,
     };
   }

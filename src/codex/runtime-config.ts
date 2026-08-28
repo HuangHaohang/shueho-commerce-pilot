@@ -248,9 +248,9 @@ const allowedTools = new Set([
   "resume_agent",
   "wait_agent",
   "close_agent",
-  "commerce_image.generate",
-  "commerce_image_generate",
-  "commerce_imagegenerate",
+  "image_gen",
+  "imagegen",
+  "image_generation",
   "commerce_skill.publish",
   "commerce_skill_publish",
   "commerce_skillpublish",
@@ -285,7 +285,6 @@ const allowedTools = new Set([
   "research_marketplace_products",
   "list_marketplace_research_platforms",
   "get_marketplace_options",
-  "generate",
 ]);
 
 let output = {};

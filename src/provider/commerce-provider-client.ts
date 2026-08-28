@@ -23,16 +23,6 @@ export type ProviderModelCatalog = {
   configuredImageModel: string;
 };
 
-export type GeneratedImage = {
-  responseId: string | null;
-  model: string;
-  mimeType: "image/png" | "image/jpeg" | "image/webp";
-  base64: string;
-  quality: string | null;
-  size: string | null;
-  usage: unknown;
-};
-
 export type WebSearchResult = {
   responseId: string | null;
   model: string;
@@ -222,47 +212,6 @@ export class CommerceProviderClient {
     };
   }
 
-  async generateImage(input: ImageGenerationInput): Promise<GeneratedImage> {
-    const catalog = await this.listModels();
-    if (input.model !== catalog.configuredImageModel) {
-      throw new CommerceProviderError(`Image generation is fixed to ${catalog.configuredImageModel}.`, 400);
-    }
-
-    const response = await this.request(
-      "images/generations",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: input.model,
-          prompt: input.prompt,
-          quality: input.quality ?? "auto",
-          size: input.size ?? "auto",
-          n: input.n ?? 1,
-        }),
-      },
-      120_000,
-    );
-    const payload = (await response.json()) as unknown;
-    if (!isRecord(payload) || !Array.isArray(payload.data) || !isRecord(payload.data[0])) {
-      throw new CommerceProviderError("Image provider returned an invalid response.");
-    }
-    const base64 = payload.data[0].b64_json;
-    if (typeof base64 !== "string" || base64.length === 0) {
-      throw new CommerceProviderError("Image provider returned no image data.");
-    }
-
-    return {
-      responseId: typeof payload.id === "string" ? payload.id : null,
-      model: input.model,
-      mimeType: inferImageMimeType(payload.output_format),
-      base64,
-      quality: typeof payload.quality === "string" ? payload.quality : null,
-      size: typeof payload.size === "string" ? payload.size : null,
-      usage: payload.usage ?? null,
-    };
-  }
-
   async searchWeb(input: WebSearchInput): Promise<WebSearchResult> {
     await this.assertAgentModel(input.model);
     let lastError: unknown = null;
@@ -384,14 +333,6 @@ function isRetryableModelCatalogError(error: unknown): boolean {
   );
 }
 
-export type ImageGenerationInput = {
-  model: string;
-  prompt: string;
-  quality?: "auto" | "low" | "medium" | "high";
-  size?: string;
-  n?: number;
-};
-
 export type WebSearchInput = {
   model: string;
   query: string;
@@ -439,16 +380,6 @@ function isRetryableWebSearchError(error: unknown): boolean {
     error instanceof CommerceProviderError &&
     (error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504)
   );
-}
-
-function inferImageMimeType(outputFormat: unknown): GeneratedImage["mimeType"] {
-  if (outputFormat === "jpeg" || outputFormat === "jpg") {
-    return "image/jpeg";
-  }
-  if (outputFormat === "webp") {
-    return "image/webp";
-  }
-  return "image/png";
 }
 
 function matchesAnySelector(modelId: string, selectors: string[]): boolean {

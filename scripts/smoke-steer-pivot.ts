@@ -45,8 +45,8 @@ const steer = await gatewayJson(
 );
 assert.equal(
   readString(steer, "result", "mode"),
-  "interruptedAndResubmitted",
-  "Pivot input did not interrupt and resubmit through the Harness.",
+  "interruptedAndStarted",
+  "Pivot input did not interrupt and start the queued Harness turn.",
 );
 
 const deadline = Date.now() + 60_000;
@@ -83,7 +83,7 @@ console.log(
     ok: true,
     threadId,
     expectedTurnId,
-    mode: "interruptedAndResubmitted",
+    mode: "interruptedAndStarted",
     pivotMarker,
   }),
 );

@@ -120,8 +120,6 @@ import {
 import { getSkills, sortSkillInventory, type SkillInventoryItem } from "@/lib/agent/skills";
 import { getPluginInventory, type CommercePluginInventoryItem } from "@/lib/plugins/catalog";
 import {
-  buildCopywritingAdjustmentPrompt,
-  buildCopywritingRecipeExecutionPrompt,
   tryParseStructuredCopywritingAnswer,
   tryParseStructuredCopywritingDraft,
   type CopywritingDraft,
@@ -546,7 +544,7 @@ export function CommerceWorkbenchShell({
       } else if (activeView === "copywriting" && agentThread.threadId) {
         const attachmentsForSubmit = takeComposerAttachments();
         setDraft("");
-        const submitted = await agentThread.submit(buildCopywritingAdjustmentPrompt(value || "请结合附件继续处理。"), {
+        const submitted = await agentThread.submit(value || "请结合附件继续处理。", {
           workflow: "commerce-copywriting",
           displaySkillName: "commerce-copywriting",
           attachments: attachmentsForSubmit,
@@ -701,7 +699,7 @@ export function CommerceWorkbenchShell({
     const attachmentsForSubmit = takeComposerAttachments();
     const skillForSubmit = selectedSkill;
     setSelectedSkill(null);
-    const submitted = await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal), {
+    const submitted = await agentThread.submit(goal, {
       workflow: "commerce-copywriting",
       displaySkillName: "commerce-copywriting",
       attachments: attachmentsForSubmit,
@@ -1038,10 +1036,11 @@ export function CommerceWorkbenchShell({
             answeringUserInput={agentThread.answeringUserInput}
             compacting={agentThread.compacting}
             queuedMessages={agentThread.queuedMessages}
-            pendingSteers={agentThread.pendingSteers}
             queueSubmitting={agentThread.queueSubmitting}
             queueOperationId={agentThread.queueOperationId}
             feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
+            hasOlderHistory={agentThread.hasOlderHistory}
+            loadingOlderHistory={agentThread.loadingOlderHistory}
             canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
             interrupting={agentThread.interrupting}
             durationMs={agentThread.durationMs}
@@ -1067,6 +1066,7 @@ export function CommerceWorkbenchShell({
             onInterrupt={agentThread.interrupt}
             onAnswerUserInput={agentThread.respondToUserInput}
             onMessageFeedback={agentThread.setMessageFeedback}
+            onLoadOlderHistory={agentThread.loadOlderHistory}
             onQueueDelete={agentThread.deleteQueuedMessage}
             onQueueSteer={agentThread.steerQueuedMessage}
             onQueueClear={agentThread.clearQueuedMessages}
@@ -1257,10 +1257,11 @@ function ConversationWorkspace({
   answeringUserInput,
   compacting,
   queuedMessages,
-  pendingSteers,
   queueSubmitting,
   queueOperationId,
   feedbackSubmittingIds,
+  hasOlderHistory,
+  loadingOlderHistory,
   canInterrupt,
   interrupting,
   durationMs,
@@ -1286,6 +1287,7 @@ function ConversationWorkspace({
   onInterrupt,
   onAnswerUserInput,
   onMessageFeedback,
+  onLoadOlderHistory,
   onQueueDelete,
   onQueueSteer,
   onQueueClear,
@@ -1308,10 +1310,11 @@ function ConversationWorkspace({
   answeringUserInput: boolean;
   compacting: boolean;
   queuedMessages: QueuedMessage[];
-  pendingSteers: QueuedMessage[];
   queueSubmitting: boolean;
   queueOperationId: string | null;
   feedbackSubmittingIds: ReadonlySet<string>;
+  hasOlderHistory: boolean;
+  loadingOlderHistory: boolean;
   canInterrupt: boolean;
   interrupting: boolean;
   durationMs: number | null;
@@ -1340,6 +1343,7 @@ function ConversationWorkspace({
     messageId: string,
     rating: AgentMessageFeedbackRating | null,
   ) => Promise<boolean>;
+  onLoadOlderHistory: () => Promise<boolean>;
   onQueueDelete: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueSteer: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueClear: () => Promise<void>;
@@ -1529,6 +1533,20 @@ function ConversationWorkspace({
     node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
   }
 
+  async function loadOlderHistory() {
+    const node = scrollRef.current;
+    if (!node || loadingOlderHistory) return;
+    const previousHeight = node.scrollHeight;
+    const loaded = await onLoadOlderHistory();
+    if (!loaded) return;
+    window.requestAnimationFrame(() => {
+      const currentNode = scrollRef.current;
+      if (!currentNode) return;
+      currentNode.scrollTop += currentNode.scrollHeight - previousHeight;
+      scheduleMinimapUpdate(true);
+    });
+  }
+
   return (
     <section data-agent-status={status} className="relative flex min-h-0 flex-1 flex-col">
       <ConversationMinimap
@@ -1546,6 +1564,26 @@ function ConversationWorkspace({
       >
         <div ref={timelineContentRef} className="mx-auto w-full max-w-[820px] pb-12 pt-2 xl:pr-[72px]">
           <h1 className="sr-only">{title}</h1>
+
+          {hasOlderHistory ? (
+            <div className="mb-5 flex justify-center">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs text-[var(--cp-text-faint)]"
+                disabled={loadingOlderHistory}
+                onClick={() => void loadOlderHistory()}
+              >
+                {loadingOlderHistory ? (
+                  <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+                ) : (
+                  <Clock3 className="size-3.5" aria-hidden="true" />
+                )}
+                更早记录
+              </Button>
+            </div>
+          ) : null}
 
           <div className="space-y-6">
             {timelineBeforeStatus.map((entry) =>
@@ -1595,7 +1633,6 @@ function ConversationWorkspace({
                 )}
               </div>
             ) : null}
-            {pendingSteers.length > 0 ? <PendingSteerPreview messages={pendingSteers} /> : null}
           </div>
 
           {error ? (
@@ -2282,30 +2319,6 @@ function ConversationTimelineMessage({
   );
 }
 
-function PendingSteerPreview({ messages }: { messages: QueuedMessage[] }) {
-  return (
-    <div className="space-y-3" aria-live="polite" aria-label="正在提交的调整方向">
-      {messages.map((message) => (
-        <div
-          key={message.clientUserMessageId}
-          data-conversation-minimap-anchor
-          data-minimap-id={`pending-${message.clientUserMessageId}`}
-          data-minimap-kind="user"
-          data-minimap-preview={message.content}
-          className="flex justify-end"
-        >
-          <div className="max-w-[75%] rounded-[18px] bg-[var(--cp-user-message-bg)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-user-message-text)]">
-            {message.content}
-          </div>
-        </div>
-      ))}
-      <div className="flex min-h-7 items-center py-1 text-[13px] text-[var(--cp-text-faint)]">
-        <span className="cp-running-shimmer">正在调整</span>
-      </div>
-    </div>
-  );
-}
-
 function ComposerAttachmentStrip({
   attachments,
   error,
@@ -2730,7 +2743,7 @@ function QueuedSubmissionList({
 
   return (
     <div className="relative z-10 mx-auto -mb-px max-h-[148px] w-[calc(100%-32px)] max-w-[736px] overflow-y-auto rounded-[18px] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-2 py-1">
-      {messages.filter((message) => !message.pendingSteer).map((message) => {
+      {messages.map((message) => {
         const busy = operationId === message.id;
         return (
           <div

@@ -17,6 +17,9 @@ const externalDataClientSource = await readFile(
   "utf8",
 );
 const userInputSource = await readFile(resolve("src/gateway/request-user-input.ts"), "utf8");
+const agentThreadSource = await readFile(resolve("apps/web/lib/agent/use-agent-thread.ts"), "utf8");
+const copywritingBriefSource = await readFile(resolve("apps/web/lib/copywriting/brief.ts"), "utf8");
+const providerClientSource = await readFile(resolve("src/provider/commerce-provider-client.ts"), "utf8");
 const runtimeRelativePath = relative(config.codexHome, config.runtimeRoot);
 
 if (!runtimeRelativePath || runtimeRelativePath.startsWith("..") || isAbsolute(runtimeRelativePath)) {
@@ -61,6 +64,42 @@ if (/broadcastEvent\(\{\s*type:\s*"server_request"/.test(gatewaySource)) {
 }
 if (gatewaySource.includes('"thread/inject_items"')) {
   throw new Error("Harness question answers must not be duplicated into model history.");
+}
+if (gatewaySource.includes('codex.request("turn/steer"')) {
+  throw new Error("Queued direction changes must not steer and then interrupt the same Harness turn.");
+}
+if (gatewaySource.includes("PendingSteerStore") || gatewaySource.includes("PendingSteerRegistry")) {
+  throw new Error("Gateway must not persist a second pending-steer state outside the Harness queue.");
+}
+if (!gatewaySource.includes('codex.request("thread/turns/list"')) {
+  throw new Error("Gateway history reads must use the paginated Harness Turn API.");
+}
+if (gatewaySource.includes("includeTurns: true")) {
+  throw new Error("Gateway must not load complete thread history through thread/read.");
+}
+if (/thread\/resume[\s\S]{0,700}dynamicTools/.test(gatewaySource)) {
+  throw new Error("thread/resume must not pretend to update the fixed dynamic-tool catalog.");
+}
+if (!gatewaySource.includes("externalDataService.configured && externalDataControl.configured")) {
+  throw new Error("Configured commerce-data tools must be registered independently of transient connectivity.");
+}
+if (gatewaySource.includes('name: "commerce_image"')) {
+  throw new Error("Gateway must not register a duplicate application image-generation tool.");
+}
+if (!gatewaySource.includes('item.type !== "imageGeneration"')) {
+  throw new Error("Gateway does not persist native Harness imageGeneration artifacts.");
+}
+if (providerClientSource.includes('"images/generations"')) {
+  throw new Error("Provider client must not duplicate native Harness image generation.");
+}
+if (agentThreadSource.includes("failActiveTurn") || agentThreadSource.includes("shouldExpireActiveTurn")) {
+  throw new Error("Browser code must not fabricate a terminal Harness Turn state.");
+}
+if (!agentThreadSource.includes("/status") || !agentThreadSource.includes("hasOlderHistory")) {
+  throw new Error("Browser must reconcile through lightweight status and paginated history APIs.");
+}
+if (copywritingBriefSource.includes("buildCopywritingRecipeExecutionPrompt")) {
+  throw new Error("Copywriting UI must submit the original user input and rely on the native Skill item.");
 }
 if (
   gatewayConfigSource.includes("mcp.justoneapi.com") ||
@@ -112,6 +151,9 @@ if (!managedHookSource.includes("Commerce Pilot runtime allowlist")) {
 }
 if (!managedHookSource.includes('"web_search"')) {
   throw new Error("Managed Hook runner does not allow the native Codex Web Search tool.");
+}
+if (!managedHookSource.includes('"image_gen"')) {
+  throw new Error("Managed Hook runner does not allow the native Codex image generation tool.");
 }
 if (!managedHookSource.includes('"commerce_skill.publish"')) {
   throw new Error("Managed Hook runner does not allow the approval-gated Commerce Skill publisher.");
@@ -171,6 +213,7 @@ console.log(
       governedExternalData: config.externalDataService.token ? "configured" : "disabled-without-service-token",
       defaultModeRequestUserInput: true,
       nativeProviderWebSearch: true,
+      nativeImageGeneration: true,
       multiAgent: true,
       localPathImageReader: false,
       managedHooks: true,

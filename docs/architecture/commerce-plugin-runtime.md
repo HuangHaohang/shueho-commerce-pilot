@@ -34,10 +34,11 @@ The browser directory is a workbench view, not a separate product shell. It keep
 
 Runtime support is narrower than the manifest vocabulary:
 
-1. **Managed MCP plugin** - application-controlled MCP process or remote service, explicit enabled-tool allowlist, tenant authorization, and App Server thread-level readiness verification.
-2. **Application tool plugin** - a Gateway-registered dynamic tool with a fixed schema and fail-closed dispatcher.
-3. **Skill plugin** - reviewed instructions and resources that reference only already-authorized tools.
-4. **MCP UI plugin** - future structured UI returned by an approved MCP server; the tool must remain useful without the component.
+1. **Native Harness capability** - a product directory entry such as image generation may expose a capability verified by `modelProvider/capabilities/read`; it must use the native Item lifecycle rather than duplicating the tool in Gateway.
+2. **Managed MCP plugin** - application-controlled MCP process or remote service, explicit enabled-tool allowlist, tenant authorization, and App Server thread-level readiness verification.
+3. **Application tool plugin** - a Gateway-registered dynamic tool with a fixed schema and fail-closed dispatcher. Because App Server fixes these tools at `thread/start`, schema changes require a new persisted tool-contract version and a new task.
+4. **Skill plugin** - reviewed instructions and resources that reference only already-authorized tools.
+5. **MCP UI plugin** - future structured UI returned by an approved MCP server; the tool must remain useful without the component.
 
 Plugin-provided Hooks remain disabled for hosted tenants. Production Hooks are application-managed only.
 

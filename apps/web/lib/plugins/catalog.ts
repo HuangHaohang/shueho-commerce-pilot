@@ -51,6 +51,7 @@ export type PluginRuntimeSignals = {
   gatewayReady: boolean;
   providerConfigured: boolean;
   imageModel: string | null;
+  nativeImageGeneration: boolean;
   managedMcp: {
     state: "unknown" | "loading" | "ready" | "failed";
     available: boolean;
@@ -85,7 +86,7 @@ const builtinManifests = [
   commercePluginManifestSchema.parse({
     name: "commerce-image-generation",
     version: "1.0.0",
-    description: "通过应用注册的 commerce_image.generate 工具生成租户归属的图片制品。",
+    description: "通过 Codex Harness 原生 image_gen 工具生成租户归属的图片制品。",
     interface: {
       displayName: "图片生成",
       shortDescription: "生成商品主图、场景图和电商创意素材",
@@ -95,7 +96,7 @@ const builtinManifests = [
       coverImage: "/plugins/image-generation-cover.png",
     },
     components: {
-      tools: ["commerce_image.generate"],
+      tools: ["image_gen"],
     },
     security: {
       network: "provider-only",
@@ -126,7 +127,11 @@ export function buildCommercePluginInventory(
       };
     }
 
-    const enabled = signals.gatewayReady && signals.providerConfigured && Boolean(signals.imageModel);
+    const enabled =
+      signals.gatewayReady &&
+      signals.providerConfigured &&
+      signals.nativeImageGeneration &&
+      Boolean(signals.imageModel);
     return {
       manifest,
       source: "application-managed",
@@ -134,7 +139,7 @@ export function buildCommercePluginInventory(
       enabled,
       health: enabled ? "ready" : "unavailable",
       statusLabel: enabled ? `运行正常 · ${signals.imageModel}` : "图片 Provider 未配置",
-      lockedReason: "由 Commerce Pilot 注册为应用工具，图片制品绑定租户与线程。",
+      lockedReason: "由 Codex Harness 原生执行，Commerce Pilot 仅保存租户与线程归属的图片制品。",
     };
   });
 }

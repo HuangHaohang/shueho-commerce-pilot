@@ -15,7 +15,8 @@ export function mergeAuthoritativeMessages(
       candidate.id === existing.id
         ? candidate.role === "assistant" &&
           message.role === "assistant" &&
-          candidate.status === "streaming"
+          candidate.status === "streaming" &&
+          message.status === "streaming"
           ? {
               ...candidate,
               ...message,
@@ -23,10 +24,7 @@ export function mergeAuthoritativeMessages(
                 candidate.content.length > message.content.length
                   ? candidate.content
                   : message.content,
-              status:
-                candidate.content.length > message.content.length
-                  ? "streaming"
-                  : message.status,
+              status: "streaming",
             }
           : { ...candidate, ...message }
         : candidate,

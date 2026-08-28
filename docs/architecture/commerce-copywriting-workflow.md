@@ -23,7 +23,7 @@ The browser can request only the fixed workflow id `commerce-copywriting`. The B
 
 When the user submits the entry composer, the Gateway calls App Server `turn/start` with:
 
-- a normal text input containing the original user goal and the conversational-intake contract;
+- a normal text input containing the original user text exactly as submitted, without an application-authored prompt wrapper;
 - a `skill` input item for `commerce-copywriting`;
 - a fixed output schema containing `responseType`, `title`, `body`, `callToAction`, `complianceNotes`, and `message`.
 
@@ -31,7 +31,7 @@ The generated runtime enables Codex's `default_mode_request_user_input` feature.
 
 `responseType=answer` requires a complete conversational answer in `message`. `responseType=draft` carries a polished copy delivery for initial output or an explicit rewrite request. Legacy persisted draft objects without `responseType` remain readable as copy deliveries.
 
-This follows App Server's native Skill invocation and structured-output protocol. It also keeps the Skill in the persisted thread history so a later revision remains grounded in the original Brief.
+The conversational-intake contract lives only in the managed Skill. This follows App Server's native Skill invocation and structured-output protocol and prevents UI code from creating a competing prompt chain.
 
 ## Tool Boundary
 
@@ -41,7 +41,7 @@ Future product-context reads should use an application-owned, tenant-authorized 
 
 The Gateway also supports App Server's native `item/tool/requestUserInput` server request for questions that arise dynamically during a running turn. Pending requests are bound to a thread, exposed only through the authenticated BFF, restored after reconnect, validated against the original question ids, and answered with `respondToServerRequest`. Unknown server requests still fail closed.
 
-App Server treats question answers as the canonical tool output and does not return them as ordinary user-message items during `thread/read`. Commerce Pilot therefore formats one server-authoritative, secret-redacted `我的选择` summary and stores it only in the RLS-protected `commerce_agent_user_input_answer` display index. The browser appends it optimistically as a user bubble, and thread reads merge the display index before the final assistant answer so refresh preserves the conversation order. The summary is not injected into Harness model history, because doing so would duplicate the same answer as both tool output and a second user instruction. Raw question payloads and secret answers are not stored in the display index.
+App Server treats question answers as the canonical tool output and does not return them as ordinary user-message items in Turn history. Commerce Pilot therefore formats one server-authoritative, secret-redacted `我的选择` summary and stores it only in the RLS-protected `commerce_agent_user_input_answer` display index. The browser appends it optimistically as a user bubble, and paginated Turn reads merge the display index before the final assistant answer so refresh preserves the conversation order. The summary is not injected into Harness model history.
 
 ## UI State
 

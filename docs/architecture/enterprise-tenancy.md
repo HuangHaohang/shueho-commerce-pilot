@@ -28,7 +28,7 @@ This model is informed by OpenAI's documented Enterprise workspace, roles, group
 
 ## Implemented Data Model
 
-The current Enterprise schema is migrations `001` through `030`. Versioned migrations are applied by `npm run auth:migrate` under a PostgreSQL advisory lock:
+The current Enterprise schema is migrations `001` through `032`. Versioned migrations are applied by `npm run auth:migrate` under a PostgreSQL advisory lock:
 
 - `001` creates the tenant/workspace/RBAC/contract/thread/usage/lease/audit foundation;
 - `002` separates organization from tenant and adds tenant-wide admission scope;
@@ -55,6 +55,8 @@ The current Enterprise schema is migrations `001` through `030`. Versioned migra
 - `028` removes all product read/delete permissions and keeps the raw archive SQL-only.
 - `029` adds SQL-only `/api/search/v1` request indexes and a query view over stable request and response-envelope fields.
 - `030` reads provider `requestId` and `recordTime` from either the direct response envelope or the MCP `raw` envelope and backfills existing archives.
+- `031` stores compact external-data warehouse receipts without copying provider result bodies into the control-plane database.
+- `032` records the dynamic-tool contract installed at `thread/start`; existing rows remain version `0` and are never falsely upgraded by `thread/resume`.
 
 | Area | Primary records | Boundary |
 | --- | --- | --- |
@@ -293,7 +295,7 @@ Usage is also attributed for provider calls made outside the main Harness respon
 | `codex_harness` | Codex `rawResponse/completed` |
 | `commerce_web_mcp` | Managed `commerce_web.search` MCP result metadata |
 | `commerce_web_tool` | Legacy application host Web Search compatibility path |
-| `commerce_image_tool` | Application-owned `commerce_image.generate` host tool |
+| `commerce_image_tool` | Legacy rows created before native Harness image-generation migration |
 
 External tool usage is normalized from provider snake_case or camelCase fields. Cached/cache-write/reasoning subsets are clamped to their parent counts, and `totalTokens` is at least input plus output. Each row stores both `requested_model` and the effective `model`; `model/rerouted` notifications preserve the difference when Codex/provider routing changes the model.
 
@@ -303,7 +305,7 @@ Prompt-cache discounts and billing rules vary by provider and model. A cache hit
 
 The idempotency key for persistence is `(tenant_id, provider_id, response_id)`. Subagent events inherit their root thread's tenant, workspace, and user scope while preserving child `thread_id` and `parent_thread_id`. The internal BFF verifies that the root thread is bound to the same tenant, workspace, and creator before inserting usage. Tenant-scoped `usage.read` returns a tenant aggregate; a workspace-only grant sees only its selected workspace.
 
-No direct browser/BFF or Gateway image-generation route is exposed. Images can be generated only through the application-owned host tool inside an already admitted Agent turn, where runtime authorization and usage attribution apply. The authenticated BFF artifact-read route remains available for immutable generated files and re-checks the artifact's owning thread before proxying bytes.
+No direct browser/BFF or Gateway image-generation route is exposed. Images can be generated only through native Harness `image_gen` inside an already admitted Turn. Gateway persists the completed `imageGeneration` Item, strips raw bytes and host paths before browser delivery, and the authenticated BFF re-checks the artifact's owning thread before proxying bytes. New usage is attributed to `codex_harness`; `commerce_image_tool` remains only as a historical enum value.
 
 `rawResponse/completed` is an internal/experimental App Server event, not a stable public billing API. Any Codex upgrade must regenerate the App Server schema, compare the usage fields and event semantics, run adapter tests, and deploy a compatible migration before changing the pinned version.
 
@@ -360,7 +362,7 @@ The thread policy temporarily permits legacy rows whose `tenant_id` is `NULL` wh
 
 ### Codex Runtime
 
-Production uses one dedicated Gateway, Codex App Server process, `CODEX_HOME`, provider credential set, runtime workspace, generated-artifact volume, Hook audit, pending-steer state, and event outbox per tenant. `COMMERCE_RUNTIME_TENANT_ID` is mandatory in production and prevents a dedicated Gateway from accepting a different tenant id.
+Production uses one dedicated Gateway, Codex App Server process, `CODEX_HOME`, provider credential set, runtime workspace, generated-artifact volume, Hook audit, and event outbox per tenant. Direction-change input remains in App Server's durable queue; no application pending-steer file exists. `COMMERCE_RUNTIME_TENANT_ID` is mandatory in production and prevents a dedicated Gateway from accepting a different tenant id.
 
 App Server runs as a non-root identity in a container or equivalent OS isolation boundary. Mount only the tenant's runtime and artifact volumes. Do not mount the source repository, developer home, Docker socket, SSH agent, cloud metadata socket, or another tenant's volume. Application tool filtering remains mandatory but is not a replacement for OS isolation.
 

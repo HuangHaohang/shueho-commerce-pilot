@@ -75,6 +75,25 @@ describe("conversation message reconciliation", () => {
     expect(mergeAuthoritativeMessages([streamed], [authoritative])).toEqual([authoritative]);
   });
 
+  it("accepts a shorter completed Harness snapshot over a longer local stream", () => {
+    const streamed: ConversationMessage = {
+      id: "item-1",
+      sequence: 1,
+      turnId: "turn-1",
+      role: "assistant",
+      content: "这段本地增量包含了随后被 Harness 修正的尾部",
+      phase: "final_answer",
+      status: "streaming",
+    };
+    const authoritative: ConversationMessage = {
+      ...streamed,
+      content: "这是 Harness 完成后的权威内容。",
+      status: "completed",
+    };
+
+    expect(mergeAuthoritativeMessages([streamed], [authoritative])).toEqual([authoritative]);
+  });
+
   it("keeps distinct commentary messages from the same turn", () => {
     const first: ConversationMessage = {
       id: "item-1",

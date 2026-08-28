@@ -16,7 +16,7 @@ assert.ok(threadId, "Gateway did not return a thread id.");
 const turnPayload = await gatewayJson(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
   method: "POST",
   body: JSON.stringify({
-    message: "请调用 commerce_image.generate 生成一张低质量草稿：白底电商商品占位图，不要文字；生成期间接受我接下来的调整方向。",
+    message: "请写一份至少 30 段的电商渠道分析，生成期间接受我接下来的调整方向。",
     model,
     effort: "medium",
   }),
@@ -61,7 +61,7 @@ const steerResults = await Promise.all(
 );
 assert.ok(
   steerResults.some((result) => result.status === 200),
-  `No queued submission reached turn/steer: ${JSON.stringify(steerResults)}`,
+  `No queued submission completed the native interrupt-and-start transition: ${JSON.stringify(steerResults)}`,
 );
 
 const deadline = Date.now() + 90_000;
@@ -70,8 +70,7 @@ while (Date.now() < deadline) {
   lastSnapshot = await readResolutionSnapshot(threadId, submissions.map((item) => item.clientUserMessageId));
   if (
     lastSnapshot.committedClientIds.length === submissions.length &&
-    lastSnapshot.queuedClientIds.length === 0 &&
-    lastSnapshot.pendingClientIds.length === 0
+    lastSnapshot.queuedClientIds.length === 0
   ) {
     break;
   }
@@ -81,7 +80,6 @@ while (Date.now() < deadline) {
 assert.ok(lastSnapshot, "No reconciliation snapshot was produced.");
 assert.deepEqual(lastSnapshot.unresolvedClientIds, [], "A rapid steer input was lost.");
 assert.deepEqual(lastSnapshot.duplicateClientIds, [], "A rapid steer input was duplicated.");
-assert.deepEqual(lastSnapshot.pendingClientIds, [], "A rapid steer remained pending after the turn settled.");
 assert.deepEqual(
   lastSnapshot.committedClientIds,
   submissions.map((item) => item.clientUserMessageId),
@@ -114,7 +112,7 @@ const lateDeadline = Date.now() + 30_000;
 let lateSnapshot: ResolutionSnapshot | null = null;
 while (Date.now() < lateDeadline) {
   lateSnapshot = await readResolutionSnapshot(threadId, [lateClientId]);
-  if (lateSnapshot.unresolvedClientIds.length === 0 && lateSnapshot.pendingClientIds.length === 0) {
+  if (lateSnapshot.unresolvedClientIds.length === 0) {
     break;
   }
   await delay(250);
@@ -137,7 +135,6 @@ console.log(
 type ResolutionSnapshot = {
   committedClientIds: string[];
   queuedClientIds: string[];
-  pendingClientIds: string[];
   unresolvedClientIds: string[];
   duplicateClientIds: string[];
 };
@@ -170,20 +167,12 @@ async function readResolutionSnapshot(threadId: string, targetClientIds: string[
     .filter(isRecord)
     .map((item) => item.clientUserMessageId)
     .filter((clientId): clientId is string => typeof clientId === "string" && targetSet.has(clientId));
-  const pendingClientIds = readArrayPath(queuePayload, ["pendingSteers"])
-    .filter(isRecord)
-    .map((item) => item.clientUserMessageId)
-    .filter((clientId): clientId is string => typeof clientId === "string" && targetSet.has(clientId));
   for (const clientId of queuedClientIds) {
-    occurrences.set(clientId, (occurrences.get(clientId) ?? 0) + 1);
-  }
-  for (const clientId of pendingClientIds) {
     occurrences.set(clientId, (occurrences.get(clientId) ?? 0) + 1);
   }
   return {
     committedClientIds,
     queuedClientIds,
-    pendingClientIds,
     unresolvedClientIds: targetClientIds.filter((clientId) => !occurrences.has(clientId)),
     duplicateClientIds: targetClientIds.filter((clientId) => (occurrences.get(clientId) ?? 0) > 1),
   };

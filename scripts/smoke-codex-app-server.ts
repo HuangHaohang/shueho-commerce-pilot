@@ -32,7 +32,6 @@ try {
   const providerCapabilities = await client.request("modelProvider/capabilities/read", {});
   const hooks = await client.request("hooks/list", {
     cwds: [gatewayConfig.runtimeRoot],
-    forceReload: true,
   });
 
   console.log(

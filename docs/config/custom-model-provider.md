@@ -104,17 +104,17 @@ The model id is not added to the end-user model selector. Gateway verifies the e
 
 ## Image Generation
 
-The app-owned Codex runtime synchronizes the built-in `imagegen` system skill and enables `features.image_generation`. Third-party App Server clients do not automatically receive the first-party image executor, so Commerce Pilot supplies a host dynamic tool through the harness `dynamicTools` and `item/tool/call` protocol:
+The app-owned Codex runtime synchronizes the built-in `imagegen` system Skill and enables `features.image_generation`. Gateway verifies `modelProvider/capabilities/read.imageGeneration` before reporting the runtime ready. Image requests use the native Harness tool and Item lifecycle:
 
 ```text
-commerce_image.generate -> POST /v1/images/generations -> gpt-image-2
+image_gen -> native imageGeneration Item -> tenant artifact storage
 ```
 
-Codex still owns image intent detection, skill instructions, prompt augmentation, tool selection, item lifecycle, and turn continuation. The gateway performs only the provider call, saves the result under `$CODEX_HOME/generated_images`, and stores non-PII artifact metadata under `$CODEX_HOME/generated_image_metadata` so `thread/read` can restore images after restart. BFF image delivery requires ownership of the artifact's thread.
+Codex owns image intent detection, Skill instructions, provider execution, item lifecycle, usage and Turn continuation. Gateway consumes the completed native Item, saves the base64 result under `$CODEX_HOME/generated_images`, and stores non-PII metadata under `$CODEX_HOME/generated_image_metadata`. Before SSE or history reaches the BFF, Gateway removes image bytes and `savedPath`; the browser receives only an ownership-checked artifact URL.
 
 The image model is fixed by `COMMERCE_IMAGE_MODEL=gpt-image-2`. Other image models returned from `/models` are not silently selected.
 
-The browser cannot bypass the Agent boundary because no direct BFF or Gateway image-generation route is exposed. Only `commerce_image.generate` inside an admitted Agent turn can call the provider, after Gateway reauthorizes the root scope. The provider response creates a `commerce_image_tool` usage row; absent usage is recorded as `missing`, not treated as free. Authenticated artifact reads remain available through the filename-constrained BFF route after thread ownership verification.
+The browser cannot bypass the Agent boundary because no direct BFF or Gateway image-generation route exists and browser input cannot inject tools. Native image generation runs only inside an admitted Harness Turn. Its usage is captured by the normal `codex_harness` response event rather than a second `commerce_image_tool` request.
 
 ## Web Search
 
@@ -128,7 +128,7 @@ commerce_web.search MCP -> POST /v1/responses
 
 The Gateway does not scrape arbitrary pages with deployment-host shell commands. It asks the configured provider to execute its OpenAI-compatible Web Search tool, returns the grounded answer and sanitized source URLs to Codex, and lets Codex continue the turn. The browser receives the App Server `mcpToolCall` lifecycle and renders `正在搜索网页` followed by a collapsible completed search activity.
 
-The MCP capability comes from app-owned config rather than `dynamicTools`, because current App Server versions only accept dynamic tools at `thread/start`. Persisted-thread reads execute managed resume before `thread/read`, so the current MCP catalog is loaded for old conversations without rewriting history. `PreToolUse` and `PostToolUse` Hooks allow and audit the MCP tool name while recording only lifecycle metadata; queries and results are not written to the Hook audit log. Native `web_search = "live"` remains enabled as a provider-supported capability, and the old dynamic handler remains only for already-persisted threads that contain it.
+The MCP capability comes from app-owned config rather than `dynamicTools`, because current App Server versions only accept dynamic tools at `thread/start`. Persisted-thread reads execute managed resume before paginated `thread/turns/list`, so the current MCP catalog is loaded for old conversations without rewriting history. `PreToolUse` and `PostToolUse` Hooks allow and audit the MCP tool name while recording only lifecycle metadata; queries and results are not written to the Hook audit log. Native `web_search = "live"` remains enabled as a provider-supported capability, and the old dynamic handler remains only for already-persisted threads that contain it.
 
 Gateway calls `config/mcpServer/reload` and validates `mcpServerStatus/list` before accepting turns. The default Web Search model is `gpt-5.6-luna`, with a 30-second timeout and one attempt. `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS` still accepts 1 to 3 for controlled deployments, but hidden retries are discouraged: a failed MCP result carries a stable reason so the Harness can issue at most one shorter query. Generated `tool_timeout_sec` is derived from the configured provider attempt budget plus a 15-second protocol margin.
 
@@ -168,6 +168,6 @@ Use a project-specific provider id such as `commerce_proxy`, `azure_commerce`, o
 - Keep write-capable commerce tools behind explicit approval and readback.
 - Provider identity, `cwd`, sandbox, permissions, instructions, raw input items, and tool definitions are server-owned and cannot be overridden by browser requests.
 - The model can call only tools in the Commerce Pilot registry; it cannot use shell or deployment-host files as a fallback.
-- Harness usage is recorded from Codex 0.149 `rawResponse/completed`; managed MCP, legacy host Web Search, and host image calls have separate source-attributed rows. Cached input and cache-write input remain subsets of input, and reasoning output remains a subset of output; do not add those classifications twice or infer currency cost without an effective provider/contract rate card and provider reconciliation.
+- Harness usage, including native image generation, is recorded from Codex 0.149 `rawResponse/completed`; managed MCP and legacy host Web Search have separate source-attributed rows. Cached input and cache-write input remain subsets of input, and reasoning output remains a subset of output; do not add those classifications twice or infer currency cost without an effective provider/contract rate card and provider reconciliation.
 
 See [Enterprise Tenancy Foundation](../architecture/enterprise-tenancy.md) for the exact usage fields, idempotency rule, contract quotas, and tenant-dedicated runtime boundary.

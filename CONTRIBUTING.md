@@ -50,6 +50,12 @@ npm run jobs:thread-deletion
 ## Architecture Rules
 
 - Codex App Server is the Agent runtime. Do not build a custom Agent loop.
+- Generate protocol bindings from the pinned runtime with `npm run codex:protocol:generate`; do not add unsupported App Server fields to handwritten request objects.
+- `turn/completed` is authoritative for an accepted Turn's terminal state. Browser timeouts, health changes, stale approval responses and generic `error` notifications may trigger reconciliation but may not fabricate completion or failure.
+- Running-task direction changes keep input in `thread/queue/*`, interrupt the old Turn and start that same queue id after `turn/completed`; do not persist a second pending-steer registry or combine `turn/steer` with immediate interruption.
+- App Server fixes dynamic tools at `thread/start`. Register configured business tools deterministically, validate connectivity at call time, and increment the persisted task tool-contract version when the schema changes; never pretend `thread/resume` updated tools.
+- Image generation uses native `image_gen` and `imageGeneration` Items. Gateway may persist and project an ownership-checked artifact, but may not make a duplicate provider image call or expose native base64/host paths to the browser.
+- Conversation history uses `thread/turns/list` and `thread/items/list` pagination. Poll metadata/latest status for running tasks rather than re-reading all Turns.
 - Browser -> Next.js BFF -> private Gateway -> App Server is mandatory.
 - Browser input cannot control runtime policy, paths, provider identity, Tools, Hooks, Skills, or tenant scope.
 - Commerce writes require authorization, approval, idempotency, audit, and downstream readback.
@@ -94,7 +100,7 @@ npm run external-data:verify:catalog
 npm run external-data:verify
 ```
 
-Web Search changes require `npm run smoke:web-search`. Provider changes require `npm run smoke:provider`. App Server lifecycle changes require `npm run smoke:codex` and focused restart/resume verification.
+Web Search changes require `npm run smoke:web-search`. Provider changes require `npm run smoke:provider`. App Server lifecycle changes require `npm run smoke:codex`, `npm run smoke:steer-pivot`, and focused restart/resume verification.
 
 For frontend changes, inspect the running UI with browser automation or Playwright at desktop and mobile widths. Verify no overlap, clipping, blank canvas, horizontal overflow, unexpected native scrollbar, or inaccessible control.
 

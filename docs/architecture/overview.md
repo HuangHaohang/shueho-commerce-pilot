@@ -29,13 +29,13 @@ Commerce Pilot must not replace these concerns with a custom agent loop, prompt 
 | Client server-state | TanStack Query | Models, threads, plugins, Skills, Enterprise state, cache invalidation |
 | Agent gateway | Node.js 20.16+, TypeScript, native HTTP/SSE | App Server ownership, policy, scope binding, event sanitization, host tools |
 | Agent runtime | `@openai/codex` App Server | Threads, Turns, streaming, tools, Skills, approvals, queue, compaction, multi-agent |
-| Agent protocol | JSON-RPC over application-owned stdio | Gateway-to-App Server communication only |
+| Agent protocol | Generated Codex 0.149 TypeScript schema + JSON-RPC over application-owned stdio | Typed Gateway-to-App Server communication only |
 | Authentication | Better Auth | Browser sessions and invitation-only identity |
 | Business database | PostgreSQL 16 | Enterprise identity, RBAC, RLS, thread index, quotas, usage, deletion jobs |
 | External data warehouse | PostgreSQL 16 + pgvector 0.8.6 | Independent request lineage, complete raw responses, normalized source data, vectors and curated business evidence |
 | External search index | Elasticsearch 9.5.2 | Rebuildable BM25 search and aggregations populated through a PostgreSQL Outbox |
 | Local retrieval models | Qwen3 Embedding 4B + Qwen3 Reranker 4B | Local 1024-dimensional semantic retrieval and cross-encoder relevance judgment |
-| External tools | Application-managed MCP and host tools | Web Search, image generation, governed JustOneAPI market data, future commerce systems |
+| External tools | Native Harness tools, application-managed MCP and governed host tools | Native image generation, Web Search, governed JustOneAPI market data, future commerce systems |
 | Artifact storage | Tenant-dedicated `CODEX_HOME` volumes | Codex state, generated images, uploads, extracted documents, outbox |
 | Document parsing | PDF.js, Mammoth, ExcelJS, file-type | Bounded tenant attachment extraction; never arbitrary host-file access |
 | Tests | Node test runner, Vitest, Testing Library, Playwright/browser QA | Gateway contracts, web logic, UI and runtime verification |
@@ -73,10 +73,10 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 
 | Concern | Authoritative source |
 |---|---|
-| Conversation messages and Turn state | Codex App Server thread history |
+| Conversation messages and Turn state | Codex App Server paginated Turn/Item history; `turn/completed` is terminal authority |
 | Active Turn and queue | App Server read/queue APIs |
 | Browser identity and Enterprise access | Better Auth + PostgreSQL RLS context |
-| Thread ownership index | PostgreSQL `commerce_agent_thread` |
+| Thread ownership index | PostgreSQL `commerce_agent_thread`, including the immutable-at-start dynamic-tool contract version |
 | Skill catalog | App Server `skills/list` for the application runtime root |
 | Plugin availability | Application manifests + live Gateway/MCP/provider evidence |
 | Tool permissions | Application runtime registry and server-owned policy |
@@ -98,6 +98,8 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 5. Gateway calls native `turn/start` with text, Skill, `localImage`, and bounded document-context inputs.
 6. App Server streams item lifecycle events; Gateway sanitizes and fans out allowlisted events through SSE.
 7. BFF records completion/usage and the browser reconciles optimistic messages with authoritative item ids.
+
+History selection loads the most recent 30 Turns through `thread/turns/list` and uses an opaque cursor for earlier pages. While work is active, the browser polls only thread metadata and one summary Turn; it never converts a local timeout or transport error into a Harness terminal state.
 
 ### Side-Effecting Commerce Tool
 

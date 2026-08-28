@@ -8,6 +8,7 @@ import mammoth from "mammoth";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import type { RuntimeScope } from "./agent-event-outbox.js";
+import type { UserInput } from "../codex/generated/v2/UserInput.js";
 
 export const MAX_THREAD_ATTACHMENT_BYTES = 5 * 1024 * 1024;
 export const MAX_THREAD_ATTACHMENTS_PER_TURN = 8;
@@ -141,14 +142,14 @@ export class ThreadArtifactStore {
     artifactIds: string[],
     scope: RuntimeScope,
     clientRequestId: string,
-  ): Promise<Array<Record<string, unknown>>> {
+  ): Promise<UserInput[]> {
     assertScopeOwnsThread(scope, threadId);
     if (artifactIds.length > MAX_THREAD_ATTACHMENTS_PER_TURN) {
       throw new Error("Too many attachments for one turn.");
     }
     const uniqueIds = [...new Set(artifactIds)];
     if (uniqueIds.length !== artifactIds.length) throw new Error("Duplicate attachment ids are not allowed.");
-    const inputs: Array<Record<string, unknown>> = [];
+    const inputs: UserInput[] = [];
     for (const artifactId of uniqueIds) {
       const artifact = await this.get(threadId, artifactId);
       if (!artifact || !artifactBelongsToScope(artifact, scope) || artifact.clientRequestId !== clientRequestId) {

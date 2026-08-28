@@ -19,8 +19,11 @@ test("maps the copywriting workflow to an application-owned skill and fixed sche
     path: managedWorkflowSkillPath(runtimeRoot, "commerce-copywriting"),
   });
   assert.ok(turn.outputSchema);
-  assert.equal(turn.outputSchema.additionalProperties, false);
-  assert.deepEqual(turn.outputSchema.required, [
+  assert.equal(typeof turn.outputSchema, "object");
+  assert.equal(Array.isArray(turn.outputSchema), false);
+  const outputSchema = turn.outputSchema as Record<string, unknown>;
+  assert.equal(outputSchema.additionalProperties, false);
+  assert.deepEqual(outputSchema.required, [
     "responseType",
     "title",
     "body",
@@ -28,7 +31,8 @@ test("maps the copywriting workflow to an application-owned skill and fixed sche
     "complianceNotes",
     "message",
   ]);
-  assert.match(String(turn.input[0]?.text), /^\$commerce-copywriting\n/);
+  assert.equal(turn.input[0]?.type, "text");
+  assert.equal(turn.input[0]?.type === "text" ? turn.input[0].text : "", "商品：测试商品");
 });
 
 test("rejects browser-selected workflow names and keeps the skill instruction-only", () => {

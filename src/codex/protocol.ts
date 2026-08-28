@@ -1,7 +1,7 @@
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+import type { RequestId } from "./generated/RequestId.js";
+import type { ServerRequest } from "./generated/ServerRequest.js";
 
-export type JsonRpcId = string | number;
+export type JsonRpcId = RequestId;
 
 export type JsonRpcError = {
   code: number;
@@ -15,14 +15,7 @@ export type JsonRpcResponse = {
   error?: JsonRpcError;
 };
 
-export type JsonRpcNotification = {
-  method: string;
-  params?: unknown;
-};
-
-export type JsonRpcRequest = JsonRpcNotification & {
-  id: JsonRpcId;
-};
+export type JsonRpcRequest = ServerRequest;
 
 export type AppServerEvent =
   | {

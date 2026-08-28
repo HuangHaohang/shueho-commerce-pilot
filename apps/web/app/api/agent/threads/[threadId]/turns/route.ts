@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
-import { markAgentThreadRunning } from "@/lib/agent/thread-ownership";
+import {
+  CURRENT_AGENT_TOOL_CONTRACT_VERSION,
+  getAgentThreadForUser,
+  markAgentThreadRunning,
+} from "@/lib/agent/thread-ownership";
 import {
   activateAgentTurnLease,
   releaseAgentTurnLease,
@@ -23,6 +27,19 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   const access = await requireAgentThreadContext(request, threadId, "agent.run");
   if (!access.ok) return access.response;
   const enterpriseContext = access.context;
+  const thread = await getAgentThreadForUser(threadId, enterpriseContext);
+  if (!thread) {
+    return NextResponse.json({ error: "会话不存在。" }, { status: 404 });
+  }
+  if (thread.toolContractVersion !== CURRENT_AGENT_TOOL_CONTRACT_VERSION) {
+    return NextResponse.json(
+      {
+        error: "该任务的工具契约已更新，将自动创建新任务后继续。",
+        code: "THREAD_TOOL_CONTRACT_STALE",
+      },
+      { status: 409, headers: { "Cache-Control": "no-store" } },
+    );
+  }
 
   const body = (await request.json().catch(() => null)) as {
     message?: unknown;

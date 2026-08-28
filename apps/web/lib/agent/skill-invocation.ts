@@ -14,6 +14,17 @@ export function readExplicitSkillMessage(value: string): ExplicitSkillMessage {
   };
 }
 
+export function readNativeSkillMessage(
+  value: string,
+  nativeSkillName: string | null,
+): ExplicitSkillMessage {
+  if (!nativeSkillName) return { content: value.trim(), skillName: null };
+  const legacy = readExplicitSkillMessage(value);
+  return legacy.skillName === nativeSkillName
+    ? legacy
+    : { content: value.trim(), skillName: nativeSkillName };
+}
+
 export function readVisibleAttachmentMessage(value: string): string {
   return value
     .replace(/\n?<commerce_attachment_context\b[\s\S]*$/i, "")

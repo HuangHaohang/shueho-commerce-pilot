@@ -1,5 +1,8 @@
 import { join } from "node:path";
 
+import type { JsonValue } from "./generated/serde_json/JsonValue.js";
+import type { UserInput } from "./generated/v2/UserInput.js";
+
 export const MANAGED_WORKFLOW_IDS = ["commerce-copywriting", "commerce-market-research"] as const;
 
 export type ManagedWorkflowId = (typeof MANAGED_WORKFLOW_IDS)[number];
@@ -129,15 +132,15 @@ export function buildManagedWorkflowTurn(
   workflow: ManagedWorkflowId,
   message: string,
 ): {
-  input: Array<Record<string, unknown>>;
-  outputSchema?: Record<string, unknown>;
+  input: UserInput[];
+  outputSchema?: JsonValue;
 } {
   if (workflow === "commerce-copywriting") {
     return {
       input: [
         {
           type: "text",
-          text: `$commerce-copywriting\n${message}`,
+          text: message,
           text_elements: [],
         },
         {
@@ -170,7 +173,7 @@ export function buildManagedWorkflowTurn(
       input: [
         {
           type: "text",
-          text: `$commerce-market-research\n${message}`,
+          text: message,
           text_elements: [],
         },
         {

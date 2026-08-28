@@ -1,26 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildCopywritingAdjustmentPrompt,
-  buildCopywritingRecipeExecutionPrompt,
   tryParseStructuredCopywritingAnswer,
   tryParseStructuredCopywritingDraft,
 } from "./brief";
 
 describe("conversational copywriting Recipe", () => {
-  it("starts one Harness turn that dynamically requests only missing decisions", () => {
-    const prompt = buildCopywritingRecipeExecutionPrompt("帮我写一份上新文案");
-    expect(prompt).toContain("调用 request_user_input 动态询问");
-    expect(prompt).toContain("不要输出计划");
-    expect(prompt).toContain("回答完成后继续同一个 Turn");
-    expect(prompt).not.toContain("已确认信息：");
-  });
-
   it("routes follow-up questions to conversation answers instead of draft deliveries", () => {
-    const prompt = buildCopywritingAdjustmentPrompt("我还需要补充什么信息？");
-    expect(prompt).toContain("responseType 使用 answer");
-    expect(prompt).toContain("用户后续消息：我还需要补充什么信息？");
-
     const answer = JSON.stringify({
       responseType: "answer",
       title: "",

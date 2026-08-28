@@ -14,6 +14,8 @@ import {
 } from "../codex/explicit-skill.js";
 import { buildManagedWorkflowTurn, isManagedWorkflowId } from "../codex/managed-workflows.js";
 import type { AppServerEvent, JsonRpcId, ThreadStartInput, TurnStartInput } from "../codex/protocol.js";
+import type { JsonValue as CodexJsonValue } from "../codex/generated/serde_json/JsonValue.js";
+import type { DynamicToolSpec } from "../codex/generated/v2/DynamicToolSpec.js";
 import { ensureAppOwnedCodexConfig } from "../codex/runtime-config.js";
 import {
   ExternalDataControlClient,
@@ -41,7 +43,7 @@ import {
   preflightSocialContentResearch,
   type SocialContentResearchInput,
 } from "../integrations/social-content-research-preflight.js";
-import { CommerceProviderClient, CommerceProviderError, type ImageGenerationInput } from "../provider/commerce-provider-client.js";
+import { CommerceProviderClient, CommerceProviderError } from "../provider/commerce-provider-client.js";
 import { normalizeProviderUsage } from "../provider/provider-usage.js";
 import { readGatewayConfig } from "./config.js";
 import {
@@ -61,12 +63,7 @@ import {
   parseMarketplacePlatformCatalog,
   type MarketplacePlatformCatalog,
 } from "./marketplace-platform-catalog.js";
-import {
-  PendingSteerRegistry,
-  ThreadOperationQueue,
-  type PendingSteerState,
-} from "./pending-steer-state.js";
-import { PendingSteerStore } from "./pending-steer-store.js";
+import { ThreadOperationQueue } from "./thread-operation-queue.js";
 import {
   CODEX_REQUEST_USER_INPUT_METHOD,
   COMMERCE_APPROVAL_REQUESTED_METHOD,
@@ -121,7 +118,6 @@ type QueuedSubmissionView = {
   id: string;
   clientUserMessageId: string;
   content: string;
-  pendingSteer: boolean;
 };
 
 type TurnModelState = {
@@ -197,6 +193,7 @@ const turnExternalDataApprovalModes = new Map<string, ExternalDataApprovalMode>(
 const turnResearchRequestTexts = new Map<string, string>();
 const turnMarketplacePlatformCatalogs = new Map<string, MarketplacePlatformCatalog>();
 const pendingExternalDataExecutions = new Set<Promise<void>>();
+const pendingNativeImageArtifacts = new Map<string, Promise<void>>();
 const codexEnvironment: NodeJS.ProcessEnv = {
   ...process.env,
   CODEX_HOME: config.codexHome,
@@ -216,8 +213,6 @@ const activeTurnsByThread = new Map<string, string>();
 const turnStartReservations = new Set<string>();
 const latestContextUsage = new Map<string, ThreadContextUsage>();
 const compactionStates = new Map<string, CompactionState>();
-const pendingSteers = new PendingSteerRegistry();
-const pendingSteerStore = new PendingSteerStore(config.codexHome);
 const threadOperations = new ThreadOperationQueue();
 const threadScopes = new Map<string, RuntimeScope>();
 const pendingTurnModels = new Map<string, string | null>();
@@ -226,7 +221,6 @@ const agentEventOutbox = new AgentEventOutbox(config.codexHome);
 const agentOutboxProcessLock = new AgentOutboxProcessLock(config.codexHome);
 const pendingAgentEventWrites = new Set<Promise<void>>();
 await agentOutboxProcessLock.acquire("gateway");
-pendingSteers.hydrate(await pendingSteerStore.load());
 await agentEventOutbox.load();
 let managedMcpState: ManagedMcpRuntimeState = {
   state: "unknown",
@@ -236,6 +230,11 @@ let managedMcpState: ManagedMcpRuntimeState = {
   authStatus: null,
   checkedAt: null,
   error: null,
+};
+let modelProviderCapabilities = {
+  namespaceTools: false,
+  imageGeneration: false,
+  webSearch: false,
 };
 let managedMcpReadyPromise: Promise<void> | null = null;
 const managedMcpReadyThreadIds = new Set<string>();
@@ -258,7 +257,6 @@ const browserEventMethods = new Set([
   "item/started",
   "item/completed",
   "item/agentMessage/delta",
-  "commerce/imageGeneration/started",
   "commerce/imageGeneration/completed",
   "commerce/skillPublish/completed",
   COMMERCE_APPROVAL_REQUESTED_METHOD,
@@ -301,6 +299,11 @@ codex.on("event", (event: AppServerEvent) => {
       authStatus: null,
       checkedAt: null,
       error: "Codex App Server exited; managed MCP readiness must be revalidated.",
+    };
+    modelProviderCapabilities = {
+      namespaceTools: false,
+      imageGeneration: false,
+      webSearch: false,
     };
     for (const state of compactionStates.values()) {
       if (state.timeout) {
@@ -379,6 +382,7 @@ const server = createServer(async (req, res) => {
           running: codex.isRunning,
           initialized: codex.isInitialized,
           pendingServerRequests: codex.listPendingServerRequests().length,
+          capabilities: modelProviderCapabilities,
         },
         provider: {
           id: config.provider.id,
@@ -407,6 +411,7 @@ const server = createServer(async (req, res) => {
           legacyDynamicWebSearchHandler: true,
           multiAgent: true,
           localPathImageReader: false,
+          nativeImageGeneration: modelProviderCapabilities.imageGeneration,
           hooks: process.env.NODE_ENV === "production" ? "managed-only" : "app-owned-development",
           maxTurnDurationMs: config.maxTurnDurationMs,
           maxAgentThreadsPerSession: config.maxAgentThreadsPerSession,
@@ -553,10 +558,39 @@ const server = createServer(async (req, res) => {
       // Resume first so persisted threads receive the current managed MCP catalog
       // and runtime overrides before any read can load them with stale capabilities.
       await ensureThreadLoaded(threadId);
-      const result = await readThreadWithStartupRetry(threadId, true);
+      const cursor = url.searchParams.get("cursor");
+      const requestedLimit = Number(url.searchParams.get("limit") ?? "30");
+      const limit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 100
+        ? requestedLimit
+        : 30;
+      const page = await readThreadPageWithStartupRetry(threadId, cursor, limit);
+      const browserResult = await prepareThreadPageForBrowser(page.result);
       const generatedImageArtifacts = await generatedImages.listForThread(threadId);
       const attachments = await threadArtifacts.listForThread(threadId);
-      sendJson(res, 200, { result, generatedImages: generatedImageArtifacts, attachments });
+      sendJson(res, 200, {
+        result: browserResult,
+        nextCursor: page.nextCursor,
+        generatedImages: generatedImageArtifacts,
+        attachments,
+      });
+      return;
+    }
+
+    const threadStatusMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/status$/);
+    if (req.method === "GET" && threadStatusMatch) {
+      const threadId = decodeURIComponent(threadStatusMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      await ensureThreadLoaded(threadId);
+      const metadata = await readThreadWithStartupRetry(threadId, false);
+      const latest = await readTurnsPageWithStartupRetry(threadId, null, 1, "summary");
+      sendJson(res, 200, {
+        result: metadata,
+        lastTurn: latest.data[0] ?? null,
+      });
       return;
     }
 
@@ -656,7 +690,7 @@ const server = createServer(async (req, res) => {
       }
       bindRequestRuntimeScope(req, threadId, config.titleModel);
       await ensureThreadLoaded(threadId);
-      const result = await readThreadWithStartupRetry(threadId, true);
+      const result = (await readThreadPageWithStartupRetry(threadId, null, 20)).result;
       const titleContext = readThreadTitleContext(result);
       if (!titleContext) {
         sendJson(res, 409, { error: "Thread has no completed result for title generation." });
@@ -996,15 +1030,8 @@ const server = createServer(async (req, res) => {
         limit: 100,
       });
       const submissions = readQueuedSubmissions(result);
-      const pendingSteers = readPendingSteers(threadId);
       sendJson(res, 200, {
         queue: submissions,
-        pendingSteers: pendingSteers.map((item) => ({
-          id: item.queuedSubmissionId,
-          clientUserMessageId: item.clientUserMessageId,
-          content: item.content,
-          pendingSteer: true,
-        })),
       });
       return;
     }
@@ -1047,10 +1074,6 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId);
-      if (hasPendingSteer(threadId, queuedSubmissionId)) {
-        sendJson(res, 409, { error: "Queued submission is waiting to be committed to the active turn." });
-        return;
-      }
       await ensureThreadLoaded(threadId);
       if (req.method === "DELETE") {
         const result = await serializeSteerTransition(threadId, () =>
@@ -1138,6 +1161,7 @@ const server = createServer(async (req, res) => {
         "GET /api/codex/events",
         "POST /api/threads",
         "GET /api/threads/:threadId",
+        "GET /api/threads/:threadId/status",
         "DELETE /api/threads/:threadId",
         "POST /api/threads/:threadId/compact",
         "POST /api/threads/:threadId/turns",
@@ -1261,17 +1285,10 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
     return;
   }
 
-  if (event.method === "item/started" || event.method === "item/completed") {
-    if (event.method === "item/completed") {
-      const providerUsageEvent = readManagedMcpProviderUsageEvent(event);
-      if (providerUsageEvent) scheduleAgentEvent(providerUsageEvent);
-    }
-    const clientId = readUserMessageClientId(event.params);
-    const pendingSteer = readPendingSteers(threadId)[0] ?? null;
-    if (clientId && pendingSteer?.clientUserMessageId === clientId) {
-      pendingSteers.acknowledgeFront(threadId, clientId);
-      void persistPendingSteers().catch(() => undefined);
-    }
+  if (event.method === "item/completed") {
+    const providerUsageEvent = readManagedMcpProviderUsageEvent(event);
+    if (providerUsageEvent) scheduleAgentEvent(providerUsageEvent);
+    scheduleNativeImageArtifact(event);
   }
 
   if (event.method === "turn/started") {
@@ -1332,12 +1349,6 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
     activeTurnsByThread.delete(threadId);
   }
 
-  if (readPendingSteers(threadId).some((pending) => pending.turnId === turnId)) {
-    queueMicrotask(() => {
-      void serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, turnId, true));
-    });
-  }
-
   const state = compactionStates.get(threadId);
   if (state && state.turnId === turnId) {
     finishCompaction(state);
@@ -1355,6 +1366,126 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
       void startAutomaticCompaction(threadId, usage);
     });
   }
+}
+
+function scheduleNativeImageArtifact(
+  event: Extract<AppServerEvent, { type: "notification" }>,
+): void {
+  if (!isRecord(event.params) || !isRecord(event.params.item)) return;
+  const item = event.params.item;
+  if (
+    item.type !== "imageGeneration" ||
+    typeof item.id !== "string" ||
+    typeof item.result !== "string" ||
+    !item.result
+  ) {
+    return;
+  }
+  const threadId = typeof event.params.threadId === "string" ? event.params.threadId : "";
+  const turnId = typeof event.params.turnId === "string" ? event.params.turnId : "";
+  if (!isSafeAgentId(threadId) || !isSafeAgentId(turnId)) return;
+  const key = `${threadId}:${turnId}:${item.id}`;
+  if (pendingNativeImageArtifacts.has(key)) return;
+  const operation = persistNativeImageArtifact(threadId, turnId, item)
+    .catch((error) => {
+      console.error(
+        `Unable to persist native image artifact ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    })
+    .finally(() => pendingNativeImageArtifacts.delete(key));
+  pendingNativeImageArtifacts.set(key, operation);
+}
+
+async function persistNativeImageArtifact(
+  threadId: string,
+  turnId: string,
+  item: Record<string, unknown>,
+  notifyBrowser = true,
+): Promise<void> {
+  const itemId = typeof item.id === "string" ? item.id : "";
+  if (!itemId) return;
+  const artifact = await generatedImages.saveOnceForCall({
+    base64: readNativeImagePayload(item.result),
+    threadId,
+    turnId,
+    callId: itemId,
+    model: config.provider.imageModel,
+    mimeType: readNativeImageMimeType(item.result),
+    quality: null,
+    size: null,
+  });
+  if (!notifyBrowser) return;
+  broadcastEvent({
+    type: "notification",
+    method: "commerce/imageGeneration/completed",
+    params: {
+      callId: itemId,
+      threadId,
+      turnId,
+      model: artifact.model,
+      filename: artifact.filename,
+      publicUrl: `/api/provider/generated-images/${encodeURIComponent(artifact.filename)}`,
+      mimeType: artifact.mimeType,
+      revisedPrompt: typeof item.revisedPrompt === "string" ? item.revisedPrompt : null,
+    },
+    at: new Date().toISOString(),
+  });
+}
+
+async function prepareThreadPageForBrowser(
+  result: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  if (!isRecord(result.thread) || !Array.isArray(result.thread.turns)) return result;
+  const threadId = typeof result.thread.id === "string" ? result.thread.id : "";
+  if (!isSafeAgentId(threadId)) throw new Error("App Server returned an invalid thread id.");
+  const turns = await Promise.all(result.thread.turns.map(async (turnValue) => {
+    if (!isRecord(turnValue) || typeof turnValue.id !== "string" || !Array.isArray(turnValue.items)) {
+      return turnValue;
+    }
+    const turnId = turnValue.id;
+    const items = await Promise.all(turnValue.items.map(async (itemValue) => {
+      if (!isRecord(itemValue) || itemValue.type !== "imageGeneration") return itemValue;
+      if (typeof itemValue.result === "string" && itemValue.result) {
+        await persistNativeImageArtifact(
+          threadId,
+          turnId,
+          itemValue,
+          false,
+        );
+      }
+      const { result: _result, savedPath: _savedPath, ...browserItem } = itemValue;
+      return browserItem;
+    }));
+    return { ...turnValue, items };
+  }));
+  return {
+    ...result,
+    thread: {
+      ...result.thread,
+      turns,
+    },
+  };
+}
+
+function readNativeImagePayload(value: unknown): string {
+  if (typeof value !== "string") throw new Error("Native image result was not a string.");
+  const match = value.match(/^data:image\/(?:png|jpeg|webp);base64,([A-Za-z0-9+/=\s]+)$/i);
+  const base64 = (match?.[1] ?? value).replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    throw new Error("Native image result was not valid base64.");
+  }
+  const bytes = Buffer.byteLength(base64, "base64");
+  if (bytes < 1 || bytes > 50 * 1024 * 1024) {
+    throw new Error("Native image result exceeded the artifact size limit.");
+  }
+  return base64;
+}
+
+function readNativeImageMimeType(value: unknown): "image/png" | "image/jpeg" | "image/webp" {
+  if (typeof value !== "string") return "image/png";
+  const match = value.match(/^data:(image\/(?:png|jpeg|webp));base64,/i);
+  const mimeType = match?.[1]?.toLowerCase();
+  return mimeType === "image/jpeg" || mimeType === "image/webp" ? mimeType : "image/png";
 }
 
 function reserveCompaction(
@@ -1528,14 +1659,7 @@ function readThreadTitleContext(result: unknown): {
     const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
     for (const item of items) {
       if (item.type === "userMessage" && !userText && Array.isArray(item.content)) {
-        userText = stripAttachmentContextBlocks(readVisibleExplicitSkillMessage(
-          item.content
-            .filter(isRecord)
-            .filter((content) => content.type === "text" && typeof content.text === "string")
-            .map((content) => content.text as string)
-            .join("\n")
-            .trim(),
-        ));
+        userText = readVisibleHarnessUserText(item.content);
       }
       if (
         item.type === "agentMessage" &&
@@ -1553,27 +1677,39 @@ function readThreadTitleContext(result: unknown): {
     : null;
 }
 
+function readVisibleHarnessUserText(contentValue: unknown): string {
+  const content = Array.isArray(contentValue) ? contentValue.filter(isRecord) : [];
+  const text = content
+    .filter((entry) => entry.type === "text" && typeof entry.text === "string")
+    .map((entry) => entry.text as string)
+    .join("\n")
+    .trim();
+  const skill = content.find(
+    (entry) => entry.type === "skill" && typeof entry.name === "string",
+  );
+  const legacyPrefix = skill && typeof skill.name === "string" ? `$${skill.name}` : null;
+  const visibleText = legacyPrefix && (text === legacyPrefix || text.startsWith(`${legacyPrefix}\n`))
+    ? readVisibleExplicitSkillMessage(text)
+    : text;
+  return stripAttachmentContextBlocks(visibleText);
+}
+
 async function readResearchRequestText(threadId: string, turnId: string): Promise<string> {
-  const result = await readThreadWithStartupRetry(threadId, true);
-  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
-    throw new Error("Codex App Server returned no thread history for external-data provenance.");
-  }
-  const turn = result.thread.turns
-    .filter(isRecord)
-    .find((candidate) => candidate.id === turnId);
-  if (!turn || !Array.isArray(turn.items)) {
+  const result = await codex.request("thread/items/list", {
+    threadId,
+    turnId,
+    cursor: null,
+    limit: 100,
+    sortDirection: "asc",
+  });
+  if (!isRecord(result) || !Array.isArray(result.data)) {
     throw new Error("Codex App Server returned no matching Turn for external-data provenance.");
   }
-  for (const item of turn.items.filter(isRecord)) {
+  for (const entry of result.data.filter(isRecord)) {
+    const item = isRecord(entry.item) ? entry.item : null;
+    if (!item) continue;
     if (item.type !== "userMessage" || !Array.isArray(item.content)) continue;
-    const text = stripAttachmentContextBlocks(readVisibleExplicitSkillMessage(
-      item.content
-        .filter(isRecord)
-        .filter((content) => content.type === "text" && typeof content.text === "string")
-        .map((content) => content.text as string)
-        .join("\n")
-        .trim(),
-    ));
+    const text = readVisibleHarnessUserText(item.content);
     if (text) return text;
   }
   throw new Error("The current Turn contains no user request text for external-data provenance.");
@@ -1587,12 +1723,8 @@ async function readHarnessActiveTurnId(threadId: string): Promise<string | null>
   if (statusResult.thread.status.type !== "active") {
     return null;
   }
-  const result = await readThreadWithStartupRetry(threadId, true);
-  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
-    throw new Error("Codex App Server returned no turns for an active thread.");
-  }
-  const turns = result.thread.turns.filter(isRecord);
-  const activeTurn = [...turns].reverse().find(
+  const latest = await readTurnsPageWithStartupRetry(threadId, null, 1, "summary");
+  const activeTurn = latest.data.find(
     (turn) =>
       typeof turn.id === "string" &&
       (turn.status === "inProgress" || turn.status === "running"),
@@ -1629,23 +1761,8 @@ function normalizeQueuedSubmission(value: unknown): QueuedSubmissionView | null 
     .join("\n")
     .trim();
   return content
-    ? { id: value.id, clientUserMessageId: value.clientUserMessageId, content, pendingSteer: false }
+    ? { id: value.id, clientUserMessageId: value.clientUserMessageId, content }
     : null;
-}
-
-function readPendingSteers(threadId: string): PendingSteerState[] {
-  return pendingSteers.list(threadId);
-}
-
-function hasPendingSteer(threadId: string, queuedSubmissionId: string): boolean {
-  return pendingSteers.hasQueuedSubmission(threadId, queuedSubmissionId);
-}
-
-function readUserMessageClientId(params: unknown): string | null {
-  if (!isRecord(params) || !isRecord(params.item) || params.item.type !== "userMessage") {
-    return null;
-  }
-  return typeof params.item.clientId === "string" ? params.item.clientId : null;
 }
 
 async function serializeSteerTransition<T>(threadId: string, task: () => Promise<T>): Promise<T> {
@@ -1689,7 +1806,12 @@ async function promoteQueuedSubmissionToSteer(
     if (committedTurnId) {
       return { mode: "alreadyStarted", turnId: committedTurnId, result: null };
     }
-    return startQueuedSubmission(threadId, queuedSubmissionId, "startedAfterTurnEnded");
+    return startQueuedSubmission(
+      threadId,
+      queuedSubmissionId,
+      clientUserMessageId,
+      "startedAfterTurnEnded",
+    );
   }
   let steerTurnId = actualTurnId;
   if (actualTurnId !== expectedTurnId) {
@@ -1714,72 +1836,21 @@ async function promoteQueuedSubmissionToSteer(
   if (queuedSubmission.clientUserMessageId !== clientUserMessageId) {
     throw new GatewayRequestError("Queued submission client id mismatch.", 409);
   }
-  if (pendingSteers.hasClientId(queuedSubmission.clientUserMessageId)) {
-    throw new GatewayRequestError("Queued submission is already pending as a steer.", 409);
-  }
-
-  const pendingSteer = pendingSteers.add({
-    threadId,
-    turnId: steerTurnId,
-    queuedSubmissionId,
-    clientUserMessageId: queuedSubmission.clientUserMessageId,
-    content: queuedSubmission.content,
-  });
-
+  const completion = waitForTurnCompletion(threadId, steerTurnId, 30_000);
+  void completion.catch(() => undefined);
+  await interruptTurnWithRaceRetry(threadId, steerTurnId);
   try {
-    await persistPendingSteers();
-    await codex.request("thread/queue/delete", { threadId, queuedSubmissionId });
-  } catch (error) {
-    pendingSteers.delete(pendingSteer.clientUserMessageId);
-    await persistPendingSteers().catch(() => undefined);
-    throw error;
-  }
-
-  try {
-    const result = await codex.request("turn/steer", {
-      threadId,
-      expectedTurnId: steerTurnId,
-      clientUserMessageId: pendingSteer.clientUserMessageId,
-      input: [{ type: "text", text: pendingSteer.content, text_elements: [] }],
-    });
-    const completion = waitForTurnCompletion(threadId, steerTurnId, 15_000);
-    void completion.catch(() => undefined);
-    await interruptTurnWithRaceRetry(threadId, steerTurnId);
     await completion;
-    const restored = await restorePendingSteersToQueue(
-      threadId,
-      steerTurnId,
-      true,
-      new Set([pendingSteer.clientUserMessageId]),
-    );
-    return {
-      mode: "interruptedAndResubmitted",
-      turnId: restored.startedTurnId,
-      interruptedTurnId: steerTurnId,
-      result,
-    };
   } catch (error) {
-    if (isNoLongerActiveTurnError(error)) {
-      const restored = await restorePendingSteersToQueue(
-        threadId,
-        steerTurnId,
-        true,
-        new Set([pendingSteer.clientUserMessageId]),
-      );
-      return {
-        mode: "startedAfterTurnEnded",
-        turnId: restored.startedTurnId,
-        result: null,
-      };
-    }
-    await restorePendingSteersToQueue(
-      threadId,
-      steerTurnId,
-      true,
-      new Set([pendingSteer.clientUserMessageId]),
-    ).catch(() => undefined);
-    throw error;
+    if ((await readHarnessActiveTurnId(threadId)) === steerTurnId) throw error;
   }
+  return startQueuedSubmission(
+    threadId,
+    queuedSubmissionId,
+    clientUserMessageId,
+    "interruptedAndStarted",
+    steerTurnId,
+  );
 }
 
 async function interruptTurnWithRaceRetry(threadId: string, turnId: string): Promise<void> {
@@ -1835,150 +1906,56 @@ function waitForTurnCompletion(
 async function startQueuedSubmission(
   threadId: string,
   queuedSubmissionId: string,
-  mode: "startedAfterTurnEnded",
+  clientUserMessageId: string,
+  mode: "startedAfterTurnEnded" | "interruptedAndStarted",
+  interruptedTurnId?: string,
 ): Promise<Record<string, unknown>> {
-  const result = await codex.request("thread/queue/start", { threadId, queuedSubmissionId });
+  let result: unknown;
+  try {
+    result = await codex.request("thread/queue/start", { threadId, queuedSubmissionId });
+  } catch (error) {
+    const committedTurnId = await findCommittedUserMessageTurnIdWithRetry(threadId, clientUserMessageId);
+    if (committedTurnId) {
+      return { mode: "alreadyStarted", turnId: committedTurnId, result: null };
+    }
+    throw error;
+  }
   const startedTurnId = readResultTurnId(result);
   if (startedTurnId) {
     activeTurnsByThread.set(threadId, startedTurnId);
     scheduleTurnTimeout(threadId, startedTurnId);
   }
-  return { mode, turnId: startedTurnId, result };
-}
-
-async function restorePendingSteersToQueue(
-  threadId: string,
-  turnId?: string,
-  startWhenIdle = false,
-  clientUserMessageIds?: ReadonlySet<string>,
-): Promise<{ restoredSubmissionIds: string[]; startedTurnId: string | null }> {
-  const committedClientIds = await readCommittedUserMessageClientIds(threadId);
-  let pendingStateChanged = false;
-  for (const state of readPendingSteers(threadId)) {
-    if (committedClientIds.has(state.clientUserMessageId)) {
-      pendingSteers.delete(state.clientUserMessageId);
-      pendingStateChanged = true;
-    }
-  }
-  if (pendingStateChanged) {
-    await persistPendingSteers();
-  }
-
-  const pending = readPendingSteers(threadId).filter(
-    (state) =>
-      (!turnId || state.turnId === turnId) &&
-      (!clientUserMessageIds || clientUserMessageIds.has(state.clientUserMessageId)),
-  );
-  if (pending.length === 0) {
-    return { restoredSubmissionIds: [], startedTurnId: null };
-  }
-
-  const existingResult = await codex.request("thread/queue/list", { threadId, cursor: null, limit: 100 });
-  const existing = readQueuedSubmissions(existingResult);
-  const existingByClientId = new Map(existing.map((item) => [item.clientUserMessageId, item]));
-  const restoredIds: string[] = [];
-  let restoreError: unknown = null;
-  for (const state of pending) {
-    const alreadyQueued = existingByClientId.get(state.clientUserMessageId);
-    if (alreadyQueued) {
-      restoredIds.push(alreadyQueued.id);
-      pendingSteers.delete(state.clientUserMessageId);
-      pendingStateChanged = true;
-      continue;
-    }
-    try {
-      const restored = readQueuedSubmissionResult(
-        await codex.request("thread/queue/add", {
-          threadId,
-          clientUserMessageId: state.clientUserMessageId,
-          input: [{ type: "text", text: state.content, text_elements: [] }],
-        }),
-      );
-      restoredIds.push(restored.id);
-      pendingSteers.delete(state.clientUserMessageId);
-      pendingStateChanged = true;
-    } catch (error) {
-      restoreError = error;
-      break;
-    }
-  }
-
-  if (pendingStateChanged) {
-    await persistPendingSteers();
-  }
-
-  if (restoredIds.length > 0) {
-    const currentResult = await codex.request("thread/queue/list", { threadId, cursor: null, limit: 100 });
-    const current = readQueuedSubmissions(currentResult);
-    const restoredIdSet = new Set(restoredIds);
-    await codex.request("thread/queue/reorder", {
-      threadId,
-      queuedSubmissionIds: [
-        ...restoredIds,
-        ...current.filter((item) => !restoredIdSet.has(item.id)).map((item) => item.id),
-      ],
-    });
-    if (startWhenIdle && !(await readHarnessActiveTurnId(threadId))) {
-      const startResult = await codex
-        .request("thread/queue/start", { threadId, queuedSubmissionId: restoredIds[0] ?? null })
-        .catch(() => null);
-      const startedTurnId = readResultTurnId(startResult);
-      if (startedTurnId) {
-        activeTurnsByThread.set(threadId, startedTurnId);
-        scheduleTurnTimeout(threadId, startedTurnId);
-      }
-      if (restoreError) {
-        throw restoreError;
-      }
-      return { restoredSubmissionIds: restoredIds, startedTurnId };
-    }
-  }
-
-  if (restoreError) {
-    throw restoreError;
-  }
-  return { restoredSubmissionIds: restoredIds, startedTurnId: null };
-}
-
-async function persistPendingSteers(): Promise<void> {
-  await pendingSteerStore.save(pendingSteers.snapshot());
-}
-
-async function readCommittedUserMessageClientIds(threadId: string): Promise<Set<string>> {
-  const result = await readThreadWithStartupRetry(threadId, true);
-  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
-    throw new Error("Codex App Server returned invalid thread history while reconciling pending steers.");
-  }
-  const clientIds = new Set<string>();
-  for (const turn of result.thread.turns.filter(isRecord)) {
-    const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
-    for (const item of items) {
-      if (item.type === "userMessage" && typeof item.clientId === "string") {
-        clientIds.add(item.clientId);
-      }
-    }
-  }
-  return clientIds;
+  return {
+    mode,
+    turnId: startedTurnId,
+    ...(interruptedTurnId ? { interruptedTurnId } : {}),
+    result,
+  };
 }
 
 async function findCommittedUserMessageTurnId(
   threadId: string,
   clientUserMessageId: string,
 ): Promise<string | null> {
-  const result = await readThreadWithStartupRetry(threadId, true);
-  if (!isRecord(result) || !isRecord(result.thread) || !Array.isArray(result.thread.turns)) {
-    throw new Error("Codex App Server returned invalid thread history while locating a queued message.");
-  }
-  for (const turn of result.thread.turns.filter(isRecord)) {
-    const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
-    if (
-      items.some(
-        (item) => item.type === "userMessage" && item.clientId === clientUserMessageId,
-      )
-    ) {
-      return typeof turn.id === "string" ? turn.id : null;
+  let cursor: string | null = null;
+  do {
+    const result: unknown = await codex.request("thread/items/list", {
+      threadId,
+      cursor,
+      limit: 100,
+      sortDirection: "desc",
+    });
+    if (!isRecord(result) || !Array.isArray(result.data)) {
+      throw new Error("Codex App Server returned invalid items while locating a queued message.");
     }
-  }
+    for (const entry of result.data.filter(isRecord)) {
+      const item = isRecord(entry.item) ? entry.item : null;
+      if (item?.type === "userMessage" && item.clientId === clientUserMessageId) {
+        return typeof entry.turnId === "string" ? entry.turnId : null;
+      }
+    }
+    cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+  } while (cursor);
   return null;
 }
 
@@ -2011,6 +1988,63 @@ async function readThreadWithStartupRetry(threadId: string, includeTurns: boolea
       if (!isEmptyRolloutError(error) || attempt === 5) {
         throw error;
       }
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
+async function readThreadPageWithStartupRetry(
+  threadId: string,
+  cursor: string | null,
+  limit: number,
+): Promise<{ result: Record<string, unknown>; nextCursor: string | null }> {
+  const metadata = await readThreadWithStartupRetry(threadId, false);
+  if (!isRecord(metadata) || !isRecord(metadata.thread)) {
+    throw new Error("Codex App Server returned invalid thread metadata.");
+  }
+  const page = await readTurnsPageWithStartupRetry(threadId, cursor, limit, "full");
+  return {
+    result: {
+      ...metadata,
+      thread: {
+        ...metadata.thread,
+        turns: [...page.data].reverse(),
+      },
+    },
+    nextCursor: page.nextCursor,
+  };
+}
+
+async function readTurnsPageWithStartupRetry(
+  threadId: string,
+  cursor: string | null,
+  limit: number,
+  itemsView: "summary" | "full",
+): Promise<{ data: Record<string, unknown>[]; nextCursor: string | null }> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    try {
+      const result = await codex.request("thread/turns/list", {
+        threadId,
+        cursor,
+        limit,
+        sortDirection: "desc",
+        itemsView,
+      });
+      if (!isRecord(result) || !Array.isArray(result.data)) {
+        throw new Error("Codex App Server returned an invalid Turn page.");
+      }
+      return {
+        data: result.data.filter(isRecord),
+        nextCursor: typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null,
+      };
+    } catch (error) {
+      if (isMissingCodexThreadError(error)) {
+        throw new GatewayRequestError("Thread not found.", 404);
+      }
+      lastError = error;
+      if (!isEmptyRolloutError(error) || attempt === 5) throw error;
       await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
     }
   }
@@ -2077,7 +2111,7 @@ async function listThreadTreeIds(rootThreadId: string): Promise<string[]> {
   for (const archived of [false, true]) {
     let cursor: string | null = null;
     do {
-      const result = await codex.request(
+      const result: unknown = await codex.request(
         "thread/list",
         {
           cursor,
@@ -2117,7 +2151,6 @@ async function interruptThreadTree(threadIds: string[], rootThreadId: string): P
 }
 
 async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void> {
-  let pendingSteersChanged = false;
   const externalApprovalCancellations: Promise<void>[] = [];
   for (const deletedThreadId of threadIds) {
     const activeTurnId = activeTurnsByThread.get(deletedThreadId);
@@ -2133,9 +2166,6 @@ async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void
     const compaction = compactionStates.get(deletedThreadId);
     if (compaction?.timeout) clearTimeout(compaction.timeout);
     compactionStates.delete(deletedThreadId);
-    for (const pending of readPendingSteers(deletedThreadId)) {
-      pendingSteersChanged = pendingSteers.delete(pending.clientUserMessageId) || pendingSteersChanged;
-    }
     for (const [requestId, pending] of pendingRequestUserInputs) {
       if (pending.threadId !== deletedThreadId) continue;
       const externalApproval = pendingExternalDataApprovals.get(requestId);
@@ -2154,7 +2184,6 @@ async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void
     }
   }
   await Promise.all(externalApprovalCancellations);
-  if (pendingSteersChanged) await persistPendingSteers();
 }
 
 function isNodeNotFoundError(error: unknown): boolean {
@@ -2176,7 +2205,6 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
     sandbox: "read-only",
     config: createRuntimeRequestConfig(),
     developerInstructions: createRuntimeDeveloperInstructions(),
-    dynamicTools: createCommerceDynamicToolSpecs(),
     excludeTurns: true,
   }).catch((error) => {
     if (isMissingCodexThreadError(error)) {
@@ -2186,12 +2214,6 @@ async function ensureThreadLoaded(threadId: string, model?: string): Promise<voi
   });
   loadedThreadIds.add(threadId);
   await ensureCommerceWebMcpReadyForThread(threadId);
-  if (readPendingSteers(threadId).length > 0) {
-    // A restarted Gateway may restore application-authorized input to the
-    // durable queue, but it must not start billable work without a fresh BFF
-    // quota lease.
-    await serializeSteerTransition(threadId, () => restorePendingSteersToQueue(threadId, undefined, false));
-  }
 }
 
 async function ensureCommerceWebMcpReadyForThread(threadId: string): Promise<void> {
@@ -2202,7 +2224,7 @@ async function ensureCommerceWebMcpReadyForThread(threadId: string): Promise<voi
   const promise = (async () => {
     // App Server reload refreshes already-loaded threads. A global-ready MCP
     // catalog alone does not prove that a resumed thread received the tool.
-    await codex.request("config/mcpServer/reload", {}, 30_000);
+    await codex.request("config/mcpServer/reload", undefined, 30_000);
     const deadline = Date.now() + 20_000;
     let lastStatus = readManagedMcpStatus(null, "commerce_web");
     while (Date.now() < deadline) {
@@ -2245,7 +2267,7 @@ async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
       error: null,
     };
     try {
-      await codex.request("config/mcpServer/reload", {}, 30_000);
+      await codex.request("config/mcpServer/reload", undefined, 30_000);
       const deadline = Date.now() + 20_000;
       let lastStatus = readManagedMcpStatus(null, "commerce_web");
       while (Date.now() < deadline) {
@@ -2262,6 +2284,7 @@ async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
             checkedAt: new Date().toISOString(),
             error: null,
           };
+          await refreshModelProviderCapabilities();
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -2284,6 +2307,16 @@ async function ensureCommerceWebMcpReady(forceReload = false): Promise<void> {
   })();
 
   return managedMcpReadyPromise;
+}
+
+async function refreshModelProviderCapabilities(): Promise<void> {
+  const result = await codex.request("modelProvider/capabilities/read", {});
+  if (!isRecord(result)) throw new Error("App Server returned invalid model provider capabilities.");
+  modelProviderCapabilities = {
+    namespaceTools: result.namespaceTools === true,
+    imageGeneration: result.imageGeneration === true,
+    webSearch: result.webSearch === true,
+  };
 }
 
 function readRequestRuntimeScope(
@@ -3092,31 +3125,6 @@ function serializeError(error: unknown): { error: string; code?: number; data?: 
   return { error: String(error) };
 }
 
-function validateImageGenerationInput(input: ImageGenerationInput, configuredModel: string): ImageGenerationInput {
-  if (!input || typeof input !== "object") {
-    throw new CommerceProviderError("Expected an image generation request body.", 400);
-  }
-  if (input.model !== configuredModel) {
-    throw new CommerceProviderError(`Image generation model must be ${configuredModel}.`, 400);
-  }
-  if (typeof input.prompt !== "string" || input.prompt.trim().length === 0 || input.prompt.length > 20_000) {
-    throw new CommerceProviderError("Image prompt must contain between 1 and 20000 characters.", 400);
-  }
-  if (input.n !== undefined && (!Number.isInteger(input.n) || input.n < 1 || input.n > 4)) {
-    throw new CommerceProviderError("Image count must be between 1 and 4.", 400);
-  }
-  if (input.quality && !["auto", "low", "medium", "high"].includes(input.quality)) {
-    throw new CommerceProviderError("Unsupported image quality.", 400);
-  }
-  return {
-    model: input.model,
-    prompt: input.prompt.trim(),
-    quality: input.quality,
-    size: input.size,
-    n: input.n,
-  };
-}
-
 async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { type: "server_request" }>): Promise<void> {
   if (!isRecord(event.params)) {
     throw new Error("Invalid Commerce host tool request.");
@@ -3230,93 +3238,7 @@ async function handleCommerceHostToolRequest(event: Extract<AppServerEvent, { ty
     await handleCommerceDataHostToolRequest(event, scope, threadId, turnId, callId, tool);
     return;
   }
-  if (namespace !== "commerce_image" || tool !== "generate") {
-    throw new Error(`Host tool ${namespace ?? "unknown"}.${tool || "unknown"} is not registered.`);
-  }
-
-  const args = isRecord(event.params.arguments) ? event.params.arguments : {};
-  const input = validateImageGenerationInput(
-    {
-      model: config.provider.imageModel,
-      prompt: typeof args.prompt === "string" ? args.prompt : "",
-      quality: readImageQuality(args.quality),
-      size: typeof args.size === "string" ? args.size : undefined,
-      n: 1,
-    },
-    config.provider.imageModel,
-  );
-
-  broadcastEvent({
-    type: "notification",
-    method: "commerce/imageGeneration/started",
-    params: {
-      callId: event.params.callId,
-      threadId: event.params.threadId,
-      turnId: event.params.turnId,
-      model: config.provider.imageModel,
-    },
-    at: new Date().toISOString(),
-  });
-
-  const generated = await provider.generateImage(input);
-  const saved = await generatedImages.save({
-    base64: generated.base64,
-    threadId,
-    turnId,
-    callId: typeof event.params.callId === "string" ? event.params.callId : null,
-    model: generated.model,
-    mimeType: generated.mimeType,
-    quality: generated.quality,
-    size: generated.size,
-  });
-  await enqueueAgentEvent(
-    createProviderUsageEvent({
-      scope,
-      source: "commerce_image_tool",
-      responseId: generated.responseId ?? `image-${callId}`,
-      threadId,
-      turnId,
-      model: generated.model,
-      usage: generated.usage,
-      occurredAt: new Date().toISOString(),
-    }),
-  );
-  const publicUrl = `/api/provider/generated-images/${encodeURIComponent(saved.filename)}`;
-  codex.respondToServerRequest(event.id, {
-    success: true,
-    contentItems: [
-      {
-        type: "inputText",
-        text: JSON.stringify({
-          status: "completed",
-          model: generated.model,
-          publicUrl,
-          mimeType: generated.mimeType,
-          quality: generated.quality,
-          size: generated.size,
-          instruction: "The image is complete. Do not retry this generation. Return the public URL to the user.",
-        }),
-      },
-    ],
-  });
-
-  broadcastEvent({
-    type: "notification",
-    method: "commerce/imageGeneration/completed",
-    params: {
-      callId: event.params.callId,
-      threadId: event.params.threadId,
-      turnId: event.params.turnId,
-      model: generated.model,
-      filename: saved.filename,
-      publicUrl,
-      mimeType: generated.mimeType,
-      quality: generated.quality,
-      size: generated.size,
-      usage: generated.usage,
-    },
-    at: new Date().toISOString(),
-  });
+  throw new Error(`Host tool ${namespace ?? "unknown"}.${tool || "unknown"} is not registered.`);
 }
 
 async function handleCommerceDataHostToolRequest(
@@ -4429,43 +4351,7 @@ function isPendingDynamicToolRequest(requestId: JsonRpcId): boolean {
     .some((request) => String(request.id) === expectedId && request.method === "item/tool/call");
 }
 
-function createCommerceImageToolSpec(): Record<string, unknown> {
-  return {
-    type: "namespace",
-    name: "commerce_image",
-    description: "Commerce Pilot image generation powered by the runtime's configured GPT Image model.",
-    tools: [
-      {
-        type: "function",
-        name: "generate",
-        description: "Generate a new bitmap image with gpt-image-2. Use this for image creation requests.",
-        deferLoading: false,
-        inputSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            prompt: {
-              type: "string",
-              description: "A complete, production-ready image prompt.",
-            },
-            quality: {
-              type: "string",
-              enum: ["auto", "low", "medium", "high"],
-              description: "Image quality. Use low for drafts and auto for normal generation.",
-            },
-            size: {
-              type: "string",
-              description: "Image size, such as auto or 1024x1024.",
-            },
-          },
-          required: ["prompt"],
-        },
-      },
-    ],
-  };
-}
-
-function createCommerceSkillToolSpec(): Record<string, unknown> {
+function createCommerceSkillToolSpec(): DynamicToolSpec {
   return {
     type: "namespace",
     name: "commerce_skill",
@@ -4509,7 +4395,7 @@ function createCommerceSkillToolSpec(): Record<string, unknown> {
   };
 }
 
-function createCommerceDataToolSpec(): Record<string, unknown> {
+function createCommerceDataToolSpec(): DynamicToolSpec {
   return {
     type: "namespace",
     name: "commerce_data",
@@ -4648,17 +4534,16 @@ function createCommerceDataToolSpec(): Record<string, unknown> {
   };
 }
 
-function createCommerceDynamicToolSpecs(): Record<string, unknown>[] {
+function createCommerceDynamicToolSpecs(): DynamicToolSpec[] {
   return [
-    createCommerceImageToolSpec(),
     createCommerceSkillToolSpec(),
-    ...(externalDataService.readStatus().connected && externalDataControl.configured
+    ...(externalDataService.configured && externalDataControl.configured
       ? [createCommerceDataToolSpec()]
       : []),
   ];
 }
 
-function createRuntimeRequestConfig(): Record<string, unknown> {
+function createRuntimeRequestConfig(): { [key: string]: CodexJsonValue } {
   return {
     web_search: "live",
     ...(process.env.NODE_ENV === "production" ? {} : { bypass_hook_trust: true }),
@@ -4670,11 +4555,9 @@ function createRuntimeDeveloperInstructions(): string {
     "Commerce Pilot is a hosted e-commerce agent, not a local coding agent.",
     "Use only application-registered dynamic tools and application-managed MCP tools. Never run shell commands, inspect or modify host files, spawn processes, use local developer tools, or request additional filesystem or network permissions.",
     "If a requested capability has no registered tool, explain that it is unavailable instead of attempting a local workaround.",
-    "Commerce Pilot provides the host tool `commerce_image.generate` for bitmap image generation.",
-    `It is backed by ${config.provider.imageModel} through the configured application provider.`,
-    "Use it when the user asks to generate an image. Do not claim image generation is unavailable while this tool is present.",
-    "A completed tool result contains the authoritative publicUrl. Do not retry a completed generation because it omits inline image bytes.",
-    "Use quality=low only for explicit drafts or probes; otherwise use quality=auto.",
+    "Codex Harness provides its native `image_gen` tool for bitmap image generation and owns the imageGeneration Item lifecycle.",
+    `It uses the configured application provider and image model ${config.provider.imageModel}.`,
+    "Use the native image_gen tool for image requests. Never look for or call an application dynamic tool named commerce_image.generate, and never retry a completed native imageGeneration Item.",
     "Commerce Pilot provides the host tool `commerce_skill.publish` for creating or updating instruction-only Skills through an application-owned validator and explicit user approval.",
     "When the user asks to create or update a Skill, use the bundled `skill-creator` Skill, gather the required purpose and trigger boundaries with request_user_input when needed, then call commerce_skill.publish with the complete draft.",
     "Never claim that this environment can only produce a SKILL.md draft while commerce_skill.publish is present. Never request a host path, shell access, scripts, secrets, or filesystem permission for Skill creation.",
@@ -4683,7 +4566,7 @@ function createRuntimeDeveloperInstructions(): string {
     "The current tool catalog is authoritative over older conversation messages that claimed Web Search was missing.",
     "Use that MCP Web Search tool whenever the user explicitly asks to search the web or when current external information is required. Do not look for a dynamic tool named `commerce_web.search`. Cite returned source URLs and never claim Web Search is unavailable while the MCP tool is present.",
     "If one search call fails or times out, retry once with a shorter and more specific query before reporting the provider failure. Do not tell the user to enable, install, or register Web Search when the tool is already present.",
-    ...(externalDataService.readStatus().connected && externalDataControl.configured
+    ...(externalDataService.configured && externalDataControl.configured
       ? [
           "Commerce Pilot provides the host namespace commerce_data through the SHUEHO external-data MCP service; the Gateway never connects to JustOneAPI MCP.",
           "Use search_business_data first when previously curated workspace evidence may answer the request; it is read-only and free of provider charges. Use get_research_result to revisit an id returned by a prior collection.",
@@ -4817,10 +4700,6 @@ function formatSkillDisplayName(name: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function readImageQuality(value: unknown): ImageGenerationInput["quality"] {
-  return value === "low" || value === "medium" || value === "high" || value === "auto" ? value : "auto";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

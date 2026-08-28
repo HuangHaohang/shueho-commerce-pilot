@@ -12,7 +12,9 @@
     "node": ">=20.16"
   },
   "scripts": {
-    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
+    "codex:protocol:generate": "tsx scripts/generate-codex-app-server-bindings.ts",
+    "precheck": "npm run codex:protocol:generate",
+    "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run codex:protocol:generate",
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "check": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
     "test:gateway": "npm run build && node --test dist/src/gateway/*.test.js dist/src/integrations/*.test.js dist/src/provider/*.test.js",

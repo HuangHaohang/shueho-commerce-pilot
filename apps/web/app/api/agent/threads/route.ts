@@ -91,7 +91,7 @@ export async function GET(request: Request) {
 
 async function reconcileRunningThread(thread: AgentThreadRecord, context: EnterpriseContext): Promise<void> {
   try {
-    const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(thread.threadId)}`), {
+    const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(thread.threadId)}/status`), {
       headers: gatewayHeaders(undefined, context),
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
@@ -107,10 +107,17 @@ async function reconcileRunningThread(thread: AgentThreadRecord, context: Enterp
       return;
     }
     const result = isRecord(payload.result) ? payload.result : null;
+    const lastTurn = isRecord(payload.lastTurn) ? payload.lastTurn : null;
     const storedThread = result && isRecord(result.thread) ? result.thread : null;
-    const turns = storedThread && Array.isArray(storedThread.turns) ? storedThread.turns.filter(isRecord) : [];
-    const lastTurn = turns.at(-1);
+    const storedStatus = storedThread && isRecord(storedThread.status) && typeof storedThread.status.type === "string"
+      ? storedThread.status.type
+      : "idle";
     if (!lastTurn || typeof lastTurn.status !== "string") {
+      if (storedStatus !== "active" && thread.status === "running") {
+        thread.status = "completed";
+        thread.activeTurnId = null;
+        await updateAgentThreadStatus(thread.threadId, context, "completed", null);
+      }
       return;
     }
     const status = normalizeRuntimeStatus(lastTurn.status);

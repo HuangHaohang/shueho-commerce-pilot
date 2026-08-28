@@ -36,7 +36,7 @@ test("resolves an enabled skill from the App Server catalog and builds native sk
   assert.deepEqual(buildExplicitSkillTurn(skill!, "创建一个退款审核技能").input, [
     {
       type: "text",
-      text: "$skill-creator\n创建一个退款审核技能",
+      text: "创建一个退款审核技能",
       text_elements: [],
     },
     {

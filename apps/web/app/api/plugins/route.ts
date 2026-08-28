@@ -10,6 +10,11 @@ export const dynamic = "force-dynamic";
 
 type GatewayHealthPayload = {
   ok?: boolean;
+  codex?: {
+    capabilities?: {
+      imageGeneration?: boolean;
+    };
+  };
   provider?: {
     configured?: boolean;
     imageModel?: string;
@@ -42,6 +47,7 @@ export async function GET(request: Request) {
     gatewayReady: payload?.ok === true,
     providerConfigured: payload?.provider?.configured === true,
     imageModel: typeof payload?.provider?.imageModel === "string" ? payload.provider.imageModel : null,
+    nativeImageGeneration: payload?.codex?.capabilities?.imageGeneration === true,
     managedMcp: {
       state: payload?.managedMcp?.state ?? "unknown",
       available: payload?.managedMcp?.available === true,

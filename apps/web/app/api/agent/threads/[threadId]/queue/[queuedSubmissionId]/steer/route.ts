@@ -66,7 +66,7 @@ export async function POST(
         headers: gatewayHeaders({ "Content-Type": "application/json" }, access.context),
         body: JSON.stringify({ expectedTurnId, clientUserMessageId }),
         cache: "no-store",
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(45_000),
       },
     );
     const payload = (await response.json().catch(() => ({ error: "Agent Gateway 返回了无效响应。" }))) as Record<string, unknown>;
@@ -81,7 +81,7 @@ export async function POST(
       const startedTurnId = typeof payload.result.turnId === "string" ? payload.result.turnId : null;
       if (
         (payload.result.mode === "startedAfterTurnEnded" ||
-          payload.result.mode === "interruptedAndResubmitted") &&
+          payload.result.mode === "interruptedAndStarted") &&
         startedTurnId
       ) {
         await activateAgentTurnLease(access.context, reservation.leaseId, startedTurnId);

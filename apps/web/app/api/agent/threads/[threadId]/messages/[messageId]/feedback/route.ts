@@ -42,16 +42,27 @@ export async function PUT(
   if (rateLimited) return rateLimited;
 
   try {
-    const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(threadId)}`), {
-      headers: gatewayHeaders(undefined, access.context),
-      cache: "no-store",
-      signal: AbortSignal.timeout(30_000),
-    });
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (!response.ok || !payload) {
-      return NextResponse.json({ error: "暂时无法核验这条回复。" }, { status: 503 });
+    let cursor: string | null = null;
+    let target: ReturnType<typeof readRateableAgentMessageTarget> = null;
+    for (let page = 0; page < 50 && !target; page += 1) {
+      const response: Response = await fetch(
+        gatewayUrl(
+          `/api/threads/${encodeURIComponent(threadId)}${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
+        ),
+        {
+          headers: gatewayHeaders(undefined, access.context),
+          cache: "no-store",
+          signal: AbortSignal.timeout(30_000),
+        },
+      );
+      const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+      if (!response.ok || !payload) {
+        return NextResponse.json({ error: "暂时无法核验这条回复。" }, { status: 503 });
+      }
+      target = readRateableAgentMessageTarget(payload, messageId);
+      cursor = typeof payload.nextCursor === "string" && payload.nextCursor ? payload.nextCursor : null;
+      if (!cursor) break;
     }
-    const target = readRateableAgentMessageTarget(payload, messageId);
     if (!target) {
       return NextResponse.json({ error: "该回复不存在或尚未完成。" }, { status: 404 });
     }

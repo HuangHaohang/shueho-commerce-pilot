@@ -3,6 +3,16 @@ import type { AppServerEvent } from "../codex/protocol.js";
 export function sanitizeBrowserAppServerEvent(event: AppServerEvent): AppServerEvent {
   if (event.type !== "notification" || !isRecord(event.params) || !isRecord(event.params.item)) return event;
   const item = event.params.item;
+  if (item.type === "imageGeneration") {
+    const { result: _result, savedPath: _savedPath, ...browserItem } = item;
+    return {
+      ...event,
+      params: {
+        ...event.params,
+        item: browserItem,
+      },
+    } as AppServerEvent;
+  }
   if (item.type !== "userMessage" || !Array.isArray(item.content)) return event;
   const content = item.content
     .filter(isRecord)

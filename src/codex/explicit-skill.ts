@@ -1,5 +1,7 @@
 import { isAbsolute } from "node:path";
 
+import type { UserInput } from "./generated/v2/UserInput.js";
+
 export const CODEX_SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export type ExplicitSkillSelection = {
@@ -27,12 +29,12 @@ export function resolveExplicitSkillFromCatalog(
 export function buildExplicitSkillTurn(
   skill: ExplicitSkillSelection,
   message: string,
-): { input: Array<Record<string, unknown>> } {
+): { input: UserInput[] } {
   return {
     input: [
       {
         type: "text",
-        text: `$${skill.name}\n${message}`,
+        text: message,
         text_elements: [],
       },
       {

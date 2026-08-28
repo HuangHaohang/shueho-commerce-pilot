@@ -95,7 +95,8 @@ test("extracts bounded workbook text with the supported dependency set", async (
       bytes,
     });
     const inputs = await store.buildTurnInputs(threadId, [artifact.id], scope, clientRequestId);
-    assert.match(String(inputs[0]?.text), /BAG-001\t轻量通勤/);
+    assert.equal(inputs[0]?.type, "text");
+    assert.match(inputs[0]?.type === "text" ? inputs[0].text : "", /BAG-001\t轻量通勤/);
     assert.equal(MAX_THREAD_ATTACHMENT_BYTES, 5 * 1024 * 1024);
   } finally {
     await rm(directory, { recursive: true, force: true });

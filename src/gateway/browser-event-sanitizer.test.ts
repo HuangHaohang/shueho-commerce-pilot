@@ -29,3 +29,28 @@ test("removes tenant artifact paths and extracted attachment context from browse
   assert.match(serialized, /请总结附件/);
   assert.match(serialized, /"type":"localImage"/);
 });
+
+test("removes native image bytes and host paths from browser events", () => {
+  const event = {
+    type: "notification",
+    method: "item/completed",
+    params: {
+      threadId: "thread-12345678",
+      turnId: "turn-12345678",
+      item: {
+        type: "imageGeneration",
+        id: "image-12345678",
+        status: "completed",
+        revisedPrompt: "商品主图",
+        result: "very-large-base64",
+        savedPath: "/srv/codex/generated_images/private.png",
+        failure: null,
+      },
+    },
+    at: new Date().toISOString(),
+  } as AppServerEvent;
+
+  const serialized = JSON.stringify(sanitizeBrowserAppServerEvent(event));
+  assert.doesNotMatch(serialized, /very-large-base64|\/srv\/codex/);
+  assert.match(serialized, /imageGeneration/);
+});

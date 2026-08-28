@@ -10,6 +10,11 @@ import type {
   JsonRpcRequest,
   JsonRpcResponse,
 } from "./protocol.js";
+import type { ClientRequest as GeneratedClientRequest } from "./generated/ClientRequest.js";
+
+type ClientMethod = GeneratedClientRequest["method"];
+type GeneratedRequestFor<Method extends ClientMethod> = Extract<GeneratedClientRequest, { method: Method }>;
+type ClientParams<Method extends ClientMethod> = GeneratedRequestFor<Method>["params"];
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -124,13 +129,17 @@ export class CodexAppServerClient extends EventEmitter {
     child.kill("SIGTERM");
   }
 
-  async request(method: string, params?: unknown, timeoutMs = this.options.requestTimeoutMs ?? 60_000): Promise<unknown> {
+  async request<Method extends ClientMethod>(
+    method: Method,
+    params: ClientParams<NoInfer<Method>>,
+    timeoutMs = this.options.requestTimeoutMs ?? 60_000,
+  ): Promise<unknown> {
     if (!this.isRunning) {
       await this.start();
     }
 
     const id = this.nextId++;
-    const message: JsonRpcRequest = { id, method, params };
+    const message = { id, method, params };
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {

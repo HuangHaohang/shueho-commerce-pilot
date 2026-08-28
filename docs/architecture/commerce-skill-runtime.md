@@ -9,7 +9,7 @@ The implementation follows the current `openai/codex` source behavior:
 - host Skill roots include user, admin, system, plugin, and repository `.agents/skills` scopes;
 - every Skill has a required `SKILL.md` and optional metadata/resources;
 - App Server `skills/list` returns the effective per-`cwd` catalog and `skills/changed` invalidates cached clients;
-- explicit invocation uses both the `$skill-name` marker and a `skill` input item;
+- explicit invocation keeps the user text unchanged and adds a native `skill` input item;
 - bundled system Skills include `skill-creator`.
 
 The inspected runtime baseline is `@openai/codex` `0.149.0`, matching `openai/codex` tag `rust-v0.149.0` at `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`.
@@ -50,7 +50,7 @@ The product uses `@` as the browser interaction for choosing a Skill while prese
 2. Selecting a Skill replaces the typed `@query` token with a distinct Skill chip. The user's task text remains ordinary conversation content and is not replaced by a fixed prompt template.
 3. The browser submits only `skillName`; it cannot submit a native path, Skill body, developer instruction, tool definition, output schema, or runtime root.
 4. Gateway validates the name, rejects workflow-and-Skill combinations, calls `skills/list(forceReload)` for the application runtime root, and accepts only an enabled Skill with an absolute path returned by App Server.
-5. Gateway starts the Turn with both the `$skill-name` text marker and the native `{ type: "skill", name, path }` input item. This matches Codex explicit Skill invocation semantics.
+5. Gateway starts the Turn with the original text input plus the native `{ type: "skill", name, path }` input item. The browser never rewrites the user's request into an application-authored Skill prompt.
 6. The marker remains an execution detail. Live events and restored history render the user's original task text plus an independent Skill chip, and title generation excludes the marker.
 
 Explicit Skill submissions cannot be downgraded into plain `thread/queue/add` messages behind an active Turn because that queue shape would lose the native Skill item. The user must wait for or interrupt the active Turn before invoking another Skill.

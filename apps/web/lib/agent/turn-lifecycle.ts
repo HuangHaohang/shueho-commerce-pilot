@@ -13,24 +13,3 @@ export function activateTurnClock(
   }
   return { turnId, startedAt: observedAt };
 }
-
-export function shouldExpireActiveTurn(
-  current: ActiveTurnClock,
-  expectedTurnId: string,
-  expectedStartedAt: number,
-  now: number,
-  maxDurationMs: number,
-): boolean {
-  return (
-    current.turnId === expectedTurnId &&
-    current.startedAt === expectedStartedAt &&
-    now - expectedStartedAt >= maxDurationMs
-  );
-}
-
-export function shouldIgnoreTerminalSnapshotWhileConnecting(
-  localStatus: string,
-  snapshotStatus: string,
-): boolean {
-  return localStatus === "connecting" && snapshotStatus !== "running";
-}

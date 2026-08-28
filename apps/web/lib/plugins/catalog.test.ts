@@ -10,6 +10,7 @@ const healthySignals = {
   gatewayReady: true,
   providerConfigured: true,
   imageModel: "gpt-image-2",
+  nativeImageGeneration: true,
   managedMcp: {
     state: "ready" as const,
     available: true,
@@ -46,7 +47,7 @@ describe("commerce plugin catalog", () => {
     expect(filterCommercePlugins(plugins, "公开网络").map((plugin) => plugin.manifest.name)).toEqual([
       "commerce-web-search",
     ]);
-    expect(filterCommercePlugins(plugins, "commerce_image.generate").map((plugin) => plugin.manifest.name)).toEqual([
+    expect(filterCommercePlugins(plugins, "image_gen").map((plugin) => plugin.manifest.name)).toEqual([
       "commerce-image-generation",
     ]);
     expect(filterCommercePlugins(plugins, "  ")).toHaveLength(2);

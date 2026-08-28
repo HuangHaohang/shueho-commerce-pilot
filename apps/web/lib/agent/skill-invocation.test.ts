@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   readExplicitSkillMessage,
+  readNativeSkillMessage,
   readVisibleAttachmentMessage,
   readSkillMention,
   removeSkillMention,
@@ -14,6 +15,21 @@ describe("skill invocation UI helpers", () => {
       skillName: "skill-creator",
     });
     expect(readExplicitSkillMessage("普通消息")).toEqual({ content: "普通消息", skillName: null });
+  });
+
+  it("keeps exact user text for native Skill items while reading legacy matching markers", () => {
+    expect(readNativeSkillMessage("创建一个退款技能", "skill-creator")).toEqual({
+      content: "创建一个退款技能",
+      skillName: "skill-creator",
+    });
+    expect(readNativeSkillMessage("$other-skill 是用户的原文", "skill-creator")).toEqual({
+      content: "$other-skill 是用户的原文",
+      skillName: "skill-creator",
+    });
+    expect(readNativeSkillMessage("$skill-creator\n旧任务", "skill-creator")).toEqual({
+      content: "旧任务",
+      skillName: "skill-creator",
+    });
   });
 
   it("finds and removes an @ mention at the caret", () => {

@@ -40,9 +40,9 @@ The web process uses `DATABASE_URL` with a non-superuser, non-`BYPASSRLS` applic
 
 Every new Codex thread is recorded in `commerce_agent_thread` with its authenticated `(tenant_id, workspace_id, created_by_user_id)` binding. Event-stream, turn, queue, compact, and interrupt BFF routes verify this binding and return `404` for missing or foreign threads. Random thread ids and browser-provided scope headers are not treated as authorization.
 
-The thread index also stores title and timestamps for the authenticated user's sidebar. Message history remains App Server-owned: refresh and history selection call `thread/read`, and Gateway calls `thread/resume` before the first new turn after a process restart. PostgreSQL does not duplicate raw conversation bodies.
+The thread index also stores title, timestamps, and the dynamic-tool contract version created at `thread/start`. Message history remains App Server-owned: refresh reads metadata plus paginated `thread/turns/list`, and Gateway calls `thread/resume` before the first new turn after a process restart. PostgreSQL does not duplicate raw conversation bodies or falsely upgrade an old thread's fixed dynamic-tool catalog.
 
-The index stores the last known runtime status, active turn id, turn start time, and duration. The sidebar polls only while at least one thread is running and reconciles running rows against App Server `thread/read`. This supports concurrent turns across different owned threads without mirroring conversation content into PostgreSQL.
+The index stores the last known runtime status, active turn id, turn start time, and duration. The sidebar polls only while at least one thread is running and reconciles each row against thread metadata plus one summary Turn, not full history. This supports concurrent turns across different owned threads without mirroring conversation content into PostgreSQL.
 
 The runtime disables host shell/filesystem capabilities and runs from an app-owned runtime directory. This prevents an end user from turning the web agent into a deployment-host coding agent.
 

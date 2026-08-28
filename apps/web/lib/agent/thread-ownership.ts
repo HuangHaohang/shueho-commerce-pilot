@@ -2,6 +2,8 @@ import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context
 import type { EnterpriseScope } from "@/lib/enterprise/types";
 import type { TaskCategory } from "@/lib/agent/task-category";
 
+export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 1;
+
 export type AgentThreadRecord = {
   threadId: string;
   title: string;
@@ -15,6 +17,7 @@ export type AgentThreadRecord = {
   titleGeneratedAt: string | null;
   recipeId: "copywriting" | "market_research" | null;
   category: TaskCategory;
+  toolContractVersion: number;
 };
 
 type AgentThreadRow = {
@@ -30,6 +33,7 @@ type AgentThreadRow = {
   title_generated_at: Date | null;
   recipe_id: "copywriting" | "market_research" | null;
   category: TaskCategory;
+  tool_contract_version: number;
 };
 
 export async function registerAgentThreadOwner(
@@ -47,8 +51,9 @@ export async function registerAgentThreadOwner(
     const result = await client.query<{ created_by_user_id: string }>(
       `
         INSERT INTO commerce_agent_thread
-          (thread_id, user_id, created_by_user_id, tenant_id, workspace_id, title, recipe_id, category, updated_at, status)
-        VALUES ($1, $2, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP, 'idle')
+          (thread_id, user_id, created_by_user_id, tenant_id, workspace_id, title, recipe_id, category,
+           tool_contract_version, updated_at, status)
+        VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $8, CURRENT_TIMESTAMP, 'idle')
         ON CONFLICT (thread_id) DO UPDATE
         SET title = CASE
               WHEN commerce_agent_thread.tenant_id = EXCLUDED.tenant_id
@@ -73,7 +78,16 @@ export async function registerAgentThreadOwner(
               THEN EXCLUDED.category ELSE commerce_agent_thread.category END
         RETURNING created_by_user_id
       `,
-      [threadId, scope.userId, scope.tenantId, scope.workspaceId, title, recipeId, category],
+      [
+        threadId,
+        scope.userId,
+        scope.tenantId,
+        scope.workspaceId,
+        title,
+        recipeId,
+        category,
+        CURRENT_AGENT_TOOL_CONTRACT_VERSION,
+      ],
     );
     if (result.rows[0]?.created_by_user_id !== scope.userId) {
       throw new Error("Agent thread is already bound to another enterprise principal.");
@@ -87,7 +101,7 @@ export async function listAgentThreadsForUser(scope: EnterpriseScope, limit = 50
       `
         SELECT thread_id, title, created_at, updated_at, status,
                active_turn_id, turn_started_at, duration_ms,
-               title_model, title_generated_at, recipe_id, category
+               title_model, title_generated_at, recipe_id, category, tool_contract_version
         FROM commerce_agent_thread
         WHERE tenant_id = $1 AND workspace_id = $2 AND created_by_user_id = $3
         ORDER BY COALESCE(turn_started_at, created_at) DESC, created_at DESC
@@ -108,7 +122,7 @@ export async function getAgentThreadForUser(
       `
         SELECT thread_id, title, created_at, updated_at, status,
                active_turn_id, turn_started_at, duration_ms,
-               title_model, title_generated_at, recipe_id, category
+               title_model, title_generated_at, recipe_id, category, tool_contract_version
         FROM commerce_agent_thread
         WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4
         LIMIT 1
@@ -158,7 +172,7 @@ export async function generateAgentThreadTitleOnce(
       `
         SELECT thread_id, title, created_at, updated_at, status,
                active_turn_id, turn_started_at, duration_ms,
-               title_model, title_generated_at, recipe_id, category
+               title_model, title_generated_at, recipe_id, category, tool_contract_version
         FROM commerce_agent_thread
         WHERE thread_id = $1 AND tenant_id = $2 AND workspace_id = $3 AND created_by_user_id = $4
         LIMIT 1
@@ -313,5 +327,6 @@ function toAgentThreadRecord(row: AgentThreadRow): AgentThreadRecord {
     titleGeneratedAt: row.title_generated_at?.toISOString() ?? null,
     recipeId: row.recipe_id,
     category: row.category,
+    toolContractVersion: row.tool_contract_version,
   };
 }

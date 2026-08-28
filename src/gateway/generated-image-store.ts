@@ -25,6 +25,7 @@ export type SaveGeneratedImageInput = Omit<GeneratedImageArtifact, "version" | "
 export class GeneratedImageStore {
   private readonly imageDirectory: string;
   private readonly metadataDirectory: string;
+  private readonly pendingCallSaves = new Map<string, Promise<GeneratedImageArtifact>>();
 
   constructor(codexHome: string) {
     this.imageDirectory = join(codexHome, "generated_images");
@@ -52,6 +53,18 @@ export class GeneratedImageStore {
     await writeFile(this.imagePath(filename), Buffer.from(input.base64, "base64"), { mode: 0o600 });
     await this.writeMetadata(artifact);
     return artifact;
+  }
+
+  async saveOnceForCall(input: SaveGeneratedImageInput): Promise<GeneratedImageArtifact> {
+    if (!input.callId) return this.save(input);
+    const key = `${input.threadId}:${input.turnId}:${input.callId}`;
+    const pending = this.pendingCallSaves.get(key);
+    if (pending) return pending;
+    const operation = (async () =>
+      (await this.findByCallId(input.threadId, input.turnId, input.callId as string)) ?? this.save(input)
+    )().finally(() => this.pendingCallSaves.delete(key));
+    this.pendingCallSaves.set(key, operation);
+    return operation;
   }
 
   async registerExisting(
@@ -111,6 +124,16 @@ export class GeneratedImageStore {
     return artifacts
       .filter((artifact): artifact is GeneratedImageArtifact => artifact?.threadId === threadId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  async findByCallId(
+    threadId: string,
+    turnId: string,
+    callId: string,
+  ): Promise<GeneratedImageArtifact | null> {
+    return (await this.listForThread(threadId)).find(
+      (artifact) => artifact.turnId === turnId && artifact.callId === callId,
+    ) ?? null;
   }
 
   async deleteForThreads(threadIds: Iterable<string>): Promise<{ files: number; metadata: number }> {
