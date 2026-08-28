@@ -293,6 +293,7 @@ export function CommerceWorkbenchShell({
   const autoRestoreAttemptedRef = useRef(false);
   const previousAuthUserIdRef = useRef<string | null | undefined>(undefined);
   const composerAttachmentsRef = useRef<PendingAttachmentUpload[]>([]);
+  const warmedThreadIdsRef = useRef(new Set<string>());
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -444,6 +445,41 @@ export function CommerceWorkbenchShell({
   );
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      warmedThreadIdsRef.current.clear();
+      return;
+    }
+    const targets = (threadsQuery.data?.threads ?? [])
+      .slice(0, 12)
+      .map((thread) => thread.threadId)
+      .filter((threadId) => !warmedThreadIdsRef.current.has(threadId));
+    if (!targets.length) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      void (async () => {
+        for (const threadId of targets) {
+          if (controller.signal.aborted) return;
+          warmedThreadIdsRef.current.add(threadId);
+          try {
+            const response = await fetch(
+              `/api/agent/threads/${encodeURIComponent(threadId)}/status`,
+              { cache: "no-store", signal: controller.signal },
+            );
+            if (!response.ok) warmedThreadIdsRef.current.delete(threadId);
+          } catch {
+            warmedThreadIdsRef.current.delete(threadId);
+            if (controller.signal.aborted) return;
+          }
+        }
+      })();
+    }, 250);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [isAuthenticated, threadsQuery.dataUpdatedAt]);
+
+  useEffect(() => {
     const activeJobs = threadDeletionJobs.filter((job) => job.status === "queued" || job.status === "running");
     if (!activeJobs.length) return;
     let cancelled = false;
@@ -486,6 +522,7 @@ export function CommerceWorkbenchShell({
       autoRestoreAttemptedRef.current = false;
       queryClient.removeQueries({ queryKey: ["agent-threads"] });
       queryClient.removeQueries({ queryKey: ["provider-models"] });
+      warmedThreadIdsRef.current.clear();
     }
     previousAuthUserIdRef.current = currentUserId;
   }, [agentThread.resetThread, authUser?.id, queryClient]);
@@ -626,7 +663,12 @@ export function CommerceWorkbenchShell({
         ? "research"
         : "workbench";
     setActiveView(threadView);
-    if (thread.threadId === agentThread.threadId) return;
+    if (
+      thread.threadId === agentThread.threadId &&
+      (agentThread.loadingHistory || agentThread.status !== "failed" || agentThread.messages.length > 0)
+    ) {
+      return;
+    }
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     void agentThread.loadThread(thread);
   }
@@ -1039,6 +1081,7 @@ export function CommerceWorkbenchShell({
             queueSubmitting={agentThread.queueSubmitting}
             queueOperationId={agentThread.queueOperationId}
             feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
+            loadingHistory={agentThread.loadingHistory}
             hasOlderHistory={agentThread.hasOlderHistory}
             loadingOlderHistory={agentThread.loadingOlderHistory}
             canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
@@ -1260,6 +1303,7 @@ function ConversationWorkspace({
   queueSubmitting,
   queueOperationId,
   feedbackSubmittingIds,
+  loadingHistory,
   hasOlderHistory,
   loadingOlderHistory,
   canInterrupt,
@@ -1313,6 +1357,7 @@ function ConversationWorkspace({
   queueSubmitting: boolean;
   queueOperationId: string | null;
   feedbackSubmittingIds: ReadonlySet<string>;
+  loadingHistory: boolean;
   hasOlderHistory: boolean;
   loadingOlderHistory: boolean;
   canInterrupt: boolean;
@@ -1368,7 +1413,7 @@ function ConversationWorkspace({
     calculateConversationMinimap(0, 1, 1, []),
   );
   const [hoveredMinimapMarkerId, setHoveredMinimapMarkerId] = useState<string | null>(null);
-  const running = status === "connecting" || status === "running";
+  const running = !loadingHistory && (status === "connecting" || status === "running");
   const latestUserSequence = messages.reduce(
     (latestSequence, message) => (message.role === "user" ? Math.max(latestSequence, message.sequence) : latestSequence),
     -1,
@@ -1565,7 +1610,14 @@ function ConversationWorkspace({
         <div ref={timelineContentRef} className="mx-auto w-full max-w-[820px] pb-12 pt-2 xl:pr-[72px]">
           <h1 className="sr-only">{title}</h1>
 
-          {hasOlderHistory ? (
+          {loadingHistory ? (
+            <div className="flex min-h-28 items-center justify-center gap-2 text-sm text-[var(--cp-text-faint)]" role="status">
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              <span>正在加载对话</span>
+            </div>
+          ) : null}
+
+          {!loadingHistory && hasOlderHistory ? (
             <div className="mb-5 flex justify-center">
               <Button
                 type="button"
@@ -1585,55 +1637,57 @@ function ConversationWorkspace({
             </div>
           ) : null}
 
-          <div className="space-y-6">
-            {timelineBeforeStatus.map((entry) =>
-              entry.type === "message" ? (
-                <ConversationTimelineMessage
-                  key={entry.message.id}
-                  message={entry.message}
-                  skills={skills}
-                  feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
-                  onMessageFeedback={onMessageFeedback}
-                />
-              ) : (
-                <GeneratedImageCard key={entry.image.id} image={entry.image} />
-              ),
-            )}
-            <ProcessingStatus
-              key={startedAt ?? "no-active-turn"}
-              running={running}
-              compacting={compacting}
-              durationMs={durationMs}
-              startedAt={startedAt}
-            />
-            {pendingUserInput ? (
-              <p className="cp-running-shimmer m-0 min-h-7 py-1 text-[13px]">正在等待你的回答</p>
-            ) : null}
-            {activeTimeline.length > 0 ? (
-              <div className="space-y-4">
-                {activeTimeline.map((entry) =>
-                  entry.type === "message" ? (
-                    <ConversationTimelineMessage
-                      key={entry.message.id}
-                      message={entry.message}
-                      skills={skills}
-                      feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
-                      onMessageFeedback={onMessageFeedback}
-                    />
-                  ) : entry.type === "image" ? (
-                    <GeneratedImageCard key={entry.image.id} image={entry.image} />
-                  ) : entry.type === "activity" ? (
-                    <ActivityRow key="current-turn-activity" activity={entry.activity} />
-                  ) : (
-                    <ActivityDisclosure
-                      key={`activity-disclosure-${currentTurnId ?? "completed"}`}
-                      activities={entry.activities}
-                    />
-                  ),
-                )}
-              </div>
-            ) : null}
-          </div>
+          {!loadingHistory ? (
+            <div className="space-y-6">
+              {timelineBeforeStatus.map((entry) =>
+                entry.type === "message" ? (
+                  <ConversationTimelineMessage
+                    key={entry.message.id}
+                    message={entry.message}
+                    skills={skills}
+                    feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
+                    onMessageFeedback={onMessageFeedback}
+                  />
+                ) : (
+                  <GeneratedImageCard key={entry.image.id} image={entry.image} />
+                ),
+              )}
+              <ProcessingStatus
+                key={startedAt ?? "no-active-turn"}
+                running={running}
+                compacting={compacting}
+                durationMs={durationMs}
+                startedAt={startedAt}
+              />
+              {pendingUserInput ? (
+                <p className="cp-running-shimmer m-0 min-h-7 py-1 text-[13px]">正在等待你的回答</p>
+              ) : null}
+              {activeTimeline.length > 0 ? (
+                <div className="space-y-4">
+                  {activeTimeline.map((entry) =>
+                    entry.type === "message" ? (
+                      <ConversationTimelineMessage
+                        key={entry.message.id}
+                        message={entry.message}
+                        skills={skills}
+                        feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
+                        onMessageFeedback={onMessageFeedback}
+                      />
+                    ) : entry.type === "image" ? (
+                      <GeneratedImageCard key={entry.image.id} image={entry.image} />
+                    ) : entry.type === "activity" ? (
+                      <ActivityRow key="current-turn-activity" activity={entry.activity} />
+                    ) : (
+                      <ActivityDisclosure
+                        key={`activity-disclosure-${currentTurnId ?? "completed"}`}
+                        activities={entry.activities}
+                      />
+                    ),
+                  )}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
 
           {error ? (
             <div className="mt-6 rounded-[var(--cp-radius-item)] bg-[var(--cp-danger-bg)] px-4 py-3 text-sm text-[var(--cp-danger)]" role="alert">

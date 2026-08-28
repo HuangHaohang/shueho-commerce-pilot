@@ -209,6 +209,7 @@ const codex = new CodexAppServerClient({
 const sseClients = new Map<ServerResponse, { threadId?: string }>();
 const turnTimeouts = new Map<string, NodeJS.Timeout>();
 const loadedThreadIds = new Set<string>();
+const threadResumePromises = new Map<string, Promise<void>>();
 const activeTurnsByThread = new Map<string, string>();
 const turnStartReservations = new Set<string>();
 const latestContextUsage = new Map<string, ThreadContextUsage>();
@@ -279,6 +280,7 @@ codex.on("event", (event: AppServerEvent) => {
   }
   if (event.type === "process" && event.event === "exit") {
     loadedThreadIds.clear();
+    threadResumePromises.clear();
     activeTurnsByThread.clear();
     turnStartReservations.clear();
     latestContextUsage.clear();
@@ -555,18 +557,20 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId);
-      // Resume first so persisted threads receive the current managed MCP catalog
-      // and runtime overrides before any read can load them with stale capabilities.
-      await ensureThreadLoaded(threadId);
+      // App Server read/list APIs can inspect persisted history without
+      // resuming the execution session. A new Turn owns resume/tool readiness.
+      await ensureCommerceWebMcpReady();
       const cursor = url.searchParams.get("cursor");
       const requestedLimit = Number(url.searchParams.get("limit") ?? "30");
       const limit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 100
         ? requestedLimit
         : 30;
-      const page = await readThreadPageWithStartupRetry(threadId, cursor, limit);
+      const [page, attachments] = await Promise.all([
+        readThreadPageWithStartupRetry(threadId, cursor, limit),
+        threadArtifacts.listForThread(threadId),
+      ]);
       const browserResult = await prepareThreadPageForBrowser(page.result);
       const generatedImageArtifacts = await generatedImages.listForThread(threadId);
-      const attachments = await threadArtifacts.listForThread(threadId);
       sendJson(res, 200, {
         result: browserResult,
         nextCursor: page.nextCursor,
@@ -584,9 +588,11 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId);
-      await ensureThreadLoaded(threadId);
-      const metadata = await readThreadWithStartupRetry(threadId, false);
-      const latest = await readTurnsPageWithStartupRetry(threadId, null, 1, "summary");
+      await ensureCommerceWebMcpReady();
+      const [metadata, latest] = await Promise.all([
+        readThreadWithStartupRetry(threadId, false),
+        readTurnsPageWithStartupRetry(threadId, null, 1, "summary"),
+      ]);
       sendJson(res, 200, {
         result: metadata,
         lastTurn: latest.data[0] ?? null,
@@ -689,7 +695,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId, config.titleModel);
-      await ensureThreadLoaded(threadId);
+      await ensureCommerceWebMcpReady();
       const result = (await readThreadPageWithStartupRetry(threadId, null, 20)).result;
       const titleContext = readThreadTitleContext(result);
       if (!titleContext) {
@@ -856,7 +862,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 409, { error: "Thread has an active turn and cannot be compacted." });
         return;
       }
-      await ensureThreadLoaded(threadId);
+      await ensureThreadResumed(threadId);
       const existing = compactionStates.get(threadId);
       if (existing) {
         sendJson(res, 202, { accepted: true, alreadyRunning: true, trigger: existing.trigger });
@@ -923,7 +929,7 @@ const server = createServer(async (req, res) => {
         if (body.model) {
           await provider.assertAgentModel(body.model);
         }
-        await ensureThreadLoaded(threadId, body.model);
+        await ensureThreadToolsReady(threadId, body.model);
         const activeTurnId = await readHarnessActiveTurnId(threadId);
         if (activeTurnId) {
           if (workflow || skillName || attachmentIds.length) {
@@ -1023,7 +1029,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId);
-      await ensureThreadLoaded(threadId);
+      await ensureThreadResumed(threadId);
       const result = await codex.request("thread/queue/list", {
         threadId,
         cursor: null,
@@ -1057,7 +1063,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 409, { error: "Thread context is being compacted and cannot accept queued input." });
         return;
       }
-      await ensureThreadLoaded(threadId);
+      await ensureThreadResumed(threadId);
       const result = await serializeSteerTransition(threadId, () =>
         addQueuedSubmissionWithCapacity(threadId, clientUserMessageId, message),
       );
@@ -1074,7 +1080,7 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId);
-      await ensureThreadLoaded(threadId);
+      await ensureThreadResumed(threadId);
       if (req.method === "DELETE") {
         const result = await serializeSteerTransition(threadId, () =>
           codex.request("thread/queue/delete", { threadId, queuedSubmissionId }),
@@ -1118,7 +1124,7 @@ const server = createServer(async (req, res) => {
       }
       bindRequestRuntimeScope(req, threadId);
       try {
-        await ensureThreadLoaded(threadId);
+        await ensureThreadToolsReady(threadId);
         const result = await serializeSteerTransition(threadId, () =>
           promoteQueuedSubmissionToSteer(
             threadId,
@@ -1999,11 +2005,13 @@ async function readThreadPageWithStartupRetry(
   cursor: string | null,
   limit: number,
 ): Promise<{ result: Record<string, unknown>; nextCursor: string | null }> {
-  const metadata = await readThreadWithStartupRetry(threadId, false);
+  const [metadata, page] = await Promise.all([
+    readThreadWithStartupRetry(threadId, false),
+    readTurnsPageWithStartupRetry(threadId, cursor, limit, "full"),
+  ]);
   if (!isRecord(metadata) || !isRecord(metadata.thread)) {
     throw new Error("Codex App Server returned invalid thread metadata.");
   }
-  const page = await readTurnsPageWithStartupRetry(threadId, cursor, limit, "full");
   return {
     result: {
       ...metadata,
@@ -2157,6 +2165,7 @@ async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void
     if (activeTurnId) clearTurnTimeout(activeTurnId);
     activeTurnsByThread.delete(deletedThreadId);
     loadedThreadIds.delete(deletedThreadId);
+    threadResumePromises.delete(deletedThreadId);
     turnStartReservations.delete(deletedThreadId);
     latestContextUsage.delete(deletedThreadId);
     pendingTurnModels.delete(deletedThreadId);
@@ -2190,29 +2199,39 @@ function isNodeNotFoundError(error: unknown): boolean {
   return isRecord(error) && error.code === "ENOENT";
 }
 
-async function ensureThreadLoaded(threadId: string, model?: string): Promise<void> {
+async function ensureThreadResumed(threadId: string, model?: string): Promise<void> {
   await ensureCommerceWebMcpReady();
-  if (loadedThreadIds.has(threadId)) {
-    await ensureCommerceWebMcpReadyForThread(threadId);
-    return;
-  }
-  await codex.request("thread/resume", {
-    threadId,
-    model: model ?? config.defaultModel,
-    modelProvider: config.defaultModelProvider,
-    cwd: config.runtimeRoot,
-    approvalPolicy: "never",
-    sandbox: "read-only",
-    config: createRuntimeRequestConfig(),
-    developerInstructions: createRuntimeDeveloperInstructions(),
-    excludeTurns: true,
-  }).catch((error) => {
-    if (isMissingCodexThreadError(error)) {
-      throw new GatewayRequestError("Thread not found.", 404);
-    }
-    throw error;
-  });
-  loadedThreadIds.add(threadId);
+  if (loadedThreadIds.has(threadId)) return;
+  const existing = threadResumePromises.get(threadId);
+  if (existing) return existing;
+  const promise = codex
+    .request("thread/resume", {
+      threadId,
+      model: model ?? config.defaultModel,
+      modelProvider: config.defaultModelProvider,
+      cwd: config.runtimeRoot,
+      approvalPolicy: "never",
+      sandbox: "read-only",
+      config: createRuntimeRequestConfig(),
+      developerInstructions: createRuntimeDeveloperInstructions(),
+      excludeTurns: true,
+    })
+    .then(() => {
+      loadedThreadIds.add(threadId);
+    })
+    .catch((error) => {
+      if (isMissingCodexThreadError(error)) {
+        throw new GatewayRequestError("Thread not found.", 404);
+      }
+      throw error;
+    })
+    .finally(() => threadResumePromises.delete(threadId));
+  threadResumePromises.set(threadId, promise);
+  return promise;
+}
+
+async function ensureThreadToolsReady(threadId: string, model?: string): Promise<void> {
+  await ensureThreadResumed(threadId, model);
   await ensureCommerceWebMcpReadyForThread(threadId);
 }
 
@@ -2222,11 +2241,25 @@ async function ensureCommerceWebMcpReadyForThread(threadId: string): Promise<voi
   if (existing) return existing;
 
   const promise = (async () => {
-    // App Server reload refreshes already-loaded threads. A global-ready MCP
-    // catalog alone does not prove that a resumed thread received the tool.
+    let lastStatus = readManagedMcpStatus(null, "commerce_web");
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const result = await codex.request(
+        "mcpServerStatus/list",
+        { threadId, cursor: null, limit: 100, detail: "toolsAndAuthOnly" },
+        10_000,
+      );
+      lastStatus = readManagedMcpStatus(result, "commerce_web");
+      if (lastStatus.available && lastStatus.tools.includes("search")) {
+        managedMcpReadyThreadIds.add(threadId);
+        return;
+      }
+      if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    // Reload only after the resumed thread failed to expose the current MCP
+    // catalog naturally. This keeps read-only task switching off the reload path.
     await codex.request("config/mcpServer/reload", undefined, 30_000);
     const deadline = Date.now() + 20_000;
-    let lastStatus = readManagedMcpStatus(null, "commerce_web");
     while (Date.now() < deadline) {
       const result = await codex.request(
         "mcpServerStatus/list",
@@ -2863,7 +2896,7 @@ async function revokeRuntimeRoot(scope: RuntimeScope): Promise<boolean> {
   const interruptsAccepted = interruptionResults.every((result) => result.status === "fulfilled");
   let queueEmpty = false;
   try {
-    await ensureThreadLoaded(scope.rootThreadId);
+    await ensureThreadResumed(scope.rootThreadId);
     queueEmpty = await serializeSteerTransition(scope.rootThreadId, async () => {
       const listed = await codex.request("thread/queue/list", {
         threadId: scope.rootThreadId,

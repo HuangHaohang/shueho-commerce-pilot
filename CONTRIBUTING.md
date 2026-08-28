@@ -56,6 +56,7 @@ npm run jobs:thread-deletion
 - App Server fixes dynamic tools at `thread/start`. Register configured business tools deterministically, validate connectivity at call time, and increment the persisted task tool-contract version when the schema changes; never pretend `thread/resume` updated tools.
 - Image generation uses native `image_gen` and `imageGeneration` Items. Gateway may persist and project an ownership-checked artifact, but may not make a duplicate provider image call or expose native base64/host paths to the browser.
 - Conversation history uses `thread/turns/list` and `thread/items/list` pagination. Poll metadata/latest status for running tasks rather than re-reading all Turns.
+- Read-only task opening must use persisted `thread/read`/`thread/turns/list` without `thread/resume` or per-thread MCP readiness. Resume and enforce tools synchronously only before a model-executing Turn.
 - Browser -> Next.js BFF -> private Gateway -> App Server is mandatory.
 - Browser input cannot control runtime policy, paths, provider identity, Tools, Hooks, Skills, or tenant scope.
 - Commerce writes require authorization, approval, idempotency, audit, and downstream readback.

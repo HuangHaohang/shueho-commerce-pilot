@@ -43,11 +43,17 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
     const gatewayPath = `/api/threads/${encodeURIComponent(threadId)}${
       cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""
     }`;
-    const response = await fetch(gatewayUrl(gatewayPath), {
-      headers: gatewayHeaders(undefined, enterpriseContext),
-      cache: "no-store",
-      signal: AbortSignal.timeout(30_000),
-    });
+    const [response, [userInputAnswers, messageFeedback]] = await Promise.all([
+      fetch(gatewayUrl(gatewayPath), {
+        headers: gatewayHeaders(undefined, enterpriseContext),
+        cache: "no-store",
+        signal: AbortSignal.timeout(30_000),
+      }),
+      Promise.all([
+        listAgentUserInputAnswers(enterpriseContext, threadId),
+        listAgentMessageFeedback(enterpriseContext, threadId),
+      ]),
+    ]);
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok || !payload) {
       const upstreamMessage = payload && typeof payload.error === "string" ? payload.error : "";
@@ -60,10 +66,6 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
         { status },
       );
     }
-    const [userInputAnswers, messageFeedback] = await Promise.all([
-      listAgentUserInputAnswers(enterpriseContext, threadId),
-      listAgentMessageFeedback(enterpriseContext, threadId),
-    ]);
     const normalized = normalizeThreadHistory(payload, record, userInputAnswers, messageFeedback);
     if (!cursor) {
       await updateAgentThreadStatus(

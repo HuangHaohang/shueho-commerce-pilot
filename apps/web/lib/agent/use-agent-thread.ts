@@ -230,6 +230,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const pendingSubmitClientIdRef = useRef<string | null>(null);
   const pendingSubmitStartedAtRef = useRef<number | null>(null);
   const historySequenceFloorRef = useRef(0);
+  const historyLoadRequestRef = useRef(0);
+  const historyLoadControllerRef = useRef<AbortController | null>(null);
 
   const refreshQueue = useCallback(async (id: string): Promise<void> => {
     try {
@@ -773,6 +775,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
 
   const resetThread = useCallback(() => {
+    historyLoadRequestRef.current += 1;
+    historyLoadControllerRef.current?.abort();
+    historyLoadControllerRef.current = null;
     eventSourceRef.current?.close();
     eventSourceRef.current = null;
     sequenceRef.current = 0;
@@ -812,10 +817,37 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
 
   const loadThread = useCallback(
     async (summary: AgentThreadSummary): Promise<boolean> => {
+      const requestId = ++historyLoadRequestRef.current;
+      historyLoadControllerRef.current?.abort();
+      const controller = new AbortController();
+      historyLoadControllerRef.current = controller;
       setLoadingHistory(true);
       setError(null);
+      sequenceRef.current = 0;
+      activeTurnIdRef.current = null;
+      startedAtRef.current = null;
+      runtimeInstanceIdRef.current = null;
+      compactingRef.current = false;
+      setThreadId(summary.threadId);
+      setThreadTitle(summary.title);
+      setMessages([]);
+      setActivities([]);
+      setImages([]);
+      setStatus("connecting");
+      setActiveTurnId(null);
+      setLastTurnId(null);
+      setDurationMs(null);
+      setStartedAt(null);
+      setInterrupting(false);
+      setLoadingOlderHistory(false);
+      setHistoryCursor(null);
+      setCompacting(false);
+      setQueuedMessages([]);
+      setQueueSubmitting(false);
+      setQueueOperationId(null);
       pendingUserInputRef.current = null;
       setPendingUserInput(null);
+      setAnsweringUserInput(false);
       setFeedbackError(null);
       feedbackSubmittingIdsRef.current.clear();
       setFeedbackSubmittingIds(new Set());
@@ -826,11 +858,15 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       try {
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(summary.threadId)}`, {
           cache: "no-store",
+          signal: controller.signal,
         });
         const payload = (await response.json().catch(() => null)) as StoredThreadResponse | { error?: string } | null;
+        if (controller.signal.aborted || requestId !== historyLoadRequestRef.current) return false;
         if (!response.ok || !payload || !("thread" in payload)) {
           if (response.status === 404) {
             resetThread();
+          } else {
+            setStatus("failed");
           }
           setError(payload && "error" in payload && typeof payload.error === "string" ? payload.error : "无法读取对话记录。");
           return false;
@@ -871,21 +907,32 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setInterrupting(false);
         setCompacting(restoredCompacting);
         setQueuedMessages([]);
-        await refreshQueue(payload.thread.id);
+        void refreshQueue(payload.thread.id);
         if (payload.thread.status === "running") {
-          await refreshPendingUserInput(payload.thread.id);
-          await connectEventStream(payload.thread.id);
+          void refreshPendingUserInput(payload.thread.id);
+          void connectEventStream(payload.thread.id).catch(() => undefined);
         } else {
           pendingUserInputRef.current = null;
           setPendingUserInput(null);
           setAnsweringUserInput(false);
         }
         return true;
-      } catch {
+      } catch (loadError) {
+        if (
+          controller.signal.aborted ||
+          requestId !== historyLoadRequestRef.current ||
+          (loadError instanceof DOMException && loadError.name === "AbortError")
+        ) {
+          return false;
+        }
+        setStatus("failed");
         setError("无法读取对话记录。");
         return false;
       } finally {
-        setLoadingHistory(false);
+        if (requestId === historyLoadRequestRef.current) {
+          if (historyLoadControllerRef.current === controller) historyLoadControllerRef.current = null;
+          setLoadingHistory(false);
+        }
       }
     },
     [connectEventStream, refreshPendingUserInput, refreshQueue, resetThread, runtimeHealth?.instanceId],
@@ -1415,6 +1462,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
 
   useEffect(() => {
     return () => {
+      historyLoadControllerRef.current?.abort();
       eventSourceRef.current?.close();
     };
   }, []);

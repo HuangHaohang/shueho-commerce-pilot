@@ -42,7 +42,7 @@ Every new Codex thread is recorded in `commerce_agent_thread` with its authentic
 
 The thread index also stores title, timestamps, and the dynamic-tool contract version created at `thread/start`. Message history remains App Server-owned: refresh reads metadata plus paginated `thread/turns/list`, and Gateway calls `thread/resume` before the first new turn after a process restart. PostgreSQL does not duplicate raw conversation bodies or falsely upgrade an old thread's fixed dynamic-tool catalog.
 
-The index stores the last known runtime status, active turn id, turn start time, and duration. The sidebar polls only while at least one thread is running and reconciles each row against thread metadata plus one summary Turn, not full history. This supports concurrent turns across different owned threads without mirroring conversation content into PostgreSQL.
+The index stores the last known runtime status, active turn id, turn start time, and duration. The sidebar polls only while at least one thread is running and reconciles each row against thread metadata plus one summary Turn, not full history. It also sequentially prewarms that read-only persisted status endpoint for the twelve most recent owned tasks. Opening history never resumes execution; resume and MCP readiness occur only before a new Turn.
 
 The runtime disables host shell/filesystem capabilities and runs from an app-owned runtime directory. This prevents an end user from turning the web agent into a deployment-host coding agent.
 

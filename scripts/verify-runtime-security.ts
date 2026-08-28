@@ -18,6 +18,10 @@ const externalDataClientSource = await readFile(
 );
 const userInputSource = await readFile(resolve("src/gateway/request-user-input.ts"), "utf8");
 const agentThreadSource = await readFile(resolve("apps/web/lib/agent/use-agent-thread.ts"), "utf8");
+const workbenchSource = await readFile(
+  resolve("apps/web/components/shell/commerce-workbench-shell.tsx"),
+  "utf8",
+);
 const copywritingBriefSource = await readFile(resolve("apps/web/lib/copywriting/brief.ts"), "utf8");
 const providerClientSource = await readFile(resolve("src/provider/commerce-provider-client.ts"), "utf8");
 const runtimeRelativePath = relative(config.codexHome, config.runtimeRoot);
@@ -74,6 +78,13 @@ if (gatewaySource.includes("PendingSteerStore") || gatewaySource.includes("Pendi
 if (!gatewaySource.includes('codex.request("thread/turns/list"')) {
   throw new Error("Gateway history reads must use the paginated Harness Turn API.");
 }
+if (
+  !gatewaySource.includes("async function ensureThreadResumed") ||
+  !gatewaySource.includes("threadResumePromises") ||
+  !gatewaySource.includes("App Server read/list APIs can inspect persisted history without")
+) {
+  throw new Error("History reads must avoid resume while model execution deduplicates it.");
+}
 if (gatewaySource.includes("includeTurns: true")) {
   throw new Error("Gateway must not load complete thread history through thread/read.");
 }
@@ -97,6 +108,15 @@ if (agentThreadSource.includes("failActiveTurn") || agentThreadSource.includes("
 }
 if (!agentThreadSource.includes("/status") || !agentThreadSource.includes("hasOlderHistory")) {
   throw new Error("Browser must reconcile through lightweight status and paginated history APIs.");
+}
+if (
+  !agentThreadSource.includes("historyLoadControllerRef") ||
+  !agentThreadSource.includes("setThreadId(summary.threadId)")
+) {
+  throw new Error("Browser task selection must switch immediately and cancel stale history loads.");
+}
+if (!workbenchSource.includes("warmedThreadIdsRef") || !workbenchSource.includes("/status")) {
+  throw new Error("Workbench must prewarm recent task status without loading conversation bodies.");
 }
 if (copywritingBriefSource.includes("buildCopywritingRecipeExecutionPrompt")) {
   throw new Error("Copywriting UI must submit the original user input and rely on the native Skill item.");
