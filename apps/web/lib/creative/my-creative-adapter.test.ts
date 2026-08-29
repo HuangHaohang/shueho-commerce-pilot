@@ -9,7 +9,7 @@ describe("my creative dashboard adapter", () => {
     const dashboard = getMockMyCreativeDashboard(projects);
 
     expect(dashboard.focuses[0].projectName).toBe(projects[0].name);
-    expect(dashboard.focuses[0].sourceTask).toBe(projects[0].linkedTask?.name);
+    expect(dashboard.focuses[0].sourceTask).toBe(projects[0].linkedTasks[0]?.name);
     expect(dashboard.summaries.map((summary) => summary.id)).toEqual(["pending", "today", "overdue", "risk"]);
     expect(dashboard.stages.reduce((total, stage) => total + stage.count, 0)).toBe(dashboard.summaries[0].value);
     expect(dashboard.focuses[0].platforms).toEqual(projects[0].platforms);

@@ -40,6 +40,7 @@ type OpenCreativeProject = (projectId: string, chapter?: CreativeProjectChapter)
 type MyCreativeDashboardPageProps = {
   projects: CreativeProject[];
   onOpenProject: OpenCreativeProject;
+  onCreateProjectForTask: (projectId: string) => void;
 };
 
 const timeRanges: Array<{ id: MyCreativeTimeRange; label: string }> = [
@@ -50,7 +51,7 @@ const timeRanges: Array<{ id: MyCreativeTimeRange; label: string }> = [
 
 const recentTabs: MyCreativeRecentTab[] = ["最近创作", "最近产出", "即将开始"];
 
-export function MyCreativeDashboardPage({ projects, onOpenProject }: MyCreativeDashboardPageProps) {
+export function MyCreativeDashboardPage({ projects, onOpenProject, onCreateProjectForTask }: MyCreativeDashboardPageProps) {
   const [range, setRange] = useState<MyCreativeTimeRange>("week");
   const [query, setQuery] = useState("");
   const [focusIndex, setFocusIndex] = useState(0);
@@ -111,7 +112,7 @@ export function MyCreativeDashboardPage({ projects, onOpenProject }: MyCreativeD
 
         <div className="mt-5 grid min-w-0 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="min-w-0">
-            <MyTaskList actions={visible.actions} onOpenProject={onOpenProject} />
+            <MyTaskList actions={visible.actions} onOpenProject={onOpenProject} onCreateProjectForTask={onCreateProjectForTask} />
             <MyRecentTabs activeTab={recentTab} items={recent} onTabChange={setRecentTab} onOpenProject={onOpenProject} />
           </div>
 
@@ -222,7 +223,7 @@ function MyWorkOverview({ summaries, stages, onOpenStage }: {
   );
 }
 
-function MyTaskList({ actions, onOpenProject, title = "待办任务", description = "" }: { actions: MyCreativeAction[]; onOpenProject: OpenCreativeProject; title?: string; description?: string }) {
+function MyTaskList({ actions, onOpenProject, onCreateProjectForTask, title = "待办任务", description = "" }: { actions: MyCreativeAction[]; onOpenProject: OpenCreativeProject; onCreateProjectForTask?: (projectId: string) => void; title?: string; description?: string }) {
   const tasksPerPage = 3;
   const [groupPages, setGroupPages] = useState<Record<string, number>>({});
   const groups = (["今天", "明天", "之后"] as const).map((label) => ({ label, items: actions.filter((item) => item.group === label) })).filter((group) => group.items.length);
@@ -235,7 +236,7 @@ function MyTaskList({ actions, onOpenProject, title = "待办任务", descriptio
           const page = Math.min(groupPages[group.label] ?? 0, totalPages - 1);
           const pageItems = group.items.slice(page * tasksPerPage, (page + 1) * tasksPerPage);
           const setPage = (nextPage: number) => setGroupPages((current) => ({ ...current, [group.label]: nextPage }));
-          return <section key={group.label} aria-label={`${group.label}的任务`}><div className="flex items-center justify-between gap-3 border-b border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] px-5 py-2 sm:px-6"><p className="m-0 flex items-center gap-2 text-[10px] font-semibold text-[var(--cp-text-muted)]"><span className={cn("size-1.5 rounded-full", group.label === "今天" ? "bg-[var(--cp-danger)]" : "bg-[var(--cp-text-faint)]")} />{group.label}</p><div className="flex items-center gap-1.5"><span className="text-[10px] text-[var(--cp-text-faint)]" aria-live="polite">{page + 1} / {totalPages}</span><button type="button" className="flex size-6 items-center justify-center rounded-[var(--cp-radius-item)] text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-muted)] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => setPage(page - 1)} disabled={page === 0} aria-label={`${group.label}上一页任务`}><ChevronLeft className="size-3.5" /></button><button type="button" className="flex size-6 items-center justify-center rounded-[var(--cp-radius-item)] text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-muted)] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => setPage(page + 1)} disabled={page >= totalPages - 1} aria-label={`${group.label}下一页任务`}><ChevronRight className="size-3.5" /></button></div></div>{pageItems.map((action) => <button key={action.id} type="button" className="group grid w-full gap-2 border-b border-[var(--cp-border-subtle)] px-5 py-4 text-left transition-colors hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--cp-focus)] sm:px-6 md:grid-cols-[86px_minmax(0,1fr)_120px] md:items-center" onClick={() => onOpenProject(action.projectId, action.chapter)}><span className="w-fit rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] px-2.5 py-1 text-[10px] font-medium text-[var(--cp-text-soft)]">{action.stage}</span><span className="min-w-0"><span className="block text-sm font-semibold leading-relaxed group-hover:underline">{action.title}</span><span className="mt-1 block truncate text-xs text-[var(--cp-text-muted)]">{action.projectName} · {action.status}</span></span><span className="flex items-center justify-between gap-3 text-xs text-[var(--cp-text-muted)] md:justify-end"><Clock3 className="size-3.5 text-[var(--cp-text-faint)]" /><span>{action.schedule}</span><ChevronRight className="size-4 text-[var(--cp-text-faint)] transition-transform group-hover:translate-x-0.5" /></span></button>)}</section>;
+          return <section key={group.label} aria-label={`${group.label}的任务`}><div className="flex items-center justify-between gap-3 border-b border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] px-5 py-2 sm:px-6"><p className="m-0 flex items-center gap-2 text-[10px] font-semibold text-[var(--cp-text-muted)]"><span className={cn("size-1.5 rounded-full", group.label === "今天" ? "bg-[var(--cp-danger)]" : "bg-[var(--cp-text-faint)]")} />{group.label}</p><div className="flex items-center gap-1.5"><span className="text-[10px] text-[var(--cp-text-faint)]" aria-live="polite">{page + 1} / {totalPages}</span><button type="button" className="flex size-6 items-center justify-center rounded-[var(--cp-radius-item)] text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-muted)] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => setPage(page - 1)} disabled={page === 0} aria-label={`${group.label}上一页任务`}><ChevronLeft className="size-3.5" /></button><button type="button" className="flex size-6 items-center justify-center rounded-[var(--cp-radius-item)] text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-muted)] disabled:cursor-not-allowed disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => setPage(page + 1)} disabled={page >= totalPages - 1} aria-label={`${group.label}下一页任务`}><ChevronRight className="size-3.5" /></button></div></div>{pageItems.map((action) => <div key={action.id} className="grid w-full gap-2 border-b border-[var(--cp-border-subtle)] px-5 py-4 text-left sm:px-6 md:grid-cols-[86px_minmax(0,1fr)_auto] md:items-center"><span className="w-fit rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-subtle)] px-2.5 py-1 text-[10px] font-medium text-[var(--cp-text-soft)]">{action.stage}</span><button type="button" className="group min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => onOpenProject(action.projectId, action.chapter)}><span className="block text-sm font-semibold leading-relaxed group-hover:underline">{action.title}</span><span className="mt-1 block truncate text-xs text-[var(--cp-text-muted)]">{action.projectName} · {action.status}</span></button><span className="flex items-center justify-between gap-3 text-xs text-[var(--cp-text-muted)] md:justify-end"><span className="flex items-center gap-2"><Clock3 className="size-3.5 text-[var(--cp-text-faint)]" />{action.schedule}</span>{onCreateProjectForTask ? <button type="button" className="rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] px-2.5 py-1.5 text-[11px] font-medium text-[var(--cp-text-muted)] hover:border-[var(--cp-border-strong)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => onCreateProjectForTask(action.projectId)}>创建项目</button> : <ChevronRight className="size-4 text-[var(--cp-text-faint)]" />}</span></div>)}</section>;
         })}
         {!actions.length ? <div className="px-6 py-12"><p className="m-0 text-sm font-medium">当前没有需要处理的任务</p><p className="mb-0 mt-2 text-xs text-[var(--cp-text-muted)]">调整时间范围或搜索条件后再查看。</p></div> : null}
       </div>

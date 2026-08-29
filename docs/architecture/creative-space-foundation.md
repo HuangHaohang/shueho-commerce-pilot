@@ -18,17 +18,17 @@ Creative Space
     └── Video generation
 ```
 
-`My Work` is a derived personal view and is not a persisted business entity. A project may have one lead and multiple participating members. One project may contain multiple script, edit, and platform-release versions, but it must not combine unrelated core topics.
+`My Work` is a derived personal view and is not a persisted business entity. A project may have one lead and multiple participating members. One project may contain one standalone-video task or multiple related short-video tasks; they share the project's confirmed context but retain their own production work. One project may contain multiple script, edit, and platform-release versions, but it must not combine unrelated core topics.
 
 ## Project Chapters
 
-The project-level chapter index is `Overview`, `Requirements`, `Product`, `Topic`, `Format`, `Script`, `Shooting`, `Editing`, `Final`, `Data`, and `Review`. AI pre-review, final shooting script, and video review belong inside their relevant chapters rather than becoming project-level stages.
+The project-level chapter index is `Overview`, `Product Confirmation`, `Requirements`, `Topic`, `Format`, `Script`, `Shooting`, `Editing`, `Final`, `Data`, and `Review`. Product Confirmation establishes the selected product/SKU, current version, verified facts, references, and gaps before Requirements creates the reusable Creative Brief. AI pre-review, final shooting script, and video review belong inside their relevant chapters rather than becoming project-level stages.
 
 The chapter index is navigational, not an approval workflow. Users can move freely between chapters, and the UI must read as a growing creative document rather than a project-management record.
 
 ## Integration Boundaries
 
-- A content project may have zero or one source task; one task may create multiple content projects.
+- A content project may have zero or more linked short-video tasks; a task may create multiple content projects.
 - Project creation can begin from either New Task or Creative Space. Phase one implements only the Creative Space mock interaction.
 - Research and knowledge-library records will be referenced rather than copied into project fields.
 - Project history retains working output automatically. Publishing selected results to the team knowledge library requires explicit human confirmation; AI may recommend but may not publish automatically.
@@ -37,7 +37,7 @@ The chapter index is navigational, not an approval workflow. Users can move free
 
 ## Phase-One Implementation
 
-The browser uses typed adapter boundaries with in-memory mock implementations. `CreativeSpaceAdapter` owns mock projects, people, products, inspiration, and project creation. `my-creative-adapter` derives the personal dashboard from those projects plus short-video task facts, including production stages, next actions, collaboration activity, and recent outputs. This keeps task-system mapping and future role-based ordering outside page components while the BFF contract is pending. No database schema or persistence claim is introduced in this phase.
+The browser uses typed adapter boundaries with in-memory mock implementations. `CreativeSpaceAdapter` owns mock projects, people, products, inspiration, system documents, project creation, and per-chapter edits. A chapter can directly reference existing system documents and retain authored notes in the current browser session; this is not yet a persistent document-management integration. `my-creative-adapter` derives the personal dashboard from those projects plus short-video task facts, including production stages, next actions, collaboration activity, and recent outputs. This keeps task-system mapping and future role-based ordering outside page components while the BFF contract is pending. No database schema or persistence claim is introduced in this phase.
 
 `My Work` is presented as a creator dashboard rather than a team or task-system dashboard. Its production track filters the next-action list, its focus area selects the most valuable content to continue, and its activity and recent-output sections link back to existing content projects. Search, time, role, stage, focus switching, and recent-content tabs are client-side interactions over adapter data in this phase.
 

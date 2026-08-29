@@ -159,7 +159,7 @@ export function getMockMyCreativeDashboard(
       { id: "recent-1", projectId: "project-oil-pot-no-straw", title: "脚本 V4", projectName: oilPot, kind: "脚本", meta: "今天 10:42 编辑", tab: "最近创作", role: "策划", chapter: "脚本", ranges: allRanges },
       { id: "recent-2", projectId: "project-mini-knife-pov-fruit", title: "办公室场景拍摄准备", projectName: miniKnife, kind: "拍摄准备", meta: "昨天 18:16 编辑", tab: "最近创作", role: "拍摄", chapter: "拍摄", ranges: weekRanges },
       { id: "recent-3", projectId: "project-mini-knife-pov-fruit", title: "最终拍摄版脚本", projectName: miniKnife, kind: "阶段成果", meta: "昨天形成", tab: "最近产出", role: "策划", chapter: "脚本", ranges: weekRanges },
-      { id: "recent-4", projectId: "project-oil-pot-no-straw", title: "产品问题拆解 V2", projectName: oilPot, kind: "阶段成果", meta: "本周二形成", tab: "最近产出", role: "策划", chapter: "产品", ranges: weekRanges },
+      { id: "recent-4", projectId: "project-oil-pot-no-straw", title: "产品问题拆解 V2", projectName: oilPot, kind: "阶段成果", meta: "本周二形成", tab: "最近产出", role: "策划", chapter: "产品确认", ranges: weekRanges },
       { id: "recent-5", projectId: "project-lunch-bag-commute", title: "通勤桌面收纳对比", projectName: lunchBag, kind: "选题", meta: "明天开始 · 你负责策划", tab: "即将开始", role: "策划", chapter: "选题", ranges: weekRanges },
       { id: "recent-6", projectId: "project-oil-pot-no-straw", title: "清洁过程补拍", projectName: oilPot, kind: "拍摄", meta: "周五开始 · 你参与确认", tab: "即将开始", role: "拍摄", chapter: "拍摄", ranges: weekRanges },
     ],

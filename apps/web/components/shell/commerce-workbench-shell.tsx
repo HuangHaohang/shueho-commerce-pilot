@@ -388,6 +388,21 @@ export function CommerceWorkbenchShell({
         }
       : null,
   });
+  const productInsightThread = useAgentThread({
+    model: selectedModel,
+    effort: supportsReasoningControl(selectedModel) ? reasoningEffort : undefined,
+    runtimeHealth: healthQuery.data
+      ? {
+          available:
+            healthQuery.data.ok === true &&
+            healthQuery.data.codex?.running === true &&
+            healthQuery.data.codex?.initialized === true,
+          observedAt: healthQuery.dataUpdatedAt,
+          instanceId: healthQuery.data.instanceId,
+          maxTurnDurationMs: healthQuery.data.runtimePolicy?.maxTurnDurationMs ?? 600_000,
+        }
+      : null,
+  });
   const hasActiveThread = Boolean(agentThread.threadId || agentThread.messages.length);
   const navigationLocked = agentThread.status === "connecting" && !agentThread.threadId;
   const deletingThreadIds = useMemo(
@@ -643,6 +658,17 @@ export function CommerceWorkbenchShell({
     setActiveView("creative");
   }
 
+  async function runProductInsight(prompt: string, attachments: PendingAttachmentUpload[]) {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return false;
+    }
+    if (productInsightThread.status === "connecting" || productInsightThread.status === "running" || productInsightThread.compacting) {
+      return false;
+    }
+    return productInsightThread.submit(prompt, { workflow: "product-insight", attachments });
+  }
+
   async function executeCopywritingRecipe(goal: string) {
     const attachmentsForSubmit = takeComposerAttachments();
     const submitted = await agentThread.submit(buildCopywritingRecipeExecutionPrompt(goal), {
@@ -806,7 +832,11 @@ export function CommerceWorkbenchShell({
         ) : activeView === "skills" ? (
           <SkillsDirectory onUseSkill={useSkill} />
         ) : activeView === "creative" ? (
-          <CreativeSpaceWorkspace onOpenCopywriting={openCopywriting} />
+          <CreativeSpaceWorkspace
+            onOpenCopywriting={openCopywriting}
+            onRunProductInsight={runProductInsight}
+            productInsight={{ status: productInsightThread.status, error: productInsightThread.error, messages: productInsightThread.messages }}
+          />
         ) : activeView === "copywriting" && !agentThread.threadId ? (
           <CopywritingWorkspace
             error={agentThread.error}

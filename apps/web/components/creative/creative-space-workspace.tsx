@@ -5,34 +5,44 @@ import {
   ArrowRight,
   BookOpenText,
   Check,
+  ChevronDown,
   Clapperboard,
   FileText,
   ImageIcon,
+  Link2,
   ListFilter,
+  Pencil,
   Plus,
+  Save,
   Search,
   Sparkles,
   Users,
+  X,
   Video,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { MyCreativeDashboardPage } from "@/components/creative/my-creative-dashboard";
+import { ProductConfirmationWorkspace } from "@/components/creative/product-confirmation-workspace";
+import { RequirementBriefWorkspace } from "@/components/creative/requirement-brief-workspace";
+import type { ConversationMessage, PendingAttachmentUpload } from "@/lib/agent/use-agent-thread";
 import {
   creativeProjectChapters,
   creativeSpaceAdapter,
   type CreateCreativeProjectInput,
+  type CreativeDocument,
   type CreativeProject,
   type CreativeProjectChapter,
   type CreativeSpaceSnapshot,
 } from "@/lib/creative/creative-space-adapter";
+import { requirementBriefAdapter } from "@/lib/creative/requirement-brief-adapter";
 import { cn } from "@/lib/utils";
 
 type CreativeSection = "my-work" | "projects" | "inspiration" | "toolbox";
 type CreativeRoute =
   | { kind: "section"; section: CreativeSection }
-  | { kind: "create-project" }
+  | { kind: "create-project"; preselectedTaskId?: string }
   | {
       kind: "project";
       projectId: string;
@@ -47,7 +57,11 @@ const sectionItems: Array<{ id: CreativeSection; label: string }> = [
   { id: "toolbox", label: "AI 工具箱" },
 ];
 
-export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywriting: () => void }) {
+export function CreativeSpaceWorkspace({ onOpenCopywriting, onRunProductInsight, productInsight }: {
+  onOpenCopywriting: () => void;
+  onRunProductInsight: (prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>;
+  productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] };
+}) {
   const [snapshot, setSnapshot] = useState<CreativeSpaceSnapshot>(() => creativeSpaceAdapter.getSnapshot());
   const [route, setRoute] = useState<CreativeRoute>({ kind: "section", section: "my-work" });
 
@@ -62,6 +76,36 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywritin
     const project = creativeSpaceAdapter.createProject(input);
     setSnapshot(creativeSpaceAdapter.getSnapshot());
     setRoute({ kind: "project", projectId: project.id, returnSection: "projects" });
+  }
+
+  function createProjectFromTask(projectId: string) {
+    const sourceProject = snapshot.projects.find((project) => project.id === projectId);
+    const task = sourceProject?.linkedTasks[0];
+    if (!task) {
+      setRoute({ kind: "create-project" });
+      return;
+    }
+    const project = creativeSpaceAdapter.createProject({
+      name: task.name,
+      linkedTaskIds: [task.id],
+      productIds: [],
+      platforms: sourceProject?.platforms.length ? sourceProject.platforms : ["抖音"],
+      contentGoal: `完成「${task.name}」对应的视频内容。`,
+      leadId: sourceProject?.lead.id ?? snapshot.people[0]?.id ?? "",
+      memberIds: [],
+    });
+    setSnapshot(creativeSpaceAdapter.getSnapshot());
+    setRoute({ kind: "project", projectId: project.id, returnSection: "my-work" });
+  }
+
+  function updateChapter(input: { projectId: string; chapter: Exclude<CreativeProjectChapter, "概览">; body: string; documentIds: string[] }) {
+    creativeSpaceAdapter.updateChapter(input);
+    setSnapshot(creativeSpaceAdapter.getSnapshot());
+  }
+
+  function updateProductBrief(input: { projectId: string; brief: import("@/lib/creative/creative-space-adapter").CreativeProductBrief }) {
+    creativeSpaceAdapter.updateProductBrief(input);
+    setSnapshot(creativeSpaceAdapter.getSnapshot());
   }
 
   const selectedProject =
@@ -107,6 +151,7 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywritin
           <MyCreativeDashboardPage
             projects={snapshot.projects}
             onOpenProject={(projectId, chapter) => setRoute({ kind: "project", projectId, chapter, returnSection: "my-work" })}
+            onCreateProjectForTask={createProjectFromTask}
           />
         ) : null}
         {route.kind === "section" && route.section === "projects" ? (
@@ -117,14 +162,19 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting }: { onOpenCopywritin
           />
         ) : null}
         {route.kind === "create-project" ? (
-          <ProjectCreateForm snapshot={snapshot} onCancel={() => openSection("projects")} onCreate={createProject} />
+          <ProjectCreateForm snapshot={snapshot} initialTaskId={route.preselectedTaskId} onCancel={() => openSection("projects")} onCreate={createProject} />
         ) : null}
         {route.kind === "project" && selectedProject ? (
           <ContentProjectWorkspace
             project={selectedProject}
+            documents={snapshot.documents}
             initialChapter={route.chapter}
             backLabel={route.returnSection === "my-work" ? "我的创作" : "内容项目"}
             onBack={() => openSection(route.returnSection)}
+            onSaveChapter={updateChapter}
+            onSaveProductBrief={updateProductBrief}
+            onRunProductInsight={onRunProductInsight}
+            productInsight={productInsight}
           />
         ) : null}
         {route.kind === "section" && route.section === "inspiration" ? (
@@ -157,7 +207,7 @@ function ContentProjectList({ projects, onCreate, onOpenProject }: { projects: C
     const normalized = query.trim().toLowerCase();
     if (!normalized) return projects;
     return projects.filter((project) =>
-      [project.name, project.coreDirection, project.product?.name ?? "", ...project.platforms].some((value) => value.toLowerCase().includes(normalized)),
+      [project.name, project.coreDirection, ...project.products.map((product) => product.name), ...project.platforms].some((value) => value.toLowerCase().includes(normalized)),
     );
   }, [projects, query]);
 
@@ -195,7 +245,7 @@ function ContentProjectList({ projects, onCreate, onOpenProject }: { projects: C
             </span>
             <span className="flex items-end justify-between gap-4 md:flex-col md:items-start md:justify-center">
               <span className="text-xs text-[var(--cp-text-faint)]">当前在「{project.currentChapter}」</span>
-              <span className="text-xs text-[var(--cp-text-muted)]">{project.product?.name ?? "暂未关联产品"} · {project.platforms.join(" / ")}</span>
+              <span className="text-xs text-[var(--cp-text-muted)]">{project.products.map((product) => product.name).join("、") || "暂未关联产品"} · {project.platforms.join(" / ")}</span>
             </span>
           </button>
         ))}
@@ -212,10 +262,23 @@ function ContentProjectList({ projects, onCreate, onOpenProject }: { projects: C
 
 const fieldClassName = "mt-2 h-10 w-full rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 text-sm outline-none focus:border-[var(--cp-border-strong)] focus:ring-2 focus:ring-[var(--cp-focus)]";
 
-function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: CreativeSpaceSnapshot; onCancel: () => void; onCreate: (input: CreateCreativeProjectInput) => void }) {
+type SearchableSelectOption = { id: string; label: string; detail?: string };
+
+function SearchableSelect({ options, value, onChange, placeholder, multiple = true, emptyLabel = "没有匹配的选项" }: { options: SearchableSelectOption[]; value: string[]; onChange: (value: string[]) => void; placeholder: string; multiple?: boolean; emptyLabel?: string }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const rootRef = useRef<HTMLDivElement>(null);
+  const visible = options.filter((option) => `${option.label} ${option.detail ?? ""}`.toLowerCase().includes(query.trim().toLowerCase()));
+  const selected = options.filter((option) => value.includes(option.id));
+  function toggle(id: string) { onChange(multiple ? value.includes(id) ? value.filter((item) => item !== id) : [...value, id] : [id]); if (!multiple) setOpen(false); }
+  useEffect(() => { if (!open) return; const closeOnOutsidePointer = (event: PointerEvent) => { if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false); }; document.addEventListener("pointerdown", closeOnOutsidePointer); return () => document.removeEventListener("pointerdown", closeOnOutsidePointer); }, [open]);
+  return <div ref={rootRef} className="relative mt-2"><button type="button" className="flex min-h-10 w-full items-center gap-2 rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 py-1.5 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" aria-expanded={open} onClick={() => setOpen((current) => !current)}><span className="flex min-w-0 flex-1 flex-wrap gap-1.5">{selected.length ? selected.map((option) => <span key={option.id} className="inline-flex max-w-full items-center gap-1 rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-subtle)] px-2 py-1 text-xs text-[var(--cp-text-soft)]">{option.label}<span role="button" tabIndex={0} aria-label={`移除${option.label}`} className="shrink-0 text-[var(--cp-text-faint)] hover:text-[var(--cp-text)]" onClick={(event) => { event.stopPropagation(); onChange(value.filter((item) => item !== option.id)); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onChange(value.filter((item) => item !== option.id)); } }}><X className="size-3" /></span></span>) : <span className="py-0.5 text-[var(--cp-text-faint)]">{placeholder}</span>}</span><ChevronDown className={cn("size-4 shrink-0 text-[var(--cp-text-faint)] transition-transform", open && "rotate-180")} /></button>{open ? <div className="absolute z-20 mt-1 w-full rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-2 shadow-[0_12px_28px_rgba(0,0,0,0.12)]"><label className="flex h-9 items-center gap-2 border-b border-[var(--cp-border-subtle)] px-1"><Search className="size-3.5 text-[var(--cp-text-faint)]" /><span className="sr-only">搜索选项</span><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setOpen(false); }} className="min-w-0 flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-[var(--cp-text-faint)]" placeholder="搜索" /></label><div className="max-h-52 overflow-y-auto py-1">{visible.map((option) => <button key={option.id} type="button" className="flex w-full items-start gap-2 rounded-[var(--cp-radius-item)] px-2 py-2 text-left hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]" onClick={() => toggle(option.id)}><span className={cn("mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border", value.includes(option.id) ? "border-[var(--cp-text)] bg-[var(--cp-text)] text-white" : "border-[var(--cp-border-strong)]")}>{value.includes(option.id) ? <Check className="size-3" /> : null}</span><span><span className="block text-sm">{option.label}</span>{option.detail ? <span className="mt-0.5 block text-xs text-[var(--cp-text-faint)]">{option.detail}</span> : null}</span></button>)}{!visible.length ? <p className="m-0 px-2 py-4 text-center text-xs text-[var(--cp-text-faint)]">{emptyLabel}</p> : null}</div></div> : null}</div>;
+}
+
+function ProjectCreateForm({ snapshot, initialTaskId, onCancel, onCreate }: { snapshot: CreativeSpaceSnapshot; initialTaskId?: string; onCancel: () => void; onCreate: (input: CreateCreativeProjectInput) => void }) {
   const [name, setName] = useState("");
-  const [linkedTaskId, setLinkedTaskId] = useState("");
-  const [productId, setProductId] = useState("");
+  const [linkedTaskIds, setLinkedTaskIds] = useState<string[]>(initialTaskId ? [initialTaskId] : []);
+  const [productIds, setProductIds] = useState<string[]>([]);
   const [platforms, setPlatforms] = useState<string[]>(["抖音"]);
   const [contentGoal, setContentGoal] = useState("");
   const [leadId, setLeadId] = useState(snapshot.people[0]?.id ?? "");
@@ -230,8 +293,8 @@ function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: Creativ
     }
     onCreate({
       name,
-      linkedTaskId: linkedTaskId || null,
-      productId: productId || null,
+      linkedTaskIds,
+      productIds,
       platforms,
       contentGoal,
       leadId,
@@ -253,18 +316,12 @@ function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: Creativ
             <input value={name} onChange={(event) => setName(event.target.value)} className={fieldClassName} placeholder="产品｜核心选题或内容方向" />
           </label>
           <label className="text-sm font-medium">
-            关联任务 <span className="font-normal text-[var(--cp-text-faint)]">可选</span>
-            <select value={linkedTaskId} onChange={(event) => setLinkedTaskId(event.target.value)} className={fieldClassName}>
-              <option value="">不关联来源任务</option>
-              {snapshot.tasks.map((task) => <option key={task.id} value={task.id}>{task.name}</option>)}
-            </select>
+            关联短视频任务 <span className="font-normal text-[var(--cp-text-faint)]">可多选；单条任务项目只选一条即可</span>
+            <SearchableSelect options={snapshot.tasks.map((task) => ({ id: task.id, label: task.name }))} value={linkedTaskIds} onChange={setLinkedTaskIds} placeholder="搜索并关联短视频任务" />
           </label>
           <label className="text-sm font-medium">
-            关联产品 <span className="font-normal text-[var(--cp-text-faint)]">可选</span>
-            <select value={productId} onChange={(event) => setProductId(event.target.value)} className={fieldClassName}>
-              <option value="">进入项目后再关联</option>
-              {snapshot.products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-            </select>
+            关联产品 <span className="font-normal text-[var(--cp-text-faint)]">可多选</span>
+            <SearchableSelect options={snapshot.products.map((product) => ({ id: product.id, label: product.name }))} value={productIds} onChange={setProductIds} placeholder="搜索并关联产品" />
           </label>
           <fieldset className="md:col-span-2">
             <legend className="text-sm font-medium">平台</legend>
@@ -294,25 +351,12 @@ function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: Creativ
           </label>
           <label className="text-sm font-medium">
             项目负责人
-            <select value={leadId} onChange={(event) => setLeadId(event.target.value)} className={fieldClassName}>
-              {snapshot.people.map((person) => <option key={person.id} value={person.id}>{person.name} · {person.role}</option>)}
-            </select>
+            <SearchableSelect multiple={false} options={snapshot.people.map((person) => ({ id: person.id, label: person.name, detail: person.role }))} value={leadId ? [leadId] : []} onChange={(value) => { const nextLeadId = value[0] ?? ""; setLeadId(nextLeadId); setMemberIds((current) => current.filter((id) => id !== nextLeadId)); }} placeholder="搜索并选择项目负责人" />
           </label>
-          <fieldset>
-            <legend className="text-sm font-medium">参与成员</legend>
-            <div className="mt-2 flex min-h-10 flex-wrap items-center gap-x-4 gap-y-2 border-b border-[var(--cp-border)] py-2">
-              {snapshot.people.filter((person) => person.id !== leadId).map((person) => (
-                <label key={person.id} className="flex items-center gap-2 text-sm font-normal text-[var(--cp-text-muted)]">
-                  <input
-                    type="checkbox"
-                    checked={memberIds.includes(person.id)}
-                    onChange={(event) => setMemberIds((current) => event.target.checked ? [...current, person.id] : current.filter((id) => id !== person.id))}
-                  />
-                  {person.name}
-                </label>
-              ))}
-            </div>
-          </fieldset>
+          <label className="text-sm font-medium">
+            参与成员
+            <SearchableSelect options={snapshot.people.filter((person) => person.id !== leadId).map((person) => ({ id: person.id, label: person.name, detail: person.role }))} value={memberIds} onChange={setMemberIds} placeholder="搜索并添加参与成员" />
+          </label>
         </div>
 
         {error ? <p className="mb-0 mt-5 text-sm text-[var(--cp-danger)]">{error}</p> : null}
@@ -325,8 +369,11 @@ function ProjectCreateForm({ snapshot, onCancel, onCreate }: { snapshot: Creativ
   );
 }
 
-function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel, onBack }: { project: CreativeProject; initialChapter?: CreativeProjectChapter; backLabel: string; onBack: () => void }) {
+function ContentProjectWorkspace({ project, documents, initialChapter = "概览", backLabel, onBack, onSaveChapter, onSaveProductBrief, onRunProductInsight, productInsight }: { project: CreativeProject; documents: CreativeDocument[]; initialChapter?: CreativeProjectChapter; backLabel: string; onBack: () => void; onSaveChapter: (input: { projectId: string; chapter: Exclude<CreativeProjectChapter, "概览">; body: string; documentIds: string[] }) => void; onSaveProductBrief: (input: { projectId: string; brief: import("@/lib/creative/creative-space-adapter").CreativeProductBrief }) => void; onRunProductInsight: (prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>; productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] } }) {
   const [chapter, setChapter] = useState<CreativeProjectChapter>(initialChapter);
+  const [, setRequirementRevision] = useState(0);
+  const requirement = requirementBriefAdapter.get(project);
+  const refreshRequirement = () => setRequirementRevision((value) => value + 1);
   return (
     <article className="min-h-full">
       <div className="w-full px-5 pt-8 md:px-8 md:pt-10 xl:px-10">
@@ -335,7 +382,7 @@ function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel
         </button>
         <div className="grid gap-5 pb-8 pt-6 md:grid-cols-[minmax(0,1fr)_240px] md:items-end">
           <div>
-            <p className="m-0 text-xs text-[var(--cp-text-faint)]">{project.product?.name ?? "未关联产品"} · {project.platforms.join(" / ")}</p>
+            <p className="m-0 text-xs text-[var(--cp-text-faint)]">{project.products.map((product) => product.name).join("、") || "未关联产品"} · {project.platforms.join(" / ")} · {project.linkedTasks.length ? `${project.linkedTasks.length} 条关联任务` : "未关联任务"}</p>
             <h2 className="mb-0 mt-2 max-w-[760px] text-[28px] font-semibold leading-tight tracking-[-0.02em] md:text-[36px]">{project.name}</h2>
           </div>
           <div className="text-xs leading-relaxed text-[var(--cp-text-faint)] md:text-right">
@@ -365,10 +412,16 @@ function ContentProjectWorkspace({ project, initialChapter = "概览", backLabel
       </nav>
 
       <div className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
-        {chapter === "概览" ? <ProjectOverview project={project} /> : <ChapterPlaceholder chapter={chapter} project={project} />}
+        {chapter === "概览" ? <ProjectOverview project={project} /> : chapter === "产品确认" ? <ProductConfirmationWorkspace project={project} documents={documents} saved={project.chapters["产品确认"] ?? { body: "", documentIds: [] }} onSave={onSaveChapter} onSaveBrief={onSaveProductBrief} onRunAnalysis={onRunProductInsight} analysisStatus={productInsight.status} analysisError={productInsight.error} analysisMessages={productInsight.messages} /> : <><ProductBriefContext brief={project.productBrief} />{chapter === "需求" ? <RequirementBriefWorkspace project={project} documents={documents} state={requirement} onSupplement={(text) => { requirementBriefAdapter.addSupplement({ project, text }); refreshRequirement(); }} onQuestion={(questionId, answer, status) => { requirementBriefAdapter.answerQuestion({ project, questionId, answer, status }); refreshRequirement(); }} onDocuments={(documentIds) => { requirementBriefAdapter.updateDocuments({ project, documentIds, documents }); refreshRequirement(); }} onConfirm={() => { requirementBriefAdapter.confirm(project); refreshRequirement(); }} /> : <ChapterWorkspace key={`${project.id}-${chapter}`} chapter={chapter} project={project} documents={documents} onSave={onSaveChapter} />}</>}
       </div>
     </article>
   );
+}
+
+function ProductBriefContext({ brief }: { brief: CreativeProject["productBrief"] }) {
+  if (!brief) return <div className="mb-8 border-l-2 border-[var(--cp-border)] px-4 py-3 text-sm text-[var(--cp-text-faint)]">尚未关联产品创作简报。请先在「产品确认」生成，后续环节的 AI 才能读取产品上下文。</div>;
+  const points = brief.coreSellingPoints.slice(0, 3).map((point) => point.fact).join(" · ");
+  return <aside className="mb-8 border-y border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] px-5 py-4"><p className="m-0 text-[11px] font-semibold tracking-[0.1em] text-[var(--cp-text-faint)]">已关联 · 产品创作简报</p><p className="mb-0 mt-1.5 text-sm font-semibold leading-relaxed text-[var(--cp-text)]">{brief.oneLineExpression}</p>{points ? <p className="mb-0 mt-1.5 text-xs leading-relaxed text-[var(--cp-text-muted)]">核心事实：{points}</p> : null}</aside>;
 }
 
 function ProjectOverview({ project }: { project: CreativeProject }) {
@@ -379,8 +432,8 @@ function ProjectOverview({ project }: { project: CreativeProject }) {
 
       <dl className="mt-12 grid gap-x-10 gap-y-7 border-t border-[var(--cp-border-subtle)] pt-8 sm:grid-cols-2">
         <ContextLine term="内容目标" detail={project.contentGoal} />
-        <ContextLine term="来源任务" detail={project.linkedTask?.name ?? "由创作空间直接创建"} />
-        <ContextLine term="关联产品" detail={project.product?.name ?? "尚未关联"} />
+        <ContextLine term="关联任务" detail={project.linkedTasks.map((task) => task.name).join("、") || "由创作空间直接创建"} />
+        <ContextLine term="关联产品" detail={project.products.map((product) => product.name).join("、") || "尚未关联"} />
         <ContextLine term="发布平台" detail={project.platforms.join("、")} />
         <ContextLine term="项目负责人" detail={`${project.lead.name} · ${project.lead.role}`} />
         <ContextLine term="参与成员" detail={project.members.map((member) => `${member.name}（${member.role}）`).join("、")} />
@@ -403,7 +456,7 @@ function ContextLine({ term, detail }: { term: string; detail: string }) {
 
 const chapterExamples: Record<Exclude<CreativeProjectChapter, "概览">, string> = {
   需求: "记录来源任务、业务背景、受众和必须回应的问题。",
-  产品: "引用产品资料，保留与当前内容方向相关的事实和使用证据。",
+  产品确认: "关联产品与 SKU，确认当前版本，保留已验证的产品事实、资料和待补充项；需求理解只读取这份事实快照。",
   选题: "明确这条内容唯一的核心选题，以及舍弃的备选方向。",
   表现形式: "描述视角、结构、节奏和适合当前平台的呈现方式。",
   脚本: "未来承载 AI 生成、AI 预审、人工修改、版本历史和最终拍摄版。",
@@ -414,16 +467,32 @@ const chapterExamples: Record<Exclude<CreativeProjectChapter, "概览">, string>
   复盘: "沉淀结论、可复用方法，并由成员决定是否成为团队资产。",
 };
 
-function ChapterPlaceholder({ chapter, project }: { chapter: Exclude<CreativeProjectChapter, "概览">; project: CreativeProject }) {
+function ChapterWorkspace({ chapter, project, documents, onSave }: { chapter: Exclude<CreativeProjectChapter, "概览">; project: CreativeProject; documents: CreativeDocument[]; onSave: (input: { projectId: string; chapter: Exclude<CreativeProjectChapter, "概览">; body: string; documentIds: string[] }) => void }) {
+  const saved = project.chapters[chapter] ?? { body: "", documentIds: [] };
+  const [isEditing, setIsEditing] = useState(!saved.body && !saved.documentIds.length);
+  const [body, setBody] = useState(saved.body);
+  const [documentIds, setDocumentIds] = useState(saved.documentIds);
+  const linkedDocuments = documents.filter((document) => saved.documentIds.includes(document.id));
+
+  function save() {
+    onSave({ projectId: project.id, chapter, body, documentIds });
+    setIsEditing(false);
+  }
+
+  function cancel() {
+    setBody(saved.body);
+    setDocumentIds(saved.documentIds);
+    setIsEditing(false);
+  }
+
   return (
-    <div className="min-h-[360px]">
+    <div className="min-h-[360px] max-w-[900px]">
       <p className="m-0 text-xs text-[var(--cp-text-faint)]">{project.name}</p>
-      <h3 className="mb-0 mt-3 text-[28px] font-semibold tracking-[-0.02em]">{chapter}</h3>
-      <p className="mb-0 mt-5 max-w-[650px] text-base leading-relaxed text-[var(--cp-text-muted)]">{chapterExamples[chapter]}</p>
-      <div className="mt-12 border-l-2 border-[var(--cp-border)] pl-5">
-        <p className="m-0 text-sm font-medium">这一章节还没有内容</p>
-        <p className="mb-0 mt-2 text-sm text-[var(--cp-text-faint)]">后续能力会在这里自然进入当前项目上下文。本阶段只保留正确的创作位置。</p>
+      <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div><h3 className="m-0 text-[28px] font-semibold tracking-[-0.02em]">{chapter}</h3><p className="mb-0 mt-4 max-w-[650px] text-base leading-relaxed text-[var(--cp-text-muted)]">{chapterExamples[chapter]}</p></div>
+        {!isEditing ? <Button type="button" variant="outline" className="shrink-0" onClick={() => setIsEditing(true)}><Pencil className="size-4" />编辑信息</Button> : null}
       </div>
+      {isEditing ? <div className="mt-9 border-y border-[var(--cp-border-subtle)] py-7"><div className="flex items-center gap-2"><FileText className="size-4 text-[var(--cp-text-muted)]" /><h4 className="m-0 text-sm font-semibold">章节信息</h4></div><textarea value={body} onChange={(event) => setBody(event.target.value)} className="mt-4 min-h-40 w-full resize-y rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-4 py-3 text-sm leading-7 text-[var(--cp-text-soft)] outline-none focus:border-[var(--cp-border-strong)] focus:ring-2 focus:ring-[var(--cp-focus)]" placeholder={`记录与「${chapter}」相关的事实、判断和下一步。`} aria-label={`${chapter}章节信息`} /><div className="mt-7 flex items-center gap-2"><Link2 className="size-4 text-[var(--cp-text-muted)]" /><h4 className="m-0 text-sm font-semibold">关联系统文档</h4><span className="text-xs text-[var(--cp-text-faint)]">选择后会保留在当前章节上下文中</span></div><div className="mt-3 divide-y divide-[var(--cp-border-subtle)] border-y border-[var(--cp-border-subtle)]">{documents.map((document) => { const selected = documentIds.includes(document.id); return <label key={document.id} className="flex cursor-pointer gap-3 py-4 text-sm"><input type="checkbox" checked={selected} onChange={(event) => setDocumentIds((current) => event.target.checked ? [...current, document.id] : current.filter((id) => id !== document.id))} className="mt-1 size-4 shrink-0 accent-[var(--cp-text)]" /><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-x-2 gap-y-1"><span className="font-medium text-[var(--cp-text)]">{document.title}</span><span className="text-[11px] text-[var(--cp-text-faint)]">{document.source} · {document.updatedAt}</span></span><span className="mt-1 block text-xs leading-relaxed text-[var(--cp-text-muted)]">{document.summary}</span></span></label>; })}</div><div className="mt-6 flex justify-end gap-3"><Button type="button" variant="ghost" onClick={cancel}><X className="size-4" />取消</Button><Button type="button" onClick={save}><Save className="size-4" />保存信息</Button></div></div> : <div className="mt-10 space-y-8">{saved.body ? <div className="border-l-2 border-[var(--cp-border)] pl-5"><p className="m-0 whitespace-pre-wrap text-sm leading-7 text-[var(--cp-text-soft)]">{saved.body}</p></div> : <div className="border-l-2 border-[var(--cp-border)] pl-5"><p className="m-0 text-sm font-medium">这一章节还没有内容</p><p className="mb-0 mt-2 text-sm text-[var(--cp-text-faint)]">可直接补充信息，或关联已有系统文档后继续编辑。</p></div>}{linkedDocuments.length ? <div><p className="m-0 flex items-center gap-2 text-sm font-semibold"><Link2 className="size-4 text-[var(--cp-text-muted)]" />已关联文档</p><div className="mt-3 divide-y divide-[var(--cp-border-subtle)] border-y border-[var(--cp-border-subtle)]">{linkedDocuments.map((document) => <div key={document.id} className="py-4"><p className="m-0 text-sm font-medium">{document.title}</p><p className="mb-0 mt-1 text-xs text-[var(--cp-text-muted)]">{document.source} · {document.updatedAt} · {document.summary}</p></div>)}</div></div> : null}</div>}
     </div>
   );
 }
