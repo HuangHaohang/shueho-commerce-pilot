@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CodexAppServerClient } from "../src/codex/app-server-client.js";
+import { resolveCodexBin } from "../src/codex/resolve-codex-bin.js";
 
 type ProviderScenario = {
   actorAuthorization: boolean;
@@ -18,7 +19,7 @@ type CapturedRequest = {
   path: string;
 };
 
-const codexBin = process.env.CODEX_BIN ?? join(process.cwd(), "node_modules", ".bin", "codex");
+const codexBin = resolveCodexBin(process.cwd(), process.env.CODEX_BIN);
 const scenarios: ProviderScenario[] = [
   {
     name: "custom-provider",
@@ -49,7 +50,9 @@ for (const scenario of scenarios) {
 
 const actorAuthorized = results.find((result) => result.scenario === "actor-authorized-provider");
 if (!actorAuthorized || !("hasNativeImageTool" in actorAuthorized) || actorAuthorized.hasNativeImageTool !== true) {
-  throw new Error("Codex did not expose native image_gen for the actor-authorized provider.");
+  throw new Error(
+    `Codex did not expose native image_gen for the actor-authorized provider. Results: ${JSON.stringify(results)}`,
+  );
 }
 console.log(JSON.stringify({ codexBin, results }, null, 2));
 
@@ -167,7 +170,15 @@ async function inspectScenario(scenario: ProviderScenario) {
   } finally {
     await client.stop();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(codexHome, { recursive: true, force: true });
+    // App Server's SQLite handles can remain briefly pending on Windows after
+    // the child process exits. Retry bounded cleanup so a transient file lock
+    // cannot turn a successful capability smoke test into a false failure.
+    await rm(codexHome, {
+      recursive: true,
+      force: true,
+      maxRetries: process.platform === "win32" ? 20 : 2,
+      retryDelay: 100,
+    });
   }
 }
 

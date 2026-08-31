@@ -30,6 +30,10 @@ export const ENTERPRISE_PERMISSIONS = [
   "external_data.policy.manage",
   "external_data.usage.read",
   "mcp.access_token.manage",
+  "product_catalog.read",
+  "product_catalog.import",
+  "product_catalog.review",
+  "product_catalog.sources.manage",
 ] as const;
 
 export type EnterprisePermission = (typeof ENTERPRISE_PERMISSIONS)[number];
@@ -61,6 +65,7 @@ const workspaceRunPermissions: EnterprisePermission[] = [
   "external_data.call",
   "external_data.usage.read",
   "mcp.access_token.manage",
+  "product_catalog.read",
 ];
 
 export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
@@ -94,6 +99,10 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
       "external_data.policy.manage",
       "external_data.usage.read",
       "mcp.access_token.manage",
+      "product_catalog.read",
+      "product_catalog.import",
+      "product_catalog.review",
+      "product_catalog.sources.manage",
     ],
   },
   {
@@ -125,6 +134,9 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
       ...workspaceRunPermissions,
       "workspaces.read",
       "usage.read",
+      "product_catalog.import",
+      "product_catalog.review",
+      "product_catalog.sources.manage",
     ],
   },
   {
@@ -132,7 +144,12 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
     name: "Agent 操作员",
     description: "在工作区中创建和管理自己的 Agent 任务。",
     scope: "workspace",
-    allowedPermissions: [...workspaceRunPermissions, "workspaces.read", "usage.read"],
+    allowedPermissions: [
+      ...workspaceRunPermissions,
+      "workspaces.read",
+      "usage.read",
+      "product_catalog.import",
+    ],
   },
   {
     key: "workspace_analyst",
@@ -144,6 +161,7 @@ export const SYSTEM_ENTERPRISE_ROLES: SystemEnterpriseRole[] = [
       "usage.read",
       "external_data.catalog.read",
       "external_data.usage.read",
+      "product_catalog.read",
     ],
   },
   {

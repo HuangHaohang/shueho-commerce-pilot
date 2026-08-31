@@ -2,11 +2,23 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
+import {
+  CREATIVE_METHOD_DEFINITIONS,
+  MANAGED_WORKFLOW_IDS,
+} from "../codex/managed-workflows.js";
+import {
+  COMMERCE_INSIGHT_METHODS,
+  getCommerceInsightMethodDefinition,
+} from "../codex/commerce-analysis-skills.js";
 import type { RuntimeScope } from "./agent-event-outbox.js";
 
 const SKILL_NAME_PATTERN = /^commerce-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const RESERVED_SKILL_NAMES = new Set([
-  "commerce-copywriting",
+  ...MANAGED_WORKFLOW_IDS,
+  ...Object.values(CREATIVE_METHOD_DEFINITIONS).map((definition) => definition.skillName),
+  ...COMMERCE_INSIGHT_METHODS.map(
+    (method) => getCommerceInsightMethodDefinition(method).skillName,
+  ),
   "commerce-copywriting-intake",
   "skill-creator",
   "skill-installer",

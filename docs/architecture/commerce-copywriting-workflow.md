@@ -2,6 +2,8 @@
 
 Commerce Pilot's copywriting workspace is built on the open-source Codex App Server harness. It does not implement a parallel prompt loop.
 
+The three-pane Creative Space now uses the broader `commerce-creative-project` workflow for new projects. Existing `copywriting` threads remain visible as creative projects and keep their authoritative Harness history; later revisions continue in the same thread. The dedicated workflow remains supported for persisted compatibility and bounded callers.
+
 ## Product Model
 
 - Copywriting is a Task Recipe inside the unified commerce Agent, not an isolated form application.

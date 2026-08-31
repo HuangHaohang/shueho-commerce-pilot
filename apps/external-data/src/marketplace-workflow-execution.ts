@@ -558,10 +558,12 @@ export async function completeMarketplaceWorkflowExecution(
   const evidence = dedupeRows([
     ...childResults.flatMap(({ step, result }) =>
       result.evidence.map((row) => ({
-        ...row,workflow_role: step.role,workflow_target_ordinal: step.target_ordinal,
+        ...row,research_request_id: result.research_request_id,
+        workflow_role: step.role,workflow_target_ordinal: step.target_ordinal,
       }))),
     ...structuredEvidence,
-  ]);
+  ]).map(ensureMarketplaceEvidenceId);
+  const reviewCoverage = summarizeMarketplaceReviewEvidence(stepRows, evidence);
   const products = dedupeRows(childResults.flatMap(({ step, result }) =>
     result.products.map((row) => ({
       ...row,workflow_role: step.role,workflow_target_ordinal: step.target_ordinal,
@@ -612,6 +614,11 @@ export async function completeMarketplaceWorkflowExecution(
       acceptedBrands: brands.length,
       acceptedProperties: properties.length,
       acceptedEvidence: evidence.length,
+      review_steps_planned: reviewCoverage.reviewStepsPlanned,
+      review_steps_completed: reviewCoverage.reviewStepsCompleted,
+      review_evidence_count: reviewCoverage.reviewEvidenceCount,
+      accepted_review_evidence_count: reviewCoverage.reviewEvidenceCount,
+      review_step_available: reviewCoverage.reviewStepAvailable,
       requestedMetrics,
       availableMetrics,
       missingRequestedMetrics,
@@ -626,6 +633,7 @@ export async function completeMarketplaceWorkflowExecution(
       ...childResults.flatMap(({ result: child }) => child.limitations),
       ...incompleteSteps.map((step) => `${step.role}${step.target_ordinal === null ? "" : `（代表商品 ${step.target_ordinal + 1}）`}步骤状态为 ${step.state}${step.failure_message ? `：${step.failure_message}` : ""}。`),
       ...unresolvedTemplateRows.map((step) => `${step.role} 模板未物化，状态为 ${step.state}${step.failure_message ? `：${step.failure_message}` : ""}。`),
+      ...marketplaceReviewEvidenceLimitations(reviewCoverage),
       "工作流只使用质量通过的搜索结果解析下游商品标识。",
     ])],
     workflow: {
@@ -655,6 +663,54 @@ export async function completeMarketplaceWorkflowExecution(
     status === "unknown" ? "failed" : status,
   );
   return result;
+}
+
+export function summarizeMarketplaceReviewEvidence(
+  steps: Array<{ role: string; state: string; is_template: boolean }>,
+  evidence: JsonObject[],
+): {
+  reviewStepAvailable: boolean;
+  reviewStepsPlanned: number;
+  reviewStepsCompleted: number;
+  reviewEvidenceCount: number;
+} {
+  const executableReviews = steps.filter((step) => step.role === "reviews" && !step.is_template);
+  return {
+    reviewStepAvailable: steps.some((step) => step.role === "reviews"),
+    reviewStepsPlanned: executableReviews.length,
+    reviewStepsCompleted: executableReviews.filter((step) => step.state === "completed").length,
+    reviewEvidenceCount: evidence.filter((row) =>
+      row.workflow_role === "reviews" &&
+      typeof row.evidence_kind === "string" &&
+      ["comment", "review", "content"].includes(row.evidence_kind.toLowerCase())
+    ).length,
+  };
+}
+
+export function marketplaceReviewEvidenceLimitations(
+  coverage: ReturnType<typeof summarizeMarketplaceReviewEvidence>,
+): string[] {
+  if (!coverage.reviewStepAvailable) {
+    return ["当前平台工作流未包含买家评价步骤；商品详情、销量和社交内容不得解释为买家评价或消费者痛点。"];
+  }
+  if (coverage.reviewStepsPlanned === 0) {
+    return ["买家评价步骤未形成可执行的代表商品实例；不得据此生成消费者痛点结论。"];
+  }
+  if (coverage.reviewStepsCompleted === 0) {
+    return ["本次没有完成买家评价步骤；不得据此生成消费者痛点结论。"];
+  }
+  if (coverage.reviewEvidenceCount === 0) {
+    return ["评价步骤已完成，但没有质量通过且可归因的评价文本证据；不得据此生成消费者痛点结论。"];
+  }
+  return [];
+}
+
+export function ensureMarketplaceEvidenceId(row: JsonObject): JsonObject {
+  if (typeof row.evidence_id === "string" && row.evidence_id.trim()) return row;
+  return {
+    ...row,
+    evidence_id: `evidence_${sha256Json(row)}`,
+  };
 }
 
 export async function loadWorkflowOrResearchResult(
@@ -714,7 +770,8 @@ async function readSteps(scope: WorkflowScope, executionId: string): Promise<Ste
 async function readWorkflowBusinessEvidence(scope: WorkflowScope, executionId: string): Promise<JsonObject[]> {
   return withScope(scope, async (client) => {
     const result = await client.query<JsonObject>(`
-      SELECT evidence.role AS workflow_role,target.target_ordinal AS workflow_target_ordinal,
+      SELECT evidence.id AS evidence_id,evidence.research_request_id,
+             evidence.role AS workflow_role,target.target_ordinal AS workflow_target_ordinal,
              evidence.evidence_kind,evidence.provider_entity_id,evidence.title,evidence.summary,
              evidence.canonical_url,evidence.metrics,evidence.quality_basis,
              evidence.relevance_score,evidence.confidence,evidence.source_json_pointer,evidence.observed_at

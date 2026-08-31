@@ -197,27 +197,42 @@ export async function listActiveThreadDeletionJobs(
 }
 
 export async function claimNextThreadDeletionJob(
-  tenantId: string | null,
+  tenantId: string,
 ): Promise<ClaimedThreadDeletionJob | null> {
+  if (!tenantId || !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(tenantId)) {
+    throw new Error("A valid tenant pin is required to claim a thread deletion job.");
+  }
   await assertApplicationDatabaseRoleSecurity();
-  const result = await getAuthDatabase().query<{
-    id: string;
-    tenant_id: string;
-    workspace_id: string;
-    user_id: string;
-  }>(
-    `SELECT * FROM commerce_claim_thread_deletion_job($1::uuid)`,
-    [tenantId],
-  );
-  const row = result.rows[0];
-  return row
-    ? {
-        id: row.id,
-        tenantId: row.tenant_id,
-        workspaceId: row.workspace_id,
-        userId: row.user_id,
-      }
-    : null;
+  const client = await getAuthDatabase().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT set_config('commerce.tenant_id', $1, true)", [tenantId]);
+    await client.query("SELECT set_config('commerce.tenant_wide', 'on', true)");
+    const result = await client.query<{
+      id: string;
+      tenant_id: string;
+      workspace_id: string;
+      user_id: string;
+    }>(
+      `SELECT * FROM commerce_claim_thread_deletion_job($1::uuid)`,
+      [tenantId],
+    );
+    await client.query("COMMIT");
+    const row = result.rows[0];
+    return row
+      ? {
+          id: row.id,
+          tenantId: row.tenant_id,
+          workspaceId: row.workspace_id,
+          userId: row.user_id,
+        }
+      : null;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listQueuedThreadDeletionItems(

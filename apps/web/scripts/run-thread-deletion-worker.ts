@@ -1,9 +1,6 @@
 import nextEnv from "@next/env";
-import { config as loadDotenv } from "dotenv";
-import { resolve } from "node:path";
 
 nextEnv.loadEnvConfig(process.cwd());
-loadDotenv({ path: resolve(process.cwd(), ".env.migration"), override: false, quiet: true });
 
 const {
   claimNextThreadDeletionJob,
@@ -20,7 +17,10 @@ const { getAuthDatabase } = await import("../lib/auth/database");
 
 const gatewayBase = new URL(process.env.COMMERCE_GATEWAY_URL ?? "http://127.0.0.1:8787");
 const gatewayToken = process.env.COMMERCE_GATEWAY_INTERNAL_TOKEN?.trim() || null;
-const tenantPin = process.env.COMMERCE_RUNTIME_TENANT_ID?.trim() || null;
+const tenantPin = process.env.COMMERCE_RUNTIME_TENANT_ID?.trim();
+if (!tenantPin || !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(tenantPin)) {
+  throw new Error("COMMERCE_RUNTIME_TENANT_ID is required for the thread-deletion worker.");
+}
 const pollIntervalMs = 1_000;
 let stopping = false;
 

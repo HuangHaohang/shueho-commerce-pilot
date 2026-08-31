@@ -32,7 +32,26 @@ import {
   planSocialContentResearch,
   SocialResearchPlanningError,
 } from "./social-research-planner.js";
-import type { ExternalDataScope, JsonObject } from "./types.js";
+import type { ExternalDataScope, FirstPartyResearchSubject, JsonObject } from "./types.js";
+
+const firstPartySubjectSchema = z.object({
+  version: z.literal(1),
+  subject_ref: z.string().uuid(),
+  snapshot_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  product_count: z.number().int().min(1).max(20),
+  products: z.array(z.object({
+    product_id: z.string().uuid(),
+    product_revision_id: z.string().uuid(),
+  }).strict()).min(1).max(20),
+}).strict().superRefine((value, context) => {
+  if (value.product_count !== value.products.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "product_count must match products length" });
+  }
+  const identities = value.products.map((product) => `${product.product_id}:${product.product_revision_id}`);
+  if (new Set(identities).size !== identities.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "products must contain unique revisions" });
+  }
+});
 
 const businessIntentSchema = z.object({
   kind: z.string().min(1).max(100),
@@ -60,6 +79,7 @@ const businessIntentSchema = z.object({
   localized_keywords: z.array(z.string().min(1).max(500)).max(8).optional(),
   market_context: z.record(z.unknown()).nullable().optional(),
   quality_policy: z.record(z.unknown()).nullable().optional(),
+  first_party_subject: firstPartySubjectSchema.nullable().optional(),
 });
 
 const scopeSchema = z.object({
@@ -78,6 +98,7 @@ const scopeSchema = z.object({
   workflow_step_id: z.string().regex(/^[a-z][a-z0-9_]{1,63}$/).nullable().optional(),
   workflow_step_instance_id: z.string().uuid().nullable().optional(),
   workflow_target_id: z.string().uuid().nullable().optional(),
+  first_party_subject: firstPartySubjectSchema.nullable().optional(),
 });
 
 export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline()): McpServer {
@@ -221,11 +242,12 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
         detailSampleSize: detail_sample_size,
       };
       try {
+        const scope = mapScope(_commerce_context);
         const plan = await planMarketplaceProductResearch(request, {
           allowedCatalogPlatforms: allowed_catalog_platforms,
           allowedEndpointIds: allowed_endpoint_ids,
-        });
-        const persisted = await persistMarketplaceResearchPlan(mapScope(_commerce_context), request, plan);
+        }, scope.firstPartySubject ?? null);
+        const persisted = await persistMarketplaceResearchPlan(scope, request, plan);
         return toolSuccess({
           success: true,
           state: "ready",
@@ -734,6 +756,9 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
 }
 
 function mapScope(value: z.infer<typeof scopeSchema>): ExternalDataScope {
+  const firstPartySubject = value.first_party_subject
+    ? mapFirstPartySubject(value.first_party_subject)
+    : null;
   return {
     tenantId: value.tenant_id,
     workspaceId: value.workspace_id,
@@ -771,9 +796,28 @@ function mapScope(value: z.infer<typeof scopeSchema>): ExternalDataScope {
       localizedKeywords: value.business_intent.localized_keywords ?? [],
       marketContext: value.business_intent.market_context ?? null,
       qualityPolicy: value.business_intent.quality_policy ?? null,
+      firstPartySubject: value.business_intent.first_party_subject
+        ? mapFirstPartySubject(value.business_intent.first_party_subject)
+        : firstPartySubject,
     } : null,
     workflowStepInstanceId: value.workflow_step_instance_id ?? null,
     workflowTargetId: value.workflow_target_id ?? null,
+    firstPartySubject,
+  };
+}
+
+function mapFirstPartySubject(
+  value: z.infer<typeof firstPartySubjectSchema>,
+): FirstPartyResearchSubject {
+  return {
+    version: 1,
+    subjectRef: value.subject_ref,
+    snapshotSha256: value.snapshot_sha256,
+    productCount: value.product_count,
+    products: value.products.map((product) => ({
+      productId: product.product_id,
+      productRevisionId: product.product_revision_id,
+    })),
   };
 }
 

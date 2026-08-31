@@ -30,6 +30,29 @@ test("removes tenant artifact paths and extracted attachment context from browse
   assert.match(serialized, /"type":"localImage"/);
 });
 
+test("removes host-only selected product context from browser events", () => {
+  const event = {
+    type: "notification",
+    method: "item/completed",
+    params: {
+      threadId: "thread-12345678",
+      item: {
+        id: "item-12345678",
+        type: "userMessage",
+        content: [
+          { type: "text", text: "请分析选中的产品" },
+          { type: "text", text: "<commerce_product_context>\nmode=selected; selected_count=2\n</commerce_product_context>" },
+        ],
+      },
+    },
+    at: new Date().toISOString(),
+  } as AppServerEvent;
+
+  const serialized = JSON.stringify(sanitizeBrowserAppServerEvent(event));
+  assert.match(serialized, /请分析选中的产品/);
+  assert.doesNotMatch(serialized, /commerce_product_context|selected_count/);
+});
+
 test("removes native image bytes and host paths from browser events", () => {
   const event = {
     type: "notification",
@@ -53,4 +76,30 @@ test("removes native image bytes and host paths from browser events", () => {
   const serialized = JSON.stringify(sanitizeBrowserAppServerEvent(event));
   assert.doesNotMatch(serialized, /very-large-base64|\/srv\/codex/);
   assert.match(serialized, /imageGeneration/);
+});
+
+test("keeps ordered Skill names while removing application-owned Skill paths", () => {
+  const event = {
+    type: "notification",
+    method: "item/completed",
+    params: {
+      threadId: "thread-12345678",
+      turnId: "turn-12345678",
+      item: {
+        type: "userMessage",
+        id: "message-12345678",
+        content: [
+          { type: "text", text: "生成商品主图" },
+          { type: "skill", name: "commerce-creative-project", path: "/srv/runtime/base/SKILL.md" },
+          { type: "skill", name: "commerce-product-main-image", path: "/srv/runtime/main/SKILL.md" },
+        ],
+      },
+    },
+    at: new Date().toISOString(),
+  } as AppServerEvent;
+
+  const serialized = JSON.stringify(sanitizeBrowserAppServerEvent(event));
+  assert.match(serialized, /commerce-creative-project/);
+  assert.match(serialized, /commerce-product-main-image/);
+  assert.doesNotMatch(serialized, /\/srv\/runtime|SKILL\.md|"path"/);
 });

@@ -20,7 +20,6 @@ import {
   EyeOff,
   ExternalLink,
   FileText,
-  FilePlus2,
   HelpCircle,
   Headphones,
   ImageIcon,
@@ -35,24 +34,19 @@ import {
   MessageCircle,
   Mic,
   Palette,
-  PanelLeft,
+  PackageSearch,
   Pencil,
   Phone,
   Plug,
   Plus,
-  Search,
-  ScrollText,
   SendHorizontal,
-  Share2,
   Settings,
   SlidersHorizontal,
   Sparkles,
   SquarePen,
   Store,
   Square,
-  Telescope,
   Trash2,
-  Video,
   X,
 } from "lucide-react";
 import {
@@ -63,6 +57,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
@@ -75,11 +70,32 @@ import {
   SelectedSkillChip,
   useComposerSkillSelector,
 } from "@/components/agent/skill-selector";
-import { CopywritingWorkspace } from "@/components/creative/copywriting-workspace";
+import {
+  CreativeMethodPicker,
+  CreativeSpaceWorkbench,
+} from "@/components/creative/creative-space-workbench";
 import { PluginDirectory } from "@/components/plugins/plugin-directory";
-import { MarketResearchWorkspace } from "@/components/research/market-research-workspace";
+import {
+  ProductLibraryPicker,
+  SelectedProductChips,
+} from "@/components/products/product-library-picker";
+import { ProductLibraryWorkspace } from "@/components/products/product-library-workspace";
+import {
+  ResearchEvidenceMobileSheet,
+  ResearchEvidencePanel,
+  ResearchToolReceiptView,
+} from "@/components/research/market-research-evidence";
+import { MarketResearchReportView } from "@/components/research/market-research-report";
+import { ProductInsightWorkspace } from "@/components/research/product-insight-workspace";
 import { SkillsDirectory } from "@/components/skills/skills-directory";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   useAgentThread,
@@ -103,7 +119,6 @@ import {
 } from "@/lib/agent/conversation-minimap";
 import {
   collectRecentWebSources,
-  selectVisibleWebSources,
   type WebSource,
 } from "@/lib/agent/web-sources";
 import {
@@ -118,7 +133,27 @@ import {
   summarizeSearchActivities,
 } from "@/lib/agent/search-activity-presentation";
 import { getSkills, sortSkillInventory, type SkillInventoryItem } from "@/lib/agent/skills";
+import { shouldCompactComposerControls } from "@/lib/agent/composer-layout";
 import { getPluginInventory, type CommercePluginInventoryItem } from "@/lib/plugins/catalog";
+import {
+  creativeMethodSkillName,
+  type CreativeMethod,
+} from "@/lib/creative/creative-method-contract";
+import {
+  creativeMethodActiveRequirement,
+  creativeMethodStarterPrompt,
+} from "@/lib/creative/creative-method-presentation";
+import { getThreadProductContext } from "@/lib/products/thread-product-context";
+import type { ProductContextMode, ProductSummary } from "@/lib/products/catalog";
+import {
+  parseMarketResearchResponse,
+  type MarketResearchReceipt,
+} from "@/lib/research/market-report";
+import {
+  productInsightMethodForRecipeId,
+  productInsightSkillName,
+  type ProductInsightMethod,
+} from "@/lib/research/product-insight-contract";
 import {
   tryParseStructuredCopywritingAnswer,
   tryParseStructuredCopywritingDraft,
@@ -127,9 +162,13 @@ import {
 import { cn } from "@/lib/utils";
 
 type WorkMode = "chat" | "work";
-type WorkbenchView = "workbench" | "plugins" | "skills" | "copywriting" | "research";
+type WorkbenchView = "workbench" | "plugins" | "skills" | "creative" | "research" | "products";
+type ComposerPopoverId = "access" | "products" | "model";
 type AuthMode = "login" | "register";
 type AuthIdentifierType = "email" | "phone";
+
+const PRODUCT_ONBOARDING_PROMPT =
+  "我想接入公司的产品库。请先检查当前企业可用的接入方式，用普通用户能理解的步骤引导我完成接入；在发布标准产品前先展示产品、SKU 和待复核问题，并让我明确确认。";
 
 type AuthUser = {
   id: string;
@@ -214,24 +253,17 @@ type GatewayHealthResponse = {
   error?: string;
 };
 
-const primaryNavItems = [
-  { label: "新任务", icon: SquarePen, active: true },
-  { label: "市场调研", icon: Telescope, active: false },
-  { label: "创作空间", icon: Palette, active: false },
-  { label: "资料库", icon: Library, active: false },
+export const primaryNavItems = [
+  { label: "新任务", icon: SquarePen, active: true, disabledReason: null },
+  { label: "商品决策", icon: PackageSearch, active: false, disabledReason: null },
+  { label: "创作空间", icon: Palette, active: false, disabledReason: null },
+  { label: "资料库", icon: Library, active: false, disabledReason: "资料库功能尚未接入" },
 ];
 
-const moreNavItems = [
-  { label: "已安排", icon: Clock3, active: false, href: null },
-  { label: "插件", icon: Plug, active: false, href: null },
-  { label: "技能", icon: Sparkles, active: false, href: null },
-];
-
-const creativeNavItems = [
-  { label: "文案生成", icon: FileText },
-  { label: "脚本生成", icon: ScrollText },
-  { label: "图片生成", icon: ImageIcon },
-  { label: "视频生成", icon: Video },
+export const moreNavItems = [
+  { label: "已安排", icon: Clock3, active: false, href: null, disabledReason: "已安排功能尚未接入" },
+  { label: "插件", icon: Plug, active: false, href: null, disabledReason: null },
+  { label: "技能", icon: Sparkles, active: false, href: null, disabledReason: null },
 ];
 
 const taskGroupDefinitions: Array<{
@@ -240,14 +272,14 @@ const taskGroupDefinitions: Array<{
   icon: typeof Palette;
 }> = [
   { category: "creative", label: "创作空间", icon: Palette },
-  { category: "research", label: "市场调研", icon: Telescope },
+  { category: "research", label: "商品决策", icon: PackageSearch },
   { category: "operations", label: "店铺运营", icon: Store },
   { category: "support", label: "客服与售后", icon: Headphones },
   { category: "analytics", label: "数据与报表", icon: ChartNoAxesCombined },
   { category: "general", label: "通用对话", icon: MessageCircle },
 ];
 
-type SidebarFlyoutId = "creative" | "more";
+type SidebarFlyoutId = "more";
 
 const reasoningEffortOptions: Array<{
   value: ReasoningEffort;
@@ -272,6 +304,7 @@ export function CommerceWorkbenchShell({
 }) {
   const [activeView, setActiveView] = useState<WorkbenchView>(initialView);
   const [freshTaskEntry, setFreshTaskEntry] = useState<"research" | null>(null);
+  const [activeManagedEntryWorkflow, setActiveManagedEntryWorkflow] = useState<"commerce-product-onboarding" | null>(null);
   const [mode, setMode] = useState<WorkMode>("work");
   const [draft, setDraft] = useState("");
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
@@ -281,6 +314,11 @@ export function CommerceWorkbenchShell({
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("low");
   const [externalDataApprovalMode, setExternalDataApprovalMode] = useState<ExternalDataApprovalMode>("always_ask");
   const [selectedSkill, setSelectedSkill] = useState<SkillInventoryItem | null>(null);
+  const [creativeMethod, setCreativeMethod] = useState<CreativeMethod | null>(null);
+  const [productInsightMethod, setProductInsightMethod] = useState<ProductInsightMethod>("market_research");
+  const [productContextMode, setProductContextMode] = useState<ProductContextMode>("auto");
+  const [selectedProducts, setSelectedProducts] = useState<ProductSummary[]>([]);
+  const [productLibraryReturnView, setProductLibraryReturnView] = useState<WorkbenchView>("workbench");
   const [composerAttachments, setComposerAttachments] = useState<PendingAttachmentUpload[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [selectedPluginDetailName, setSelectedPluginDetailName] = useState<string | null>(null);
@@ -294,6 +332,8 @@ export function CommerceWorkbenchShell({
   const previousAuthUserIdRef = useRef<string | null | undefined>(undefined);
   const composerAttachmentsRef = useRef<PendingAttachmentUpload[]>([]);
   const warmedThreadIdsRef = useRef(new Set<string>());
+  const productContextRequestRef = useRef(0);
+  const productContextAbortRef = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -301,6 +341,7 @@ export function CommerceWorkbenchShell({
   }, [composerAttachments]);
 
   useEffect(() => () => {
+    productContextAbortRef.current?.abort();
     for (const attachment of composerAttachmentsRef.current) {
       if (attachment.kind === "image" && attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
     }
@@ -375,6 +416,10 @@ export function CommerceWorkbenchShell({
     refetchInterval: (query) =>
       query.state.data?.threads.some((thread) => thread.status === "running") ? 3_000 : false,
   });
+  const creativeProjects = useMemo(
+    () => (threadsQuery.data?.threads ?? []).filter(isCreativeProjectThread),
+    [threadsQuery.data?.threads],
+  );
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -414,6 +459,9 @@ export function CommerceWorkbenchShell({
     healthQuery.data,
     healthQuery.isLoading,
   ]);
+  const externalDataReady =
+    healthQuery.data?.externalData?.connected === true &&
+    healthQuery.data?.externalData?.controlConfigured === true;
 
   const agentThread = useAgentThread({
     model: selectedModel,
@@ -431,7 +479,8 @@ export function CommerceWorkbenchShell({
       : null,
   });
   const hasActiveThread = Boolean(agentThread.threadId || agentThread.messages.length);
-  const navigationLocked = agentThread.status === "connecting" && !agentThread.threadId;
+  const navigationLocked =
+    (agentThread.status === "connecting" && !agentThread.loadingHistory) || agentThread.queueSubmitting;
   const deletingThreadIds = useMemo(
     () =>
       new Set(
@@ -515,9 +564,16 @@ export function CommerceWorkbenchShell({
       previousAuthUserIdRef.current !== undefined &&
       previousAuthUserIdRef.current !== currentUserId
     ) {
+      productContextRequestRef.current += 1;
+      productContextAbortRef.current?.abort();
+      productContextAbortRef.current = null;
       agentThread.resetThread();
       setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
       setSelectedSkill(null);
+      setActiveManagedEntryWorkflow(null);
+      setCreativeMethod(null);
+      setProductInsightMethod("market_research");
+      resetProductContext();
       clearComposerAttachments();
       autoRestoreAttemptedRef.current = false;
       queryClient.removeQueries({ queryKey: ["agent-threads"] });
@@ -538,10 +594,14 @@ export function CommerceWorkbenchShell({
     autoRestoreAttemptedRef.current = true;
     const latestThread = threadsQuery.data?.threads[0];
     if (!agentThread.threadId && latestThread) {
-      if (isCopywritingThread(latestThread)) {
-        setActiveView("copywriting");
-      } else if (isResearchThread(latestThread)) {
+      setActiveManagedEntryWorkflow(isProductOnboardingThread(latestThread) ? "commerce-product-onboarding" : null);
+      if (isCreativeProjectThread(latestThread)) {
+        setActiveView("creative");
+        void restoreThreadProductContext(latestThread.threadId);
+      } else if (isProductInsightThread(latestThread)) {
+        setProductInsightMethod(productInsightMethodForThread(latestThread));
         setActiveView("research");
+        void restoreThreadProductContext(latestThread.threadId);
       }
       void agentThread.loadThread(latestThread);
     }
@@ -574,23 +634,40 @@ export function CommerceWorkbenchShell({
     }
     if (isAuthenticated) {
       if (steering) {
-        const queued = await agentThread.enqueueMessage(value);
-        if (queued) {
+        const steeringWorkflow = activeView === "creative"
+          ? "commerce-creative-project"
+          : activeView === "research"
+            ? "commerce-product-insight"
+            : activeManagedEntryWorkflow ?? undefined;
+        const sent = steeringWorkflow
+          ? await agentThread.steerMessage(value, {
+              workflow: steeringWorkflow,
+              ...(activeView === "research" ? { insightMethod: productInsightMethod } : {}),
+            })
+          : await agentThread.enqueueMessage(value);
+        if (sent) {
           setDraft("");
         }
-      } else if (activeView === "copywriting" && agentThread.threadId) {
+      } else if (activeView === "creative" || activeView === "research") {
         const attachmentsForSubmit = takeComposerAttachments();
+        const creativeMethodForSubmit = activeView === "creative" ? creativeMethod : null;
         setDraft("");
+        if (creativeMethodForSubmit) setCreativeMethod(null);
         const submitted = await agentThread.submit(value || "请结合附件继续处理。", {
-          workflow: "commerce-copywriting",
-          displaySkillName: "commerce-copywriting",
+          workflow: activeView === "creative" ? "commerce-creative-project" : "commerce-product-insight",
+          ...(activeView === "research" ? { insightMethod: productInsightMethod } : {}),
+          ...(creativeMethodForSubmit ? { creativeMethod: creativeMethodForSubmit } : {}),
+          ...(creativeMethodForSubmit ? { displaySkillName: creativeMethodSkillName(creativeMethodForSubmit) } : {}),
           attachments: attachmentsForSubmit,
           externalDataApprovalMode,
+          productIds: selectedProducts.map((product) => product.id),
+          productContextMode,
         });
         if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
         else {
           restoreComposerAttachments(attachmentsForSubmit);
           setDraft(value);
+          if (creativeMethodForSubmit) setCreativeMethod(creativeMethodForSubmit);
         }
       } else {
         const attachmentsForSubmit = takeComposerAttachments();
@@ -600,9 +677,12 @@ export function CommerceWorkbenchShell({
         const submitted = await agentThread.submit(
           value,
           {
+            ...(activeManagedEntryWorkflow ? { workflow: activeManagedEntryWorkflow } : {}),
             ...(skillForSubmit ? { skillName: skillForSubmit.name } : {}),
             attachments: attachmentsForSubmit,
             externalDataApprovalMode,
+            productIds: selectedProducts.map((product) => product.id),
+            productContextMode,
           },
         );
         if (submitted) {
@@ -625,8 +705,13 @@ export function CommerceWorkbenchShell({
   }
 
   async function logout() {
+    cancelThreadProductContextRestore();
     agentThread.resetThread();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
+    setActiveManagedEntryWorkflow(null);
+    setCreativeMethod(null);
+    setProductInsightMethod("market_research");
+    resetProductContext();
     clearComposerAttachments();
     autoRestoreAttemptedRef.current = false;
     await fetch("/api/account/logout", { method: "POST" });
@@ -641,6 +726,11 @@ export function CommerceWorkbenchShell({
     setFreshTaskEntry(null);
     setSubmittedDraft(null);
     setSelectedSkill(null);
+    setActiveManagedEntryWorkflow(null);
+    setCreativeMethod(null);
+    setProductInsightMethod("market_research");
+    cancelThreadProductContextRestore();
+    resetProductContext();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     setActiveView("workbench");
@@ -656,13 +746,24 @@ export function CommerceWorkbenchShell({
     setDraft("");
     setFreshTaskEntry(null);
     setSelectedSkill(null);
+    setActiveManagedEntryWorkflow(isProductOnboardingThread(thread) ? "commerce-product-onboarding" : null);
+    setCreativeMethod(null);
+    if (isProductInsightThread(thread)) {
+      setProductInsightMethod(productInsightMethodForThread(thread));
+    }
     clearComposerAttachments();
-    const threadView = isCopywritingThread(thread)
-      ? "copywriting"
-      : isResearchThread(thread)
+    const threadView = isCreativeProjectThread(thread)
+      ? "creative"
+      : isProductInsightThread(thread)
         ? "research"
         : "workbench";
     setActiveView(threadView);
+    if (threadView === "creative" || threadView === "research") {
+      void restoreThreadProductContext(thread.threadId);
+    } else {
+      cancelThreadProductContextRestore();
+      resetProductContext();
+    }
     if (
       thread.threadId === agentThread.threadId &&
       (agentThread.loadingHistory || agentThread.status !== "failed" || agentThread.messages.length > 0)
@@ -719,42 +820,96 @@ export function CommerceWorkbenchShell({
     }
   }
 
-  function openCopywriting() {
+  function openCreativeSpace() {
     if (!isAuthenticated) {
       openAuthDialog("login");
       return;
     }
-    if (navigationLocked || activeView === "copywriting") {
+    if (navigationLocked) {
       return;
     }
     setDraft("");
     setFreshTaskEntry(null);
     setSubmittedDraft(null);
     setSelectedSkill(null);
+    setActiveManagedEntryWorkflow(null);
+    setCreativeMethod(null);
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
-    agentThread.resetThread();
-    setActiveView("copywriting");
-  }
+    setActiveView("creative");
+    autoRestoreAttemptedRef.current = true;
+    cancelThreadProductContextRestore();
 
-  async function executeCopywritingRecipe(goal: string) {
-    const attachmentsForSubmit = takeComposerAttachments();
-    const skillForSubmit = selectedSkill;
-    setSelectedSkill(null);
-    const submitted = await agentThread.submit(goal, {
-      workflow: "commerce-copywriting",
-      displaySkillName: "commerce-copywriting",
-      attachments: attachmentsForSubmit,
-      externalDataApprovalMode,
-    });
-    if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
-    else {
-      restoreComposerAttachments(attachmentsForSubmit);
-      setSelectedSkill(skillForSubmit);
+    const currentProject = creativeProjects.find((project) => project.threadId === agentThread.threadId);
+    if (currentProject) {
+      void restoreThreadProductContext(currentProject.threadId);
+      return;
+    }
+    resetProductContext();
+    agentThread.resetThread();
+    const latestProject = creativeProjects[0];
+    if (latestProject) {
+      void restoreThreadProductContext(latestProject.threadId);
+      void agentThread.loadThread(latestProject);
     }
   }
 
-  function openMarketResearch() {
+  function startCreativeProject() {
+    if (navigationLocked) return;
+    setDraft("");
+    setFreshTaskEntry(null);
+    setSubmittedDraft(null);
+    setSelectedSkill(null);
+    setActiveManagedEntryWorkflow(null);
+    setCreativeMethod(null);
+    setProductInsightMethod("market_research");
+    cancelThreadProductContextRestore();
+    resetProductContext();
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
+    clearComposerAttachments();
+    setActiveView("creative");
+    agentThread.resetThread();
+    void threadsQuery.refetch();
+  }
+
+  function openCreativeProject(project: AgentThreadSummary) {
+    if (navigationLocked || deletingThreadIds.has(project.threadId)) return;
+    setDraft("");
+    setFreshTaskEntry(null);
+    setSelectedSkill(null);
+    setActiveManagedEntryWorkflow(null);
+    setCreativeMethod(null);
+    setProductInsightMethod("market_research");
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
+    clearComposerAttachments();
+    setActiveView("creative");
+    void restoreThreadProductContext(project.threadId);
+    if (
+      project.threadId === agentThread.threadId &&
+      (agentThread.loadingHistory || agentThread.status !== "failed" || agentThread.messages.length > 0)
+    ) {
+      return;
+    }
+    void agentThread.loadThread(project);
+  }
+
+  function selectCreativeMethod(method: CreativeMethod) {
+    if (
+      navigationLocked ||
+      agentThread.status === "connecting" ||
+      agentThread.status === "running" ||
+      agentThread.compacting
+    ) return;
+    setCreativeMethod(method);
+    setDraft(creativeMethodStarterPrompt(method));
+    requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLTextAreaElement>("[data-conversation-input]");
+      input?.focus();
+      input?.setSelectionRange(input.value.length, input.value.length);
+    });
+  }
+
+  function openProductInsights() {
     if (!isAuthenticated) {
       openAuthDialog("login");
       return;
@@ -763,8 +918,13 @@ export function CommerceWorkbenchShell({
     setDraft("");
     setSubmittedDraft(null);
     setSelectedSkill(null);
+    setActiveManagedEntryWorkflow(null);
+    setCreativeMethod(null);
+    setProductInsightMethod("market_research");
     clearComposerAttachments();
     setActiveView("research");
+    cancelThreadProductContextRestore();
+    resetProductContext();
     setFreshTaskEntry("research");
     startTransition(() => {
       setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
@@ -776,15 +936,24 @@ export function CommerceWorkbenchShell({
     });
   }
 
-  async function executeMarketResearch(goal: string) {
+  function selectProductInsightMethod(method: ProductInsightMethod) {
+    if (navigationLocked || agentThread.threadId) return;
+    setProductInsightMethod(method);
+    setDraft("");
+  }
+
+  async function executeProductInsight(method: ProductInsightMethod, goal: string) {
     const attachmentsForSubmit = takeComposerAttachments();
     const skillForSubmit = selectedSkill;
     setSelectedSkill(null);
     const submitted = await agentThread.submit(goal, {
-      workflow: "commerce-market-research",
-      displaySkillName: "commerce-market-research",
+      workflow: "commerce-product-insight",
+      insightMethod: method,
+      displaySkillName: productInsightSkillName(method),
       attachments: attachmentsForSubmit,
       externalDataApprovalMode,
+      productIds: selectedProducts.map((product) => product.id),
+      productContextMode,
     });
     if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
     else {
@@ -803,6 +972,9 @@ export function CommerceWorkbenchShell({
     setFreshTaskEntry(null);
     setSubmittedDraft(null);
     setSelectedSkill(skill);
+    setActiveManagedEntryWorkflow(null);
+    cancelThreadProductContextRestore();
+    resetProductContext();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     setActiveView("workbench");
@@ -816,6 +988,89 @@ export function CommerceWorkbenchShell({
   function openPluginFromComposer(plugin: CommercePluginInventoryItem) {
     setSelectedPluginDetailName(plugin.manifest.name);
     setActiveView("plugins");
+  }
+
+  function openProductLibrary() {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return;
+    }
+    if (navigationLocked) return;
+    setProductLibraryReturnView(activeView === "products" ? "workbench" : activeView);
+    setActiveView("products");
+  }
+
+  function startProductOnboardingConversation(prompt = PRODUCT_ONBOARDING_PROMPT) {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return;
+    }
+    if (navigationLocked) return;
+    setDraft(prompt.trim() || PRODUCT_ONBOARDING_PROMPT);
+    setFreshTaskEntry(null);
+    setSubmittedDraft(null);
+    setSelectedSkill(null);
+    setActiveManagedEntryWorkflow("commerce-product-onboarding");
+    cancelThreadProductContextRestore();
+    resetProductContext();
+    setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
+    clearComposerAttachments();
+    setActiveView("workbench");
+    autoRestoreAttemptedRef.current = true;
+    agentThread.resetThread();
+    void threadsQuery.refetch();
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>("[data-composer-input]")?.focus();
+    });
+  }
+
+  function closeProductLibrary() {
+    setActiveView(productLibraryReturnView === "products" ? "workbench" : productLibraryReturnView);
+  }
+
+  function resetProductContext() {
+    setProductContextMode("auto");
+    setSelectedProducts([]);
+  }
+
+  function cancelThreadProductContextRestore() {
+    productContextRequestRef.current += 1;
+    productContextAbortRef.current?.abort();
+    productContextAbortRef.current = null;
+  }
+
+  async function restoreThreadProductContext(threadId: string) {
+    productContextAbortRef.current?.abort();
+    const controller = new AbortController();
+    productContextAbortRef.current = controller;
+    const requestId = productContextRequestRef.current + 1;
+    productContextRequestRef.current = requestId;
+    resetProductContext();
+    try {
+      const context = await getThreadProductContext(threadId, controller.signal);
+      if (controller.signal.aborted || requestId !== productContextRequestRef.current) return;
+      if (context.turnId && context.products.length) {
+        setSelectedProducts(context.products);
+        setProductContextMode("selected");
+      } else {
+        resetProductContext();
+      }
+    } catch {
+      if (controller.signal.aborted || requestId !== productContextRequestRef.current) return;
+      resetProductContext();
+    } finally {
+      if (requestId === productContextRequestRef.current) {
+        productContextAbortRef.current = null;
+      }
+    }
+  }
+
+  function removeSelectedProduct(productId: string) {
+    setSelectedProducts((current) => {
+      const next = current.filter((product) => product.id !== productId);
+      if (!next.length) setProductContextMode("auto");
+      return next;
+    });
   }
 
   function addComposerFiles(files: FileList | File[]) {
@@ -902,54 +1157,189 @@ export function CommerceWorkbenchShell({
     }
   }
 
+  function renderConversationWorkspace(layout: "default" | "creative-panel" = "default") {
+    return (
+      <ConversationWorkspace
+        title={agentThread.threadTitle || (layout === "creative-panel" ? "未命名项目" : "新任务")}
+        messages={agentThread.messages}
+        activities={agentThread.activities}
+        images={agentThread.images}
+        status={agentThread.status}
+        currentTurnId={agentThread.currentTurnId}
+        pendingUserInput={agentThread.pendingUserInput}
+        answeringUserInput={agentThread.answeringUserInput}
+        compacting={agentThread.compacting}
+        queuedMessages={agentThread.queuedMessages}
+        queueSubmitting={agentThread.queueSubmitting}
+        runningSubmitMode={activeView === "creative" || activeView === "research" ? "steer" : "queue"}
+        queueOperationId={agentThread.queueOperationId}
+        feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
+        loadingHistory={agentThread.loadingHistory}
+        hasOlderHistory={agentThread.hasOlderHistory}
+        loadingOlderHistory={agentThread.loadingOlderHistory}
+        canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
+        interrupting={agentThread.interrupting}
+        durationMs={agentThread.durationMs}
+        startedAt={agentThread.startedAt}
+        error={agentThread.feedbackError ?? agentThread.error}
+        value={draft}
+        models={modelsQuery.data?.agentModels ?? []}
+        modelsLoading={modelsQuery.isLoading}
+        selectedModel={selectedModel}
+        reasoningEffort={reasoningEffort}
+        externalDataAvailable={externalDataReady}
+        externalDataApprovalMode={externalDataApprovalMode}
+        canManageExternalDataPolicy={canManageExternalDataPolicy}
+        productContextMode={productContextMode}
+        selectedProducts={selectedProducts}
+        skills={activeView === "creative" || activeView === "research" ? [] : enabledSkills}
+        skillsLoading={activeView === "creative" || activeView === "research" ? false : skillsQuery.isLoading}
+        plugins={enabledPlugins}
+        pluginsLoading={pluginsQuery.isLoading}
+        selectedSkill={activeView === "creative" || activeView === "research" ? null : selectedSkill}
+        attachments={composerAttachments}
+        attachmentError={attachmentError}
+        onChange={setDraft}
+        onSubmit={submitDraft}
+        onInterrupt={agentThread.interrupt}
+        onAnswerUserInput={agentThread.respondToUserInput}
+        onMessageFeedback={agentThread.setMessageFeedback}
+        onLoadOlderHistory={agentThread.loadOlderHistory}
+        onQueueDelete={agentThread.deleteQueuedMessage}
+        onQueueSteer={agentThread.steerQueuedMessage}
+        onQueueClear={agentThread.clearQueuedMessages}
+        onModelChange={setSelectedModel}
+        onReasoningEffortChange={setReasoningEffort}
+        onExternalDataApprovalModeChange={setExternalDataApprovalMode}
+        onProductContextModeChange={setProductContextMode}
+        onSelectedProductsChange={setSelectedProducts}
+        onRemoveSelectedProduct={removeSelectedProduct}
+        onOpenProductLibrary={openProductLibrary}
+        onSkillSelect={setSelectedSkill}
+        onSkillClear={() => setSelectedSkill(null)}
+        onOpenPlugin={openPluginFromComposer}
+        onAddFiles={addComposerFiles}
+        onRemoveAttachment={removeComposerAttachment}
+        layout={layout}
+      />
+    );
+  }
+
+  const sidebarProps = {
+    user: authUser,
+    activeView,
+    canOpenEnterpriseAdmin,
+    threads: threadsQuery.data?.threads ?? [],
+    activeThreadId: agentThread.threadId,
+    navigationLocked,
+    deletingThreadIds,
+    selectionMode: threadSelectionMode,
+    selectedThreadIds,
+    onNewTask: startNewTask,
+    onOpenThread: openStoredThread,
+    onToggleSelectionMode: toggleThreadSelectionMode,
+    onToggleThreadSelection: toggleThreadSelection,
+    onRequestThreadDeletion: requestThreadDeletion,
+    onOpenProductInsights: openProductInsights,
+    onOpenCreative: openCreativeSpace,
+    onOpenPlugins: () => {
+      setSelectedPluginDetailName(null);
+      setActiveView("plugins");
+    },
+    onOpenSkills: () => setActiveView("skills"),
+    onOpenAuth: () => openAuthDialog("login"),
+    onLogout: logout,
+  } satisfies SidebarProps;
+
   return (
     <div className="flex h-dvh overflow-hidden bg-[var(--cp-bg)] text-[var(--cp-text)]">
-      <Sidebar
-        user={authUser}
-        activeView={activeView}
-        canOpenEnterpriseAdmin={canOpenEnterpriseAdmin}
-        threads={threadsQuery.data?.threads ?? []}
-        activeThreadId={agentThread.threadId}
-        navigationLocked={navigationLocked}
-        deletingThreadIds={deletingThreadIds}
-        selectionMode={threadSelectionMode}
-        selectedThreadIds={selectedThreadIds}
-        onNewTask={startNewTask}
-        onOpenThread={openStoredThread}
-        onToggleSelectionMode={toggleThreadSelectionMode}
-        onToggleThreadSelection={toggleThreadSelection}
-        onRequestThreadDeletion={requestThreadDeletion}
-        onOpenMarketResearch={openMarketResearch}
-        onOpenCopywriting={openCopywriting}
-        onOpenPlugins={() => {
-          setSelectedPluginDetailName(null);
-          setActiveView("plugins");
-        }}
-        onOpenSkills={() => setActiveView("skills")}
-        onOpenAuth={() => openAuthDialog("login")}
-        onLogout={logout}
-      />
+      {activeView !== "creative" ? (
+        <Sidebar {...sidebarProps} />
+      ) : null}
 
       <main className="relative flex h-dvh min-w-0 flex-1 flex-col overflow-hidden">
-        <MobileTopbar user={authUser} onOpenAuth={() => openAuthDialog("login")} onLogout={logout} />
+        {activeView !== "creative" ? (
+          <MobileTopbar
+            user={authUser}
+            onOpenAuth={() => openAuthDialog("login")}
+            onLogout={logout}
+            renderNavigation={(onNavigate) => (
+              <Sidebar {...sidebarProps} mobile onNavigate={onNavigate} />
+            )}
+          />
+        ) : null}
 
-        {activeView === "plugins" ? (
-          <PluginDirectory initialSelectedPluginName={selectedPluginDetailName} />
+        {activeView === "creative" ? (
+          <CreativeSpaceWorkbench
+            projects={creativeProjects}
+            activeProjectId={agentThread.threadId}
+            messages={agentThread.messages}
+            images={agentThread.images}
+            navigationDisabled={navigationLocked}
+            onCreateProject={startCreativeProject}
+            onSelectProject={openCreativeProject}
+            onBackToWorkbench={startNewTask}
+            conversation={(
+              <div className="flex h-full min-h-0 flex-col">
+                <header className="flex min-h-[var(--cp-topbar-height)] shrink-0 items-center gap-3 border-b border-[var(--cp-border-subtle)] px-3 py-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-[var(--cp-text)]">
+                      {agentThread.threadTitle || "Harness 对话"}
+                    </div>
+                    <div className="mt-0.5 text-[11px] text-[var(--cp-text-faint)]">
+                      对话、工具与历史由 Codex thread 持续保存
+                    </div>
+                  </div>
+                  <CreativeMethodPicker
+                    value={creativeMethod}
+                    disabled={
+                      navigationLocked ||
+                      agentThread.status === "connecting" ||
+                      agentThread.status === "running" ||
+                      agentThread.compacting
+                    }
+                    onSelect={selectCreativeMethod}
+                  />
+                </header>
+                {creativeMethod ? (
+                  <div
+                    className="shrink-0 border-b border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] px-3 py-2 text-[11px] leading-4 text-[var(--cp-text-muted)]"
+                    role="status"
+                  >
+                    {creativeMethodActiveRequirement(creativeMethod, selectedProducts.length)}
+                  </div>
+                ) : null}
+                {renderConversationWorkspace("creative-panel")}
+              </div>
+            )}
+          />
+        ) : activeView === "products" ? (
+          <ProductLibraryWorkspace
+            onBack={closeProductLibrary}
+            onStartConversation={startProductOnboardingConversation}
+          />
+        ) : activeView === "plugins" ? (
+          <PluginDirectory
+            initialSelectedPluginName={selectedPluginDetailName}
+            onOpenProductLibrary={openProductLibrary}
+            onStartProductOnboarding={() => startProductOnboardingConversation()}
+          />
         ) : activeView === "skills" ? (
           <SkillsDirectory onUseSkill={useSkill} />
         ) : activeView === "research" && (!agentThread.threadId || freshTaskEntry === "research") ? (
-          <MarketResearchWorkspace
+          <ProductInsightWorkspace
+            method={productInsightMethod}
             error={agentThread.error}
             composerValue={draft}
             onComposerChange={setDraft}
-            externalDataAvailable={
-              healthQuery.data?.externalData?.connected === true &&
-              healthQuery.data?.externalData?.controlConfigured === true
-            }
+            externalDataAvailable={externalDataReady}
+            selectedProducts={selectedProducts}
+            productContextMode={productContextMode}
             modelLabel={`${formatModelName(selectedModel)} · ${
               reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
             }`}
-            onExecute={executeMarketResearch}
+            onMethodChange={selectProductInsightMethod}
+            onExecute={executeProductInsight}
             renderComposer={({ placeholder, disabled, onSubmit }) => (
               <AgentComposer
                 value={draft}
@@ -959,20 +1349,23 @@ export function CommerceWorkbenchShell({
                 interrupting={agentThread.interrupting}
                 compacting={agentThread.compacting}
                 queueSubmitting={agentThread.queueSubmitting}
+                runningSubmitMode="steer"
                 queuedMessages={agentThread.queuedMessages}
                 queueOperationId={agentThread.queueOperationId}
                 models={modelsQuery.data?.agentModels ?? []}
                 modelsLoading={modelsQuery.isLoading}
                 selectedModel={selectedModel}
                 reasoningEffort={reasoningEffort}
-                externalDataAvailable={healthQuery.data?.externalData?.connected === true}
+                externalDataAvailable={externalDataReady}
                 externalDataApprovalMode={externalDataApprovalMode}
                 canManageExternalDataPolicy={canManageExternalDataPolicy}
+                productContextMode={productContextMode}
+                selectedProducts={selectedProducts}
                 plugins={enabledPlugins}
                 pluginsLoading={pluginsQuery.isLoading}
-                skills={enabledSkills}
-                skillsLoading={skillsQuery.isLoading}
-                selectedSkill={selectedSkill}
+                skills={[]}
+                skillsLoading={false}
+                selectedSkill={null}
                 attachments={composerAttachments}
                 attachmentError={attachmentError}
                 disabled={disabled}
@@ -985,65 +1378,10 @@ export function CommerceWorkbenchShell({
                 onModelChange={setSelectedModel}
                 onReasoningEffortChange={setReasoningEffort}
                 onExternalDataApprovalModeChange={setExternalDataApprovalMode}
-                onOpenPlugin={openPluginFromComposer}
-                onSkillSelect={setSelectedSkill}
-                onSkillClear={() => setSelectedSkill(null)}
-                onAddFiles={addComposerFiles}
-                onRemoveAttachment={removeComposerAttachment}
-              />
-            )}
-          />
-        ) : activeView === "copywriting" && !agentThread.threadId ? (
-          <CopywritingWorkspace
-            error={agentThread.error}
-            composerValue={draft}
-            onComposerChange={setDraft}
-            modelLabel={`${formatModelName(selectedModel)} · ${
-              reasoningEffortOptions.find((option) => option.value === reasoningEffort)?.label ?? "轻度"
-            }`}
-            onExecute={executeCopywritingRecipe}
-            renderComposer={({ placeholder, disabled, onSubmit }) => (
-              <AgentComposer
-                value={draft}
-                placeholder={placeholder}
-                running={agentThread.status === "connecting" || agentThread.status === "running"}
-                canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
-                interrupting={agentThread.interrupting}
-                compacting={agentThread.compacting}
-                queueSubmitting={agentThread.queueSubmitting}
-                queuedMessages={agentThread.queuedMessages}
-                queueOperationId={agentThread.queueOperationId}
-                models={modelsQuery.data?.agentModels ?? []}
-                modelsLoading={modelsQuery.isLoading}
-                selectedModel={selectedModel}
-                reasoningEffort={reasoningEffort}
-                externalDataAvailable={healthQuery.data?.externalData?.connected === true}
-                externalDataApprovalMode={externalDataApprovalMode}
-                canManageExternalDataPolicy={canManageExternalDataPolicy}
-                plugins={enabledPlugins}
-                pluginsLoading={pluginsQuery.isLoading}
-                skills={enabledSkills}
-                skillsLoading={skillsQuery.isLoading}
-                selectedSkill={selectedSkill}
-                attachments={composerAttachments}
-                attachmentError={attachmentError}
-                disabled={disabled}
-                onChange={setDraft}
-                onSubmit={async () => {
-                  if (agentThread.status === "running" && agentThread.activeTurnId) {
-                    const queued = await agentThread.enqueueMessage(draft);
-                    if (queued) setDraft("");
-                    return;
-                  }
-                  await onSubmit();
-                }}
-                onInterrupt={agentThread.interrupt}
-                onQueueDelete={agentThread.deleteQueuedMessage}
-                onQueueSteer={agentThread.steerQueuedMessage}
-                onQueueClear={agentThread.clearQueuedMessages}
-                onModelChange={setSelectedModel}
-                onReasoningEffortChange={setReasoningEffort}
-                onExternalDataApprovalModeChange={setExternalDataApprovalMode}
+                onProductContextModeChange={setProductContextMode}
+                onSelectedProductsChange={setSelectedProducts}
+                onRemoveSelectedProduct={removeSelectedProduct}
+                onOpenProductLibrary={openProductLibrary}
                 onOpenPlugin={openPluginFromComposer}
                 onSkillSelect={setSelectedSkill}
                 onSkillClear={() => setSelectedSkill(null)}
@@ -1056,7 +1394,6 @@ export function CommerceWorkbenchShell({
         <>
         <div className="pointer-events-none sticky top-0 z-20 hidden h-[var(--cp-topbar-height)] items-center justify-center bg-[rgba(255,255,255,0.92)] md:flex">
           {isAuthenticated && !hasActiveThread ? <ModeSwitch mode={mode} onModeChange={setMode} /> : null}
-          {isAuthenticated && hasActiveThread ? <ConversationTopActions /> : null}
           {!isAuthenticated ? (
             <TopAuthActions
               onOpenLogin={() => openAuthDialog("login")}
@@ -1066,63 +1403,7 @@ export function CommerceWorkbenchShell({
           ) : null}
         </div>
 
-        {isAuthenticated && hasActiveThread ? (
-          <ConversationWorkspace
-            title={agentThread.threadTitle || "新任务"}
-            messages={agentThread.messages}
-            activities={agentThread.activities}
-            images={agentThread.images}
-            status={agentThread.status}
-            currentTurnId={agentThread.currentTurnId}
-            pendingUserInput={agentThread.pendingUserInput}
-            answeringUserInput={agentThread.answeringUserInput}
-            compacting={agentThread.compacting}
-            queuedMessages={agentThread.queuedMessages}
-            queueSubmitting={agentThread.queueSubmitting}
-            queueOperationId={agentThread.queueOperationId}
-            feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
-            loadingHistory={agentThread.loadingHistory}
-            hasOlderHistory={agentThread.hasOlderHistory}
-            loadingOlderHistory={agentThread.loadingOlderHistory}
-            canInterrupt={!agentThread.compacting && Boolean(agentThread.activeTurnId)}
-            interrupting={agentThread.interrupting}
-            durationMs={agentThread.durationMs}
-            startedAt={agentThread.startedAt}
-            error={agentThread.feedbackError ?? agentThread.error}
-            value={draft}
-            models={modelsQuery.data?.agentModels ?? []}
-            modelsLoading={modelsQuery.isLoading}
-            selectedModel={selectedModel}
-            reasoningEffort={reasoningEffort}
-            externalDataAvailable={healthQuery.data?.externalData?.connected === true}
-            externalDataApprovalMode={externalDataApprovalMode}
-            canManageExternalDataPolicy={canManageExternalDataPolicy}
-            skills={enabledSkills}
-            skillsLoading={skillsQuery.isLoading}
-            plugins={enabledPlugins}
-            pluginsLoading={pluginsQuery.isLoading}
-            selectedSkill={selectedSkill}
-            attachments={composerAttachments}
-            attachmentError={attachmentError}
-            onChange={setDraft}
-            onSubmit={submitDraft}
-            onInterrupt={agentThread.interrupt}
-            onAnswerUserInput={agentThread.respondToUserInput}
-            onMessageFeedback={agentThread.setMessageFeedback}
-            onLoadOlderHistory={agentThread.loadOlderHistory}
-            onQueueDelete={agentThread.deleteQueuedMessage}
-            onQueueSteer={agentThread.steerQueuedMessage}
-            onQueueClear={agentThread.clearQueuedMessages}
-            onModelChange={setSelectedModel}
-            onReasoningEffortChange={setReasoningEffort}
-            onExternalDataApprovalModeChange={setExternalDataApprovalMode}
-            onSkillSelect={setSelectedSkill}
-            onSkillClear={() => setSelectedSkill(null)}
-            onOpenPlugin={openPluginFromComposer}
-            onAddFiles={addComposerFiles}
-            onRemoveAttachment={removeComposerAttachment}
-          />
-        ) : (
+        {isAuthenticated && hasActiveThread ? renderConversationWorkspace() : (
         <section
           className={cn(
             "flex flex-1 flex-col items-center px-4 md:px-8",
@@ -1151,9 +1432,11 @@ export function CommerceWorkbenchShell({
                 modelsLoading={modelsQuery.isLoading}
                 selectedModel={selectedModel}
                 reasoningEffort={reasoningEffort}
-                externalDataAvailable={healthQuery.data?.externalData?.connected === true}
+                externalDataAvailable={externalDataReady}
                 externalDataApprovalMode={externalDataApprovalMode}
                 canManageExternalDataPolicy={canManageExternalDataPolicy}
+                productContextMode={productContextMode}
+                selectedProducts={selectedProducts}
                 skills={enabledSkills}
                 skillsLoading={skillsQuery.isLoading}
                 plugins={enabledPlugins}
@@ -1166,6 +1449,10 @@ export function CommerceWorkbenchShell({
                 onModelChange={setSelectedModel}
                 onReasoningEffortChange={setReasoningEffort}
                 onExternalDataApprovalModeChange={setExternalDataApprovalMode}
+                onProductContextModeChange={setProductContextMode}
+                onSelectedProductsChange={setSelectedProducts}
+                onRemoveSelectedProduct={removeSelectedProduct}
+                onOpenProductLibrary={openProductLibrary}
                 onSkillSelect={setSelectedSkill}
                 onSkillClear={() => setSelectedSkill(null)}
                 onOpenPlugin={openPluginFromComposer}
@@ -1234,16 +1521,20 @@ export function CommerceWorkbenchShell({
   );
 }
 
-function isCopywritingThread(thread: AgentThreadSummary): boolean {
-  return (
-    thread.recipeId === "copywriting" ||
-    thread.title.startsWith("文案生成 ·") ||
-    thread.title.startsWith("文案任务 ·")
-  );
+function isCreativeProjectThread(thread: AgentThreadSummary): boolean {
+  return thread.recipeId === "creative_project" || thread.recipeId === "copywriting";
 }
 
-function isResearchThread(thread: AgentThreadSummary): boolean {
-  return thread.recipeId === "market_research" || thread.category === "research";
+function isProductInsightThread(thread: AgentThreadSummary): boolean {
+  return productInsightMethodForRecipeId(thread.recipeId) !== null;
+}
+
+function productInsightMethodForThread(thread: AgentThreadSummary): ProductInsightMethod {
+  return productInsightMethodForRecipeId(thread.recipeId) ?? "market_research";
+}
+
+function isProductOnboardingThread(thread: AgentThreadSummary): boolean {
+  return thread.recipeId === "product_onboarding";
 }
 
 function ComplianceFooter() {
@@ -1267,28 +1558,6 @@ function ComplianceFooter() {
   );
 }
 
-function ConversationTopActions() {
-  return (
-    <div className="pointer-events-auto absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-1">
-      <IconTooltip label="分享">
-        <Button type="button" variant="ghost" size="icon" aria-label="分享">
-          <Share2 />
-        </Button>
-      </IconTooltip>
-      <IconTooltip label="更多操作">
-        <Button type="button" variant="ghost" size="icon" aria-label="更多操作">
-          <Ellipsis />
-        </Button>
-      </IconTooltip>
-      <IconTooltip label="会话设置">
-        <Button type="button" variant="ghost" size="icon" aria-label="会话设置">
-          <SlidersHorizontal />
-        </Button>
-      </IconTooltip>
-    </div>
-  );
-}
-
 function ConversationWorkspace({
   title,
   messages,
@@ -1301,6 +1570,7 @@ function ConversationWorkspace({
   compacting,
   queuedMessages,
   queueSubmitting,
+  runningSubmitMode,
   queueOperationId,
   feedbackSubmittingIds,
   loadingHistory,
@@ -1319,6 +1589,8 @@ function ConversationWorkspace({
   externalDataAvailable,
   externalDataApprovalMode,
   canManageExternalDataPolicy,
+  productContextMode,
+  selectedProducts,
   plugins,
   pluginsLoading,
   skills,
@@ -1338,11 +1610,16 @@ function ConversationWorkspace({
   onModelChange,
   onReasoningEffortChange,
   onExternalDataApprovalModeChange,
+  onProductContextModeChange,
+  onSelectedProductsChange,
+  onRemoveSelectedProduct,
+  onOpenProductLibrary,
   onOpenPlugin,
   onSkillSelect,
   onSkillClear,
   onAddFiles,
   onRemoveAttachment,
+  layout = "default",
 }: {
   title: string;
   messages: ConversationMessage[];
@@ -1355,6 +1632,7 @@ function ConversationWorkspace({
   compacting: boolean;
   queuedMessages: QueuedMessage[];
   queueSubmitting: boolean;
+  runningSubmitMode: "queue" | "steer";
   queueOperationId: string | null;
   feedbackSubmittingIds: ReadonlySet<string>;
   loadingHistory: boolean;
@@ -1373,6 +1651,8 @@ function ConversationWorkspace({
   externalDataAvailable: boolean;
   externalDataApprovalMode: ExternalDataApprovalMode;
   canManageExternalDataPolicy: boolean;
+  productContextMode: ProductContextMode;
+  selectedProducts: ProductSummary[];
   plugins: CommercePluginInventoryItem[];
   pluginsLoading: boolean;
   skills: SkillInventoryItem[];
@@ -1395,11 +1675,16 @@ function ConversationWorkspace({
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   onExternalDataApprovalModeChange: (mode: ExternalDataApprovalMode) => void;
+  onProductContextModeChange: (mode: ProductContextMode) => void;
+  onSelectedProductsChange: (products: ProductSummary[]) => void;
+  onRemoveSelectedProduct: (productId: string) => void;
+  onOpenProductLibrary: () => void;
   onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
   onSkillSelect: (skill: SkillInventoryItem) => void;
   onSkillClear: () => void;
   onAddFiles: (files: FileList | File[]) => void;
   onRemoveAttachment: (id: string) => void;
+  layout?: "default" | "creative-panel";
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const timelineContentRef = useRef<HTMLDivElement>(null);
@@ -1414,6 +1699,7 @@ function ConversationWorkspace({
   );
   const [hoveredMinimapMarkerId, setHoveredMinimapMarkerId] = useState<string | null>(null);
   const running = !loadingHistory && (status === "connecting" || status === "running");
+  const compactPanel = layout === "creative-panel";
   const latestUserSequence = messages.reduce(
     (latestSequence, message) => (message.role === "user" ? Math.max(latestSequence, message.sequence) : latestSequence),
     -1,
@@ -1441,6 +1727,16 @@ function ConversationWorkspace({
     ? activities.filter((activity) => activity.turnId === currentTurnId)
     : [];
   const webSources = useMemo(() => collectRecentWebSources(activities), [activities]);
+  const marketResearchReceipts = useMemo(() => {
+    const receipts = new Map<string, MarketResearchReceipt>();
+    for (const message of messages) {
+      if (message.role !== "assistant" || message.phase === "commentary" || message.status !== "completed") continue;
+      const report = parseMarketResearchResponse(message.content);
+      if (!report || report.responseType !== "report") continue;
+      for (const receipt of report.receipts) receipts.set(receipt.researchRequestId, receipt);
+    }
+    return [...receipts.values()];
+  }, [messages]);
   const latestCurrentActivity = currentActivities.reduce<AgentActivity | null>(
     (latest, activity) => (!latest || activity.sequence > latest.sequence ? activity : latest),
     null,
@@ -1593,21 +1889,38 @@ function ConversationWorkspace({
   }
 
   return (
-    <section data-agent-status={status} className="relative flex min-h-0 flex-1 flex-col">
-      <ConversationMinimap
-        state={minimapState}
-        scrollContainerRef={scrollRef}
-        hoveredMarkerId={hoveredMinimapMarkerId}
-        onHoveredMarkerChange={setHoveredMinimapMarkerId}
-      />
+    <section
+      data-agent-status={status}
+      className={cn(
+        "relative flex min-h-0 flex-1 flex-col",
+        compactPanel && "bg-[var(--cp-bg)]",
+      )}
+    >
+      {!compactPanel ? (
+        <ConversationMinimap
+          state={minimapState}
+          scrollContainerRef={scrollRef}
+          hoveredMarkerId={hoveredMinimapMarkerId}
+          onHoveredMarkerChange={setHoveredMinimapMarkerId}
+        />
+      ) : null}
       <div
         id="commerce-conversation-scroll"
         ref={scrollRef}
         data-conversation-scroll
-        className="min-h-0 flex-1 overscroll-contain overflow-y-auto px-4 pb-8 md:px-8"
+        className={cn(
+          "min-h-0 flex-1 overscroll-contain overflow-y-auto",
+          compactPanel ? "px-3 pb-4" : "px-4 pb-8 md:px-8",
+        )}
         onScroll={handleConversationScroll}
       >
-        <div ref={timelineContentRef} className="mx-auto w-full max-w-[820px] pb-12 pt-2 xl:pr-[72px]">
+        <div
+          ref={timelineContentRef}
+          className={cn(
+            "mx-auto w-full",
+            compactPanel ? "max-w-none pb-8 pt-3" : "max-w-[820px] pb-12 pt-2 xl:pr-[72px]",
+          )}
+        >
           <h1 className="sr-only">{title}</h1>
 
           {loadingHistory ? (
@@ -1697,9 +2010,28 @@ function ConversationWorkspace({
         </div>
       </div>
 
-      <WorkOutputPanel images={images} sources={webSources} />
+      {!compactPanel ? (
+        <WorkOutputPanel
+          images={images}
+          sources={webSources}
+          activities={activities}
+          reportReceipts={marketResearchReceipts}
+        />
+      ) : null}
 
-      <div className="relative shrink-0 bg-[var(--cp-bg)] px-4 pb-3 pt-2 md:px-8">
+      <div
+        className={cn(
+          "relative shrink-0 bg-[var(--cp-bg)] pb-3 pt-2",
+          compactPanel ? "px-3" : "px-4 md:px-8",
+        )}
+      >
+        {!compactPanel ? (
+          <ResearchEvidenceMobileSheet
+            activities={activities}
+            reportReceipts={marketResearchReceipts}
+            webSources={webSources}
+          />
+        ) : null}
         {showScrollToBottom ? (
           <div className="absolute -top-10 left-1/2 z-30 -translate-x-1/2">
             <IconTooltip label="回到底部">
@@ -1740,13 +2072,21 @@ function ConversationWorkspace({
               Commerce Pilot 也可能会犯错。请核查重要信息。
             </p>
             <AgentComposer
+              compact={compactPanel}
               value={value}
-              placeholder={running && canInterrupt ? "输入调整方向" : "继续追问"}
+              placeholder={
+                running && canInterrupt
+                  ? "输入调整方向"
+                  : compactPanel && messages.length === 0
+                    ? "选择创作类型，或直接描述想生成的内容"
+                    : "继续追问"
+              }
               running={running}
               canInterrupt={canInterrupt}
               interrupting={interrupting}
               compacting={compacting}
               queueSubmitting={queueSubmitting}
+              runningSubmitMode={runningSubmitMode}
               queuedMessages={queuedMessages}
               queueOperationId={queueOperationId}
               models={models}
@@ -1756,6 +2096,8 @@ function ConversationWorkspace({
               externalDataAvailable={externalDataAvailable}
               externalDataApprovalMode={externalDataApprovalMode}
               canManageExternalDataPolicy={canManageExternalDataPolicy}
+              productContextMode={productContextMode}
+              selectedProducts={selectedProducts}
               skills={skills}
               skillsLoading={skillsLoading}
               plugins={plugins}
@@ -1772,6 +2114,10 @@ function ConversationWorkspace({
               onModelChange={onModelChange}
               onReasoningEffortChange={onReasoningEffortChange}
               onExternalDataApprovalModeChange={onExternalDataApprovalModeChange}
+              onProductContextModeChange={onProductContextModeChange}
+              onSelectedProductsChange={onSelectedProductsChange}
+              onRemoveSelectedProduct={onRemoveSelectedProduct}
+              onOpenProductLibrary={onOpenProductLibrary}
               onSkillSelect={onSkillSelect}
               onSkillClear={onSkillClear}
               onOpenPlugin={onOpenPlugin}
@@ -1786,6 +2132,7 @@ function ConversationWorkspace({
 }
 
 function AgentComposer({
+  compact = false,
   value,
   placeholder,
   running,
@@ -1793,6 +2140,7 @@ function AgentComposer({
   interrupting,
   compacting,
   queueSubmitting,
+  runningSubmitMode = "queue",
   queuedMessages,
   queueOperationId,
   models,
@@ -1802,6 +2150,8 @@ function AgentComposer({
   externalDataAvailable = false,
   externalDataApprovalMode = "always_ask",
   canManageExternalDataPolicy = false,
+  productContextMode,
+  selectedProducts,
   plugins = [],
   pluginsLoading = false,
   skills = [],
@@ -1819,12 +2169,17 @@ function AgentComposer({
   onModelChange,
   onReasoningEffortChange,
   onExternalDataApprovalModeChange = () => undefined,
+  onProductContextModeChange,
+  onSelectedProductsChange,
+  onRemoveSelectedProduct,
+  onOpenProductLibrary,
   onOpenPlugin = () => undefined,
   onSkillSelect = () => undefined,
   onSkillClear = () => undefined,
   onAddFiles = () => undefined,
   onRemoveAttachment = () => undefined,
 }: {
+  compact?: boolean;
   value: string;
   placeholder: string;
   running: boolean;
@@ -1832,6 +2187,7 @@ function AgentComposer({
   interrupting: boolean;
   compacting: boolean;
   queueSubmitting: boolean;
+  runningSubmitMode?: "queue" | "steer";
   queuedMessages: QueuedMessage[];
   queueOperationId: string | null;
   models: ProviderModelSummary[];
@@ -1841,6 +2197,8 @@ function AgentComposer({
   externalDataAvailable?: boolean;
   externalDataApprovalMode?: ExternalDataApprovalMode;
   canManageExternalDataPolicy?: boolean;
+  productContextMode: ProductContextMode;
+  selectedProducts: ProductSummary[];
   plugins?: CommercePluginInventoryItem[];
   pluginsLoading?: boolean;
   skills?: SkillInventoryItem[];
@@ -1858,6 +2216,10 @@ function AgentComposer({
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   onExternalDataApprovalModeChange?: (mode: ExternalDataApprovalMode) => void;
+  onProductContextModeChange: (mode: ProductContextMode) => void;
+  onSelectedProductsChange: (products: ProductSummary[]) => void;
+  onRemoveSelectedProduct: (productId: string) => void;
+  onOpenProductLibrary: () => void;
   onOpenPlugin?: (plugin: CommercePluginInventoryItem) => void;
   onSkillSelect?: (skill: SkillInventoryItem) => void;
   onSkillClear?: () => void;
@@ -1867,7 +2229,10 @@ function AgentComposer({
   const formRef = useRef<HTMLFormElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [activeComposerPopover, setActiveComposerPopover] = useState<"access" | "model" | null>(null);
+  const [activeComposerPopover, setActiveComposerPopover] = useState<ComposerPopoverId | null>(null);
+  const productPickerBoundary = compact
+    ? formRef.current?.closest<HTMLElement>("[data-creative-conversation]") ?? null
+    : null;
   const skillSelector = useComposerSkillSelector({
     value,
     skills,
@@ -1971,6 +2336,7 @@ function AgentComposer({
             </Button>
           </IconTooltip>
           <ExternalDataAccessControl
+            compact={compact}
             value={externalDataApprovalMode}
             available={externalDataAvailable}
             showEnterpriseSettings={canManageExternalDataPolicy}
@@ -1985,12 +2351,38 @@ function AgentComposer({
               );
             }}
           />
+          <ProductLibraryPicker
+            open={activeComposerPopover === "products"}
+            disabled={disabled || running}
+            placement="top"
+            compact={compact}
+            collisionBoundary={productPickerBoundary}
+            mode={productContextMode}
+            selectedProducts={selectedProducts}
+            onOpenChange={(nextOpen) => {
+              if (nextOpen) skillSelector.closeMenu();
+              setActiveComposerPopover((current) =>
+                nextOpen ? "products" : current === "products" ? null : current,
+              );
+            }}
+            onModeChange={onProductContextModeChange}
+            onSelectedProductsChange={onSelectedProductsChange}
+            onManage={onOpenProductLibrary}
+          />
         </div>
         <div className="col-span-3 col-start-1 row-start-1 min-w-0 px-3 pt-1">
           {selectedSkill ? (
             <div className="mb-1.5 flex min-w-0">
               <SelectedSkillChip skill={selectedSkill} onRemove={onSkillClear} />
             </div>
+          ) : null}
+          {productContextMode === "selected" && selectedProducts.length ? (
+            <SelectedProductChips
+              products={selectedProducts}
+              compact={compact}
+              disabled={disabled || running}
+              onRemove={onRemoveSelectedProduct}
+            />
           ) : null}
           {attachments.length || attachmentError ? (
             <ComposerAttachmentStrip
@@ -2027,6 +2419,7 @@ function AgentComposer({
         </div>
         <div className="col-start-3 row-start-2 flex items-center gap-1">
           <ModelAndReasoningControl
+            compact={compact}
             models={models}
             loading={modelsLoading}
             selectedModel={selectedModel}
@@ -2043,16 +2436,31 @@ function AgentComposer({
               );
             }}
           />
-          <IconTooltip label="语音输入">
-            <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="语音输入" disabled={disabled}>
-              <Mic />
-            </Button>
+          <IconTooltip label="语音输入暂不可用">
+            <span className="inline-flex">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-full"
+                aria-label="语音输入暂不可用"
+                disabled
+              >
+                <Mic />
+              </Button>
+            </span>
           </IconTooltip>
           {running && canInterrupt ? (
             <>
               {value.trim() ? (
-                <IconTooltip label="加入任务队列">
-                  <Button type="submit" size="icon" className="rounded-full" aria-label="加入任务队列" disabled={queueSubmitting || disabled}>
+                <IconTooltip label={runningSubmitMode === "steer" ? "调整当前方向" : "加入任务队列"}>
+                  <Button
+                    type="submit"
+                    size="icon"
+                    className="rounded-full"
+                    aria-label={runningSubmitMode === "steer" ? "调整当前方向" : "加入任务队列"}
+                    disabled={queueSubmitting || disabled}
+                  >
                     {queueSubmitting ? <Loader2 className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
                   </Button>
                 </IconTooltip>
@@ -2468,7 +2876,7 @@ function ConversationMessageView({
   if (message.role === "user") {
     const content = readConversationUserContent(message.content);
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-1">
         <div className="max-w-[75%] whitespace-pre-wrap rounded-[18px] bg-[var(--cp-user-message-bg)] px-4 py-2.5 text-sm leading-6 text-[var(--cp-user-message-text)]">
           <ConversationAttachmentList attachments={message.attachments ?? []} />
           {message.skillName ? (
@@ -2482,6 +2890,11 @@ function ConversationMessageView({
           ) : null}
           {content}
         </div>
+        {message.variant === "steer" && message.delivery === "pending" ? (
+          <span className="cp-running-shimmer pr-2 text-[11px] text-[var(--cp-text-faint)]">
+            正在调整
+          </span>
+        ) : null}
       </div>
     );
   }
@@ -2490,6 +2903,8 @@ function ConversationMessageView({
     return null;
   }
 
+  const marketResearchResponse = parseMarketResearchResponse(message.content);
+  if (marketResearchResponse) return <MarketResearchReportView response={marketResearchResponse} />;
   const copywritingDraft = tryParseStructuredCopywritingDraft(message.content);
   if (copywritingDraft) return <CopywritingDraftResponse draft={copywritingDraft} />;
   const content = tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
@@ -2567,12 +2982,28 @@ function CopywritingDraftResponse({ draft }: { draft: CopywritingDraft }) {
 
 function readConversationMessagePreview(message: ConversationMessage): string {
   if (message.role === "user") return readConversationUserContent(message.content);
+  const marketResearchResponse = parseMarketResearchResponse(message.content);
+  if (marketResearchResponse) {
+    return marketResearchResponse.responseType === "report"
+      ? `${marketResearchResponse.subject.title} ${marketResearchResponse.executiveSummary}`
+      : marketResearchResponse.message;
+  }
   const draft = tryParseStructuredCopywritingDraft(message.content);
   if (draft) return `${draft.title} ${draft.body}`;
   return tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
 }
 
 function readAssistantResponseText(message: ConversationMessage): string {
+  const marketResearchResponse = parseMarketResearchResponse(message.content);
+  if (marketResearchResponse) {
+    if (marketResearchResponse.responseType === "answer") return marketResearchResponse.message;
+    return [
+      marketResearchResponse.subject.title,
+      marketResearchResponse.executiveSummary,
+      marketResearchResponse.reportMarkdown,
+      marketResearchResponse.message,
+    ].filter(Boolean).join("\n\n");
+  }
   const draft = tryParseStructuredCopywritingDraft(message.content);
   if (draft) {
     return [
@@ -2626,6 +3057,11 @@ function ActivityRow({ activity }: { activity: AgentActivity }) {
           <span className="ml-auto shrink-0 text-[11px]">{formatCompactDuration(activity.durationMs)}</span>
         ) : null}
       </div>
+      {activity.research ? (
+        <div className="mt-2 max-w-[560px] text-[var(--cp-text)]">
+          <ResearchToolReceiptView receipt={activity.research} />
+        </div>
+      ) : null}
       {sources.length ? (
         <div className="mt-0.5 space-y-0.5">
           {sources.map((source) => (
@@ -2708,6 +3144,12 @@ function summarizeActivities(activities: AgentActivity[], running: boolean): str
     const searchSummary = summarizeSearchActivities(activities);
     if (searchSummary) return searchSummary;
     return "正在调用工具";
+  }
+  if (activities.some((activity) => activity.research?.kind === "evidence")) {
+    return "市场证据与数据回执已就绪";
+  }
+  if (activities.some((activity) => activity.research?.kind === "plan")) {
+    return "免费研究计划与报价已就绪";
   }
   if (kinds.has("file") && kinds.has("command")) {
     return "编辑了文件并运行了命令";
@@ -3034,18 +3476,19 @@ function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
   );
 }
 
-function WorkOutputPanel({ images, sources }: { images: GeneratedImageItem[]; sources: WebSource[] }) {
-  const [sourcesExpanded, setSourcesExpanded] = useState(false);
-  const sourceSignature = sources.map((source) => source.url).join("\n");
-  const visibleSources = selectVisibleWebSources(sources, sourcesExpanded);
-  const hiddenSourceCount = Math.max(0, sources.length - visibleSources.length);
-
-  useEffect(() => {
-    setSourcesExpanded(false);
-  }, [sourceSignature]);
-
+function WorkOutputPanel({
+  images,
+  sources,
+  activities,
+  reportReceipts,
+}: {
+  images: GeneratedImageItem[];
+  sources: WebSource[];
+  activities: AgentActivity[];
+  reportReceipts: MarketResearchReceipt[];
+}) {
   return (
-    <aside className="absolute right-6 top-2 hidden w-[300px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-5 shadow-[var(--cp-shadow-soft)] 2xl:block">
+    <aside className="absolute right-6 top-2 hidden max-h-[calc(100dvh-96px)] w-[300px] overflow-y-auto rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-5 shadow-[var(--cp-shadow-soft)] 2xl:block">
       <div className="text-sm text-[var(--cp-text-muted)]">输出内容</div>
       {images.length ? (
         <div className="mt-3 space-y-2">
@@ -3057,61 +3500,14 @@ function WorkOutputPanel({ images, sources }: { images: GeneratedImageItem[]; so
           ))}
         </div>
       ) : (
-        <button type="button" className="mt-3 flex items-center gap-2 text-sm text-[var(--cp-text-faint)]">
-          <FilePlus2 className="size-4" />
-          创建文件或图片
-        </button>
+        <div className="mt-3 text-sm text-[var(--cp-text-faint)]">当前任务没有文件或图片产物</div>
       )}
       <div className="my-4 h-px bg-[var(--cp-border-subtle)]" />
-      <div className="flex items-center justify-between gap-3 text-sm text-[var(--cp-text-muted)]">
-        <span>来源</span>
-        {sources.length > 0 ? <span className="text-xs text-[var(--cp-text-faint)]">{sources.length}</span> : null}
-      </div>
-      {sources.length > 0 ? (
-        <>
-          <div
-            id="work-output-sources"
-            className={cn("mt-3 space-y-1", sourcesExpanded && "max-h-[288px] overflow-y-auto pr-1")}
-          >
-            {visibleSources.map((source) => (
-              <a
-                key={source.url}
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-                className="flex min-h-9 items-center gap-2 rounded-[var(--cp-radius-item)] px-2 py-1.5 text-sm text-[var(--cp-text-soft)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-              >
-                <ExternalLink className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
-                <span className="min-w-0">
-                  <span className="block truncate">{source.title || sourceHostname(source.url)}</span>
-                  {source.title ? (
-                    <span className="block truncate text-[11px] text-[var(--cp-text-faint)]">
-                      {sourceHostname(source.url)}
-                    </span>
-                  ) : null}
-                </span>
-              </a>
-            ))}
-          </div>
-          {sources.length > 3 ? (
-            <button
-              type="button"
-              className="flex h-8 w-full items-center justify-between rounded-[var(--cp-radius-item)] px-2 text-xs text-[var(--cp-text-muted)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-              aria-expanded={sourcesExpanded}
-              aria-controls="work-output-sources"
-              onClick={() => setSourcesExpanded((current) => !current)}
-            >
-              <span>{sourcesExpanded ? "收起来源" : `查看其余 ${hiddenSourceCount} 个来源`}</span>
-              <ChevronDown
-                className={cn("size-3.5 transition-transform", sourcesExpanded && "rotate-180")}
-                strokeWidth={1.8}
-              />
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <div className="mt-3 text-sm text-[var(--cp-text-faint)]">暂无来源</div>
-      )}
+      <ResearchEvidencePanel
+        activities={activities}
+        reportReceipts={reportReceipts}
+        webSources={sources}
+      />
     </aside>
   );
 }
@@ -3138,28 +3534,7 @@ function formatCompactDuration(durationMs: number): string {
   return minutes > 0 ? `${minutes}m ${seconds}s` : `${seconds}s`;
 }
 
-function Sidebar({
-  user,
-  activeView,
-  canOpenEnterpriseAdmin,
-  threads,
-  activeThreadId,
-  navigationLocked,
-  deletingThreadIds,
-  selectionMode,
-  selectedThreadIds,
-  onNewTask,
-  onOpenThread,
-  onToggleSelectionMode,
-  onToggleThreadSelection,
-  onRequestThreadDeletion,
-  onOpenMarketResearch,
-  onOpenCopywriting,
-  onOpenPlugins,
-  onOpenSkills,
-  onOpenAuth,
-  onLogout,
-}: {
+export type SidebarProps = {
   user: AuthUser | null;
   activeView: WorkbenchView;
   canOpenEnterpriseAdmin: boolean;
@@ -3174,16 +3549,47 @@ function Sidebar({
   onToggleSelectionMode: () => void;
   onToggleThreadSelection: (threadId: string) => void;
   onRequestThreadDeletion: (threadIds: string[]) => void;
-  onOpenMarketResearch: () => void;
-  onOpenCopywriting: () => void;
+  onOpenProductInsights: () => void;
+  onOpenCreative: () => void;
   onOpenPlugins: () => void;
   onOpenSkills: () => void;
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
-}) {
+  mobile?: boolean;
+  onNavigate?: () => void;
+};
+
+export function runSidebarNavigation(action: () => void, onNavigate?: () => void) {
+  action();
+  onNavigate?.();
+}
+
+export function Sidebar({
+  user,
+  activeView,
+  canOpenEnterpriseAdmin,
+  threads,
+  activeThreadId,
+  navigationLocked,
+  deletingThreadIds,
+  selectionMode,
+  selectedThreadIds,
+  onNewTask,
+  onOpenThread,
+  onToggleSelectionMode,
+  onToggleThreadSelection,
+  onRequestThreadDeletion,
+  onOpenProductInsights,
+  onOpenCreative,
+  onOpenPlugins,
+  onOpenSkills,
+  onOpenAuth,
+  onLogout,
+  mobile = false,
+  onNavigate,
+}: SidebarProps) {
   const [openSidebarFlyout, setOpenSidebarFlyout] = useState<SidebarFlyoutId | null>(null);
   const [sidebarFlyoutPosition, setSidebarFlyoutPosition] = useState({ left: 0, top: 0 });
-  const creativeButtonRef = useRef<HTMLButtonElement>(null);
   const moreButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarFlyoutRef = useRef<HTMLDivElement>(null);
 
@@ -3193,7 +3599,7 @@ function Sidebar({
     }
 
     function activeButton() {
-      return openSidebarFlyout === "creative" ? creativeButtonRef.current : moreButtonRef.current;
+      return moreButtonRef.current;
     }
 
     function closeSidebarFlyout(event: PointerEvent) {
@@ -3219,7 +3625,7 @@ function Sidebar({
       }
       const rect = button.getBoundingClientRect();
       const menuWidth = 252;
-      const menuHeight = (openSidebarFlyout === "creative" ? creativeNavItems.length : moreNavItems.length) * 40 + 16;
+      const menuHeight = moreNavItems.length * 40 + 16;
       setSidebarFlyoutPosition({
         left: Math.min(rect.right + 10, window.innerWidth - menuWidth - 8),
         top: Math.min(rect.top, window.innerHeight - menuHeight - 8),
@@ -3238,76 +3644,101 @@ function Sidebar({
     };
   }, [openSidebarFlyout]);
 
-  function toggleSidebarFlyout(flyout: SidebarFlyoutId) {
-    if (openSidebarFlyout === flyout) {
+  function toggleSidebarFlyout() {
+    if (openSidebarFlyout === "more") {
       setOpenSidebarFlyout(null);
       return;
     }
-    const button = flyout === "creative" ? creativeButtonRef.current : moreButtonRef.current;
+    const button = moreButtonRef.current;
     const rect = button?.getBoundingClientRect();
     if (rect) {
       const menuWidth = 252;
-      const menuHeight = (flyout === "creative" ? creativeNavItems.length : moreNavItems.length) * 40 + 16;
+      const menuHeight = moreNavItems.length * 40 + 16;
       setSidebarFlyoutPosition({
         left: Math.min(rect.right + 10, window.innerWidth - menuWidth - 8),
         top: Math.min(rect.top, window.innerHeight - menuHeight - 8),
       });
     }
-    setOpenSidebarFlyout(flyout);
+    setOpenSidebarFlyout("more");
   }
 
+  function openMoreNavigationItem(label: string) {
+    setOpenSidebarFlyout(null);
+    if (label === "插件") {
+      runSidebarNavigation(onOpenPlugins, onNavigate);
+    } else if (label === "技能") {
+      runSidebarNavigation(onOpenSkills, onNavigate);
+    }
+  }
+
+  const moreMenuItems = moreNavItems.map((item) => (
+    <button
+      key={item.label}
+      type="button"
+      role="menuitem"
+      className={cn(
+        "flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+        item.label === "插件" && activeView === "plugins" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+        item.label === "技能" && activeView === "skills" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
+        item.disabledReason && "cursor-not-allowed opacity-45",
+      )}
+      disabled={Boolean(item.disabledReason)}
+      aria-label={item.disabledReason ? `${item.label}：${item.disabledReason}` : item.label}
+      title={item.disabledReason ?? undefined}
+      onClick={() => openMoreNavigationItem(item.label)}
+    >
+      <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
+      <span className="truncate">{item.label}</span>
+      {item.disabledReason ? <span className="sr-only">{item.disabledReason}</span> : null}
+    </button>
+  ));
+
   return (
-    <aside className="hidden w-[var(--cp-sidebar-width)] shrink-0 flex-col border-r border-[var(--cp-border)] bg-[var(--cp-sidebar)] md:flex">
-      <div className="flex h-[56px] shrink-0 items-center justify-between px-4">
+    <aside
+      className={cn(
+        "w-[var(--cp-sidebar-width)] shrink-0 flex-col border-r border-[var(--cp-border)] bg-[var(--cp-sidebar)]",
+        mobile ? "flex h-full max-w-full" : "hidden md:flex",
+      )}
+      data-sidebar-variant={mobile ? "mobile" : "desktop"}
+    >
+      <div className={cn("flex h-[56px] shrink-0 items-center px-4", mobile && "pr-12")}>
         <div className="min-w-0 text-[18px] font-semibold leading-none text-[var(--cp-text)]">Commerce Pilot</div>
-        <div className="flex items-center gap-1">
-          <IconTooltip label="搜索">
-            <Button type="button" variant="ghost" size="icon" aria-label="搜索">
-              <Search />
-            </Button>
-          </IconTooltip>
-          <IconTooltip label="收起侧栏">
-            <Button type="button" variant="ghost" size="icon" aria-label="收起侧栏">
-              <PanelLeft />
-            </Button>
-          </IconTooltip>
-        </div>
       </div>
 
       <nav className="shrink-0 space-y-1 px-2" aria-label="主要导航">
         {primaryNavItems.map((item) => {
           const isNewTask = item.label === "新任务";
-          const isMarketResearch = item.label === "市场调研";
+          const isProductInsights = item.label === "商品决策";
           const isCreativeSpace = item.label === "创作空间";
-          const creativeOpen = isCreativeSpace && openSidebarFlyout === "creative";
           return (
             <button
               key={item.label}
-              ref={isCreativeSpace ? creativeButtonRef : undefined}
               type="button"
               className={cn(
                 "flex h-[var(--cp-sidebar-item-height)] w-full shrink-0 items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
                 isNewTask && activeView === "workbench" && !activeThreadId && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-                (creativeOpen || (isCreativeSpace && activeView === "copywriting")) &&
+                isCreativeSpace && activeView === "creative" &&
                   "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-                navigationLocked && isNewTask && "cursor-not-allowed opacity-50",
+                ((navigationLocked && isNewTask) || item.disabledReason) && "cursor-not-allowed opacity-50",
               )}
-              disabled={navigationLocked && isNewTask}
-              aria-expanded={isCreativeSpace ? creativeOpen : undefined}
-              aria-haspopup={isCreativeSpace ? "menu" : undefined}
-              aria-controls={isCreativeSpace ? "sidebar-creative-navigation" : undefined}
-              onClick={
-                isNewTask
+              disabled={(navigationLocked && isNewTask) || Boolean(item.disabledReason)}
+              aria-label={item.disabledReason ? `${item.label}：${item.disabledReason}` : item.label}
+              title={item.disabledReason ?? undefined}
+              onClick={() => {
+                const action = isNewTask
                   ? onNewTask
-                  : isMarketResearch
-                    ? onOpenMarketResearch
+                  : isProductInsights
+                    ? onOpenProductInsights
                     : isCreativeSpace
-                      ? () => toggleSidebarFlyout("creative")
-                      : undefined
-              }
+                      ? onOpenCreative
+                      : null;
+                if (!action) return;
+                runSidebarNavigation(action, onNavigate);
+              }}
             >
               <item.icon className="size-[var(--cp-sidebar-icon-size)] shrink-0" strokeWidth={1.8} />
               <span className="truncate">{item.label}</span>
+              {item.disabledReason ? <span className="sr-only">{item.disabledReason}</span> : null}
             </button>
           );
         })}
@@ -3324,7 +3755,7 @@ function Sidebar({
             aria-expanded={openSidebarFlyout === "more"}
             aria-haspopup="menu"
             aria-controls="sidebar-more-navigation"
-            onClick={() => toggleSidebarFlyout("more")}
+            onClick={toggleSidebarFlyout}
           >
             <Ellipsis className="size-[var(--cp-sidebar-icon-size)] shrink-0" strokeWidth={1.8} />
             <span className="truncate">更多</span>
@@ -3333,42 +3764,29 @@ function Sidebar({
         </div>
       </nav>
 
-      {openSidebarFlyout
+      {openSidebarFlyout && mobile ? (
+        <div
+          ref={sidebarFlyoutRef}
+          id="sidebar-more-navigation"
+          role="menu"
+          aria-label="更多功能"
+          className="mx-2 mt-1 rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2"
+        >
+          {moreMenuItems}
+        </div>
+      ) : null}
+
+      {openSidebarFlyout && !mobile
           ? createPortal(
               <div
                 ref={sidebarFlyoutRef}
-                id={openSidebarFlyout === "creative" ? "sidebar-creative-navigation" : "sidebar-more-navigation"}
+                id="sidebar-more-navigation"
                 role="menu"
-                aria-label={openSidebarFlyout === "creative" ? "创作空间功能" : "更多功能"}
+                aria-label="更多功能"
                 className="fixed z-50 w-[252px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)]"
                 style={{ left: sidebarFlyoutPosition.left, top: sidebarFlyoutPosition.top }}
               >
-                {(openSidebarFlyout === "creative" ? creativeNavItems : moreNavItems).map((item) => (
-                    <button
-                      key={item.label}
-                      type="button"
-                      role="menuitem"
-                      className={cn(
-                        "flex h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm text-[var(--cp-text-soft)] transition-colors duration-[var(--cp-duration-fast)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-                        item.label === "插件" && activeView === "plugins" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-                        item.label === "技能" && activeView === "skills" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-                        item.label === "文案生成" && activeView === "copywriting" && "bg-[var(--cp-surface-hover)] text-[var(--cp-text)]",
-                      )}
-                      onClick={() => {
-                        setOpenSidebarFlyout(null);
-                        if (item.label === "插件") {
-                          onOpenPlugins();
-                        } else if (item.label === "技能") {
-                          onOpenSkills();
-                        } else if (item.label === "文案生成") {
-                          onOpenCopywriting();
-                        }
-                      }}
-                    >
-                      <item.icon className="size-[18px] shrink-0" strokeWidth={1.8} />
-                      <span className="truncate">{item.label}</span>
-                    </button>
-                  ))}
+                {moreMenuItems}
               </div>,
               document.body,
             )
@@ -3384,7 +3802,9 @@ function Sidebar({
             deletingThreadIds={deletingThreadIds}
             selectionMode={selectionMode}
             selectedThreadIds={selectedThreadIds}
-            onOpenThread={onOpenThread}
+            onOpenThread={(thread) => {
+              runSidebarNavigation(() => onOpenThread(thread), onNavigate);
+            }}
             onToggleSelectionMode={onToggleSelectionMode}
             onToggleThreadSelection={onToggleThreadSelection}
             onRequestThreadDeletion={onRequestThreadDeletion}
@@ -3397,10 +3817,18 @@ function Sidebar({
           <AuthenticatedSidebarFooter
             user={user}
             canOpenEnterpriseAdmin={canOpenEnterpriseAdmin}
-            onLogout={onLogout}
+            onLogout={async () => {
+              onNavigate?.();
+              await onLogout();
+            }}
           />
         ) : (
-          <UnauthenticatedSidebarFooter onOpenAuth={onOpenAuth} />
+          <UnauthenticatedSidebarFooter
+            onOpenAuth={() => {
+              onNavigate?.();
+              onOpenAuth();
+            }}
+          />
         )}
       </div>
     </aside>
@@ -3504,7 +3932,7 @@ function SidebarThreadTree({
                   {items.map((thread) => {
                     const active =
                       thread.threadId === activeThreadId &&
-                      (activeView === "workbench" || activeView === "copywriting");
+                      activeView === "workbench";
                     const deleting = deletingThreadIds.has(thread.threadId);
                     const selected = selectedThreadIds.has(thread.threadId);
                     return (
@@ -3695,20 +4123,43 @@ function ThreadDeletionDialog({
   );
 }
 
-function MobileTopbar({
+export function MobileTopbar({
   user,
   onOpenAuth,
   onLogout,
+  renderNavigation,
 }: {
   user: AuthUser | null;
   onOpenAuth: () => void;
   onLogout: () => Promise<void>;
+  renderNavigation: (onNavigate: () => void) => ReactNode;
 }) {
+  const [navigationOpen, setNavigationOpen] = useState(false);
+
   return (
     <div className="fixed inset-x-0 top-0 z-30 flex h-14 items-center justify-between border-b border-[var(--cp-border)] bg-[rgba(255,255,255,0.96)] px-3 md:hidden">
-      <Button type="button" variant="ghost" size="icon" aria-label="打开导航">
-        <Menu />
-      </Button>
+      <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
+        <SheetTrigger asChild>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="打开导航"
+            aria-expanded={navigationOpen}
+          >
+            <Menu />
+          </Button>
+        </SheetTrigger>
+        <SheetContent
+          className="inset-y-0 left-0 right-auto h-dvh max-h-none rounded-none border-y-0 border-l-0 border-r p-0 [&>div:first-child]:hidden"
+          style={{ width: "min(88vw, var(--cp-sidebar-width))" }}
+          aria-label="移动导航"
+        >
+          <SheetTitle className="sr-only">Commerce Pilot 导航</SheetTitle>
+          <SheetDescription className="sr-only">打开工作台、商品决策、创作空间、插件、技能和最近任务。</SheetDescription>
+          {renderNavigation(() => setNavigationOpen(false))}
+        </SheetContent>
+      </Sheet>
       <div className="text-sm font-semibold text-[var(--cp-text)]">Commerce Pilot</div>
       {user ? (
         <Button type="button" variant="ghost" size="icon" aria-label="退出登录" onClick={onLogout}>
@@ -4142,10 +4593,12 @@ function GuestComposer({
           className="min-w-0 flex-1 border-0 bg-transparent px-1 text-[14px] text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
         />
 
-        <IconTooltip label="语音输入">
-          <Button type="button" variant="ghost" size="icon" className="size-9 rounded-full" aria-label="语音输入">
-            <Mic className="size-[18px]" />
-          </Button>
+        <IconTooltip label="语音输入暂不可用">
+          <span className="inline-flex">
+            <Button type="button" variant="ghost" size="icon" className="size-9 rounded-full" aria-label="语音输入暂不可用" disabled>
+              <Mic className="size-[18px]" />
+            </Button>
+          </span>
         </IconTooltip>
 
         <IconTooltip label="发送">
@@ -4190,6 +4643,8 @@ function WorkComposer({
   externalDataAvailable,
   externalDataApprovalMode,
   canManageExternalDataPolicy,
+  productContextMode,
+  selectedProducts,
   plugins,
   pluginsLoading,
   skills,
@@ -4202,6 +4657,10 @@ function WorkComposer({
   onModelChange,
   onReasoningEffortChange,
   onExternalDataApprovalModeChange,
+  onProductContextModeChange,
+  onSelectedProductsChange,
+  onRemoveSelectedProduct,
+  onOpenProductLibrary,
   onOpenPlugin,
   onSkillSelect,
   onSkillClear,
@@ -4219,6 +4678,8 @@ function WorkComposer({
   externalDataAvailable: boolean;
   externalDataApprovalMode: ExternalDataApprovalMode;
   canManageExternalDataPolicy: boolean;
+  productContextMode: ProductContextMode;
+  selectedProducts: ProductSummary[];
   plugins: CommercePluginInventoryItem[];
   pluginsLoading: boolean;
   skills: SkillInventoryItem[];
@@ -4231,6 +4692,10 @@ function WorkComposer({
   onModelChange: (model: string) => void;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   onExternalDataApprovalModeChange: (mode: ExternalDataApprovalMode) => void;
+  onProductContextModeChange: (mode: ProductContextMode) => void;
+  onSelectedProductsChange: (products: ProductSummary[]) => void;
+  onRemoveSelectedProduct: (productId: string) => void;
+  onOpenProductLibrary: () => void;
   onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
   onSkillSelect: (skill: SkillInventoryItem) => void;
   onSkillClear: () => void;
@@ -4242,7 +4707,8 @@ function WorkComposer({
   const composerInputRef = useRef<HTMLTextAreaElement>(null);
   const composerRootRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [activeComposerPopover, setActiveComposerPopover] = useState<"access" | "model" | null>(null);
+  const [compactComposerControls, setCompactComposerControls] = useState(false);
+  const [activeComposerPopover, setActiveComposerPopover] = useState<ComposerPopoverId | null>(null);
   const skillSelector = useComposerSkillSelector({
     value,
     skills,
@@ -4263,6 +4729,19 @@ function WorkComposer({
       resizeTextarea(composerInputRef.current, 68, 180);
     }
   }, [value]);
+
+  useLayoutEffect(() => {
+    const composer = composerRootRef.current;
+    if (!composer || typeof ResizeObserver === "undefined") return;
+    const update = (width: number) => setCompactComposerControls(shouldCompactComposerControls(width));
+    update(composer.getBoundingClientRect().width);
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) update(entry.contentRect.width);
+    });
+    observer.observe(composer);
+    return () => observer.disconnect();
+  }, []);
 
   return (
     <div className="w-full">
@@ -4306,6 +4785,9 @@ function WorkComposer({
             <SelectedSkillChip skill={selectedSkill} onRemove={onSkillClear} />
           </div>
         ) : null}
+        {productContextMode === "selected" && selectedProducts.length ? (
+          <SelectedProductChips products={selectedProducts} onRemove={onRemoveSelectedProduct} />
+        ) : null}
         {attachments.length || attachmentError ? (
           <ComposerAttachmentStrip attachments={attachments} error={attachmentError} onRemove={onRemoveAttachment} />
         ) : null}
@@ -4332,8 +4814,8 @@ function WorkComposer({
           aria-label="任务输入"
         />
 
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-1">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+          <div className="flex min-w-0 items-center gap-1 overflow-hidden">
             <IconTooltip label="添加">
               <Button
                 type="button"
@@ -4350,6 +4832,7 @@ function WorkComposer({
               </Button>
             </IconTooltip>
             <ExternalDataAccessControl
+              compact={compactComposerControls}
               value={externalDataApprovalMode}
               available={externalDataAvailable}
               showEnterpriseSettings={canManageExternalDataPolicy}
@@ -4363,10 +4846,27 @@ function WorkComposer({
                 );
               }}
             />
+            <ProductLibraryPicker
+              compact={compactComposerControls}
+              open={activeComposerPopover === "products"}
+              placement="bottom"
+              mode={productContextMode}
+              selectedProducts={selectedProducts}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) skillSelector.closeMenu();
+                setActiveComposerPopover((current) =>
+                  nextOpen ? "products" : current === "products" ? null : current,
+                );
+              }}
+              onModeChange={onProductContextModeChange}
+              onSelectedProductsChange={onSelectedProductsChange}
+              onManage={onOpenProductLibrary}
+            />
           </div>
 
-          <div className="flex items-center gap-1">
+          <div className="flex shrink-0 items-center gap-1">
             <ModelAndReasoningControl
+              compact={compactComposerControls}
               models={models}
               loading={modelsLoading}
               selectedModel={selectedModel}
@@ -4382,10 +4882,12 @@ function WorkComposer({
               }}
             />
 
-            <IconTooltip label="语音输入">
-              <Button type="button" variant="ghost" size="composerIcon" aria-label="语音输入" className="rounded-full">
-                <Mic />
-              </Button>
+            <IconTooltip label="语音输入暂不可用">
+              <span className="inline-flex">
+                <Button type="button" variant="ghost" size="composerIcon" aria-label="语音输入暂不可用" className="rounded-full" disabled>
+                  <Mic />
+                </Button>
+              </span>
             </IconTooltip>
 
             <IconTooltip label="提交">
@@ -4460,6 +4962,7 @@ const externalDataApprovalOptions: Array<{
 ];
 
 function ExternalDataAccessControl({
+  compact = false,
   value,
   available,
   showEnterpriseSettings,
@@ -4469,6 +4972,7 @@ function ExternalDataAccessControl({
   onChange,
   onOpenChange,
 }: {
+  compact?: boolean;
   value: ExternalDataApprovalMode;
   available: boolean;
   showEnterpriseSettings: boolean;
@@ -4505,7 +5009,10 @@ function ExternalDataAccessControl({
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        className="flex h-9 items-center gap-1.5 rounded-full px-2.5 text-xs text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:opacity-50 sm:px-3"
+        className={cn(
+          "flex h-9 items-center rounded-full text-xs text-[var(--cp-text-muted)] transition-colors hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:opacity-50",
+          compact ? "w-9 justify-center p-0" : "gap-1.5 px-2.5 max-sm:w-9 max-sm:justify-center max-sm:p-0 sm:px-3",
+        )}
         aria-label={`外部 API 调用权限：${available ? selected.label : "外部数据待配置"}`}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -4513,8 +5020,8 @@ function ExternalDataAccessControl({
         onClick={() => onOpenChange(!open)}
       >
         <selected.icon className="size-4 shrink-0" strokeWidth={1.8} />
-        <span className="whitespace-nowrap">{available ? selected.shortLabel : "访问"}</span>
-        <ChevronDown className="size-3.5 shrink-0" strokeWidth={1.8} />
+        {!compact ? <span className="whitespace-nowrap max-sm:hidden">{available ? selected.shortLabel : "访问"}</span> : null}
+        {!compact ? <ChevronDown className="size-3.5 shrink-0 max-sm:hidden" strokeWidth={1.8} /> : null}
       </button>
 
       {open ? (
@@ -4571,6 +5078,7 @@ function ExternalDataAccessControl({
 }
 
 function ModelAndReasoningControl({
+  compact = false,
   models,
   loading,
   selectedModel,
@@ -4582,6 +5090,7 @@ function ModelAndReasoningControl({
   onReasoningEffortChange,
   onOpenChange,
 }: {
+  compact?: boolean;
   models: ProviderModelSummary[];
   loading: boolean;
   selectedModel: string;
@@ -4652,7 +5161,10 @@ function ModelAndReasoningControl({
     <div ref={rootRef} className="relative">
       <button
         type="button"
-        className="flex h-9 max-w-[210px] items-center gap-1.5 rounded-full bg-[var(--cp-bg-subtle)] px-4 text-sm text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:text-[var(--cp-text-muted)] disabled:opacity-70 disabled:hover:bg-[var(--cp-bg-subtle)]"
+        className={cn(
+          "flex h-9 items-center rounded-full bg-[var(--cp-bg-subtle)] text-sm text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:text-[var(--cp-text-muted)] disabled:opacity-70 disabled:hover:bg-[var(--cp-bg-subtle)]",
+          compact ? "w-9 justify-center p-0" : "max-w-[210px] gap-1.5 px-4 max-sm:w-9 max-sm:justify-center max-sm:p-0",
+        )}
         aria-label={disabled ? "任务运行中不可切换模型" : "模型和推理设置"}
         aria-expanded={!disabled && open}
         aria-haspopup="menu"
@@ -4660,13 +5172,14 @@ function ModelAndReasoningControl({
         title={disabled ? "任务运行中不可切换模型" : undefined}
         onClick={toggleControl}
       >
-        <span className="truncate font-medium">{loading ? "加载模型" : formatModelName(selectedModel)}</span>
-        {reasoningSupported ? (
-          <span className="shrink-0 font-medium" style={{ color: effortOption.color }}>
+        <Sparkles className={cn("size-4", !compact && "sm:hidden")} strokeWidth={1.8} aria-hidden="true" />
+        {!compact ? <span className="truncate font-medium max-sm:hidden">{loading ? "加载模型" : formatModelName(selectedModel)}</span> : null}
+        {!compact && reasoningSupported ? (
+          <span className="shrink-0 font-medium max-sm:hidden" style={{ color: effortOption.color }}>
             {effortLabel}
           </span>
         ) : null}
-        <ChevronDown className="size-3.5 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
+        {!compact ? <ChevronDown className="size-3.5 shrink-0 text-[var(--cp-text-faint)] max-sm:hidden" strokeWidth={1.8} /> : null}
       </button>
 
       {!disabled && open && panel === "quick" && reasoningSupported ? (

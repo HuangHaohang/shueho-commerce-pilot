@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 
 import type { UserInput } from "./generated/v2/UserInput.js";
+import { isAppOwnedManagedSkillName } from "./managed-workflows.js";
 
 export const CODEX_SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
@@ -14,7 +15,12 @@ export function resolveExplicitSkillFromCatalog(
   cwd: string,
   requestedName: string,
 ): ExplicitSkillSelection | null {
-  if (!CODEX_SKILL_NAME_PATTERN.test(requestedName) || !isRecord(value) || !Array.isArray(value.data)) {
+  if (
+    !CODEX_SKILL_NAME_PATTERN.test(requestedName) ||
+    isAppOwnedManagedSkillName(requestedName) ||
+    !isRecord(value) ||
+    !Array.isArray(value.data)
+  ) {
     return null;
   }
   const entry = value.data.find((item) => isRecord(item) && item.cwd === cwd);

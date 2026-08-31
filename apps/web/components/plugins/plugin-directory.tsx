@@ -5,6 +5,8 @@ import {
   ArrowLeft,
   Check,
   ImageIcon,
+  MessageSquareText,
+  PackageSearch,
   Plus,
   Search,
   ShieldCheck,
@@ -21,7 +23,18 @@ import {
 } from "@/lib/plugins/catalog";
 import { cn } from "@/lib/utils";
 
-export function PluginDirectory({ initialSelectedPluginName = null }: { initialSelectedPluginName?: string | null }) {
+export const MANAGED_PLUGIN_GRID_CLASS_NAME =
+  "grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-6 gap-y-1";
+
+export function PluginDirectory({
+  initialSelectedPluginName = null,
+  onOpenProductLibrary,
+  onStartProductOnboarding,
+}: {
+  initialSelectedPluginName?: string | null;
+  onOpenProductLibrary?: () => void;
+  onStartProductOnboarding?: () => void;
+}) {
   const [query, setQuery] = useState("");
   const [selectedPluginName, setSelectedPluginName] = useState<string | null>(initialSelectedPluginName);
   const inventoryQuery = useQuery({
@@ -35,7 +48,14 @@ export function PluginDirectory({ initialSelectedPluginName = null }: { initialS
   const selectedPlugin = plugins.find((plugin) => plugin.manifest.name === selectedPluginName) ?? null;
 
   if (selectedPlugin) {
-    return <PluginDetail plugin={selectedPlugin} onBack={() => setSelectedPluginName(null)} />;
+    return (
+      <PluginDetail
+        plugin={selectedPlugin}
+        onBack={() => setSelectedPluginName(null)}
+        onOpenProductLibrary={onOpenProductLibrary}
+        onStartProductOnboarding={onStartProductOnboarding}
+      />
+    );
   }
 
   return (
@@ -107,15 +127,7 @@ export function PluginDirectory({ initialSelectedPluginName = null }: { initialS
                 </div>
 
                 {filteredPlugins.length ? (
-                  <div className="grid gap-x-10 gap-y-1 md:grid-cols-2">
-                    {filteredPlugins.map((plugin) => (
-                      <PluginListItem
-                        key={plugin.manifest.name}
-                        plugin={plugin}
-                        onOpen={() => setSelectedPluginName(plugin.manifest.name)}
-                      />
-                    ))}
-                  </div>
+                  <ManagedPluginGrid plugins={filteredPlugins} onOpen={setSelectedPluginName} />
                 ) : (
                   <div className="border-y border-[var(--cp-border)] py-10 text-sm text-[var(--cp-text-muted)]">
                     没有匹配的插件。
@@ -130,9 +142,32 @@ export function PluginDirectory({ initialSelectedPluginName = null }: { initialS
   );
 }
 
+export function ManagedPluginGrid({
+  plugins,
+  onOpen,
+}: {
+  plugins: CommercePluginInventoryItem[];
+  onOpen: (pluginName: string) => void;
+}) {
+  return (
+    <div className={MANAGED_PLUGIN_GRID_CLASS_NAME} data-managed-plugin-grid>
+      {plugins.map((plugin) => (
+        <PluginListItem
+          key={plugin.manifest.name}
+          plugin={plugin}
+          onOpen={() => onOpen(plugin.manifest.name)}
+        />
+      ))}
+    </div>
+  );
+}
+
 function PluginListItem({ plugin, onOpen }: { plugin: CommercePluginInventoryItem; onOpen: () => void }) {
   return (
-    <div className="grid min-h-[74px] grid-cols-[44px_minmax(0,1fr)_36px] items-center gap-3 border-b border-[var(--cp-border-subtle)] py-3">
+    <div
+      className="grid min-h-[74px] grid-cols-[44px_minmax(0,1fr)_36px] items-center gap-3 border-b border-[var(--cp-border-subtle)] py-3"
+      data-managed-plugin-item={plugin.manifest.name}
+    >
       <PluginIcon plugin={plugin} size="medium" />
       <button
         type="button"
@@ -178,11 +213,23 @@ function PluginListItem({ plugin, onOpen }: { plugin: CommercePluginInventoryIte
   );
 }
 
-function PluginDetail({ plugin, onBack }: { plugin: CommercePluginInventoryItem; onBack: () => void }) {
+export function PluginDetail({
+  plugin,
+  onBack,
+  onOpenProductLibrary,
+  onStartProductOnboarding,
+}: {
+  plugin: CommercePluginInventoryItem;
+  onBack: () => void;
+  onOpenProductLibrary?: () => void;
+  onStartProductOnboarding?: () => void;
+}) {
+  const displayNames = plugin.manifest.components.displayNames;
+  const isProductLibrary = plugin.manifest.name === "commerce-product-library";
   const components = [
-    ...plugin.manifest.components.skills.map((value) => ({ label: "Skill", value })),
-    ...plugin.manifest.components.mcpServers.map((value) => ({ label: "MCP", value })),
-    ...plugin.manifest.components.tools.map((value) => ({ label: "Tool", value })),
+    ...plugin.manifest.components.skills.map((value) => ({ typeLabel: "技能", displayName: displayNames[value] ?? "工作流技能", value })),
+    ...plugin.manifest.components.mcpServers.map((value) => ({ typeLabel: "服务", displayName: displayNames[value] ?? "托管服务", value })),
+    ...plugin.manifest.components.tools.map((value) => ({ typeLabel: "工具", displayName: displayNames[value] ?? "应用工具", value })),
   ];
 
   return (
@@ -241,16 +288,52 @@ function PluginDetail({ plugin, onBack }: { plugin: CommercePluginInventoryItem;
             {plugin.manifest.description}
           </p>
 
+          {isProductLibrary && (onStartProductOnboarding || onOpenProductLibrary) ? (
+            <section
+              className="mt-8 flex flex-col gap-4 border-y border-[var(--cp-border)] py-5 sm:flex-row sm:items-center sm:justify-between"
+              aria-labelledby="product-library-start-title"
+            >
+              <div className="min-w-0">
+                <h2 id="product-library-start-title" className="m-0 text-sm font-semibold text-[var(--cp-text)]">
+                  接入你的企业产品
+                </h2>
+                <p className="mb-0 mt-1 max-w-[500px] text-xs leading-5 text-[var(--cp-text-muted)]">
+                  不清楚字段和接入方式时，让 Harness 逐步引导；已经准备好文件时，可直接进入产品库上传并预览。
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                {onStartProductOnboarding ? (
+                  <Button type="button" className="h-9 rounded-full px-4" onClick={onStartProductOnboarding}>
+                    <MessageSquareText className="size-4" />
+                    通过对话接入
+                  </Button>
+                ) : null}
+                {onOpenProductLibrary ? (
+                  <Button type="button" variant="outline" className="h-9 rounded-full px-4" onClick={onOpenProductLibrary}>
+                    <PackageSearch className="size-4" />
+                    管理产品库
+                  </Button>
+                ) : null}
+              </div>
+            </section>
+          ) : null}
+
           <section className="mt-9" aria-labelledby="plugin-components-title">
             <h2 id="plugin-components-title" className="m-0 text-base font-semibold">组件</h2>
             <div className="mt-4 border-y border-[var(--cp-border)]">
               {components.map((component) => (
                 <div
-                  key={`${component.label}-${component.value}`}
-                  className="grid min-h-12 grid-cols-[68px_minmax(0,1fr)] items-center gap-4 border-b border-[var(--cp-border-subtle)] py-2 text-sm last:border-b-0"
+                  key={`${component.typeLabel}-${component.value}`}
+                  className="grid min-h-14 grid-cols-[68px_minmax(0,1fr)] items-center gap-4 border-b border-[var(--cp-border-subtle)] py-2 text-sm last:border-b-0"
+                  data-plugin-component={component.value}
                 >
-                  <span className="text-xs text-[var(--cp-text-faint)]">{component.label}</span>
-                  <code className="break-all font-mono text-xs text-[var(--cp-text-soft)]">{component.value}</code>
+                  <span className="text-xs text-[var(--cp-text-faint)]">{component.typeLabel}</span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-[var(--cp-text)]">{component.displayName}</span>
+                    <code className="mt-0.5 block break-all font-mono text-[11px] leading-4 text-[var(--cp-text-muted)]">
+                      {component.value}
+                    </code>
+                  </span>
                 </div>
               ))}
             </div>
@@ -285,7 +368,11 @@ function PluginDetail({ plugin, onBack }: { plugin: CommercePluginInventoryItem;
 }
 
 function PluginIcon({ plugin, size }: { plugin: CommercePluginInventoryItem; size: "medium" | "large" }) {
-  const Icon = plugin.manifest.interface.icon === "search" ? Search : ImageIcon;
+  const Icon = plugin.manifest.interface.icon === "search"
+    ? Search
+    : plugin.manifest.interface.icon === "package"
+      ? PackageSearch
+      : ImageIcon;
   return (
     <span
       className={cn(
@@ -293,7 +380,9 @@ function PluginIcon({ plugin, size }: { plugin: CommercePluginInventoryItem; siz
         size === "large" ? "size-12" : "size-11",
         plugin.manifest.interface.icon === "search"
           ? "bg-[#e9f6f2] text-[#176c5a]"
-          : "bg-[#fff0eb] text-[#a74736]",
+          : plugin.manifest.interface.icon === "package"
+            ? "bg-[var(--cp-info-bg)] text-[var(--cp-info)]"
+            : "bg-[#fff0eb] text-[#a74736]",
       )}
       aria-hidden="true"
     >
@@ -325,8 +414,8 @@ function PluginInventorySkeleton() {
           <div key={item} className="size-12 animate-pulse rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-muted)]" />
         ))}
       </div>
-      <div className="mt-10 grid gap-x-10 md:grid-cols-2">
-        {[0, 1].map((item) => (
+      <div className={cn("mt-10", MANAGED_PLUGIN_GRID_CLASS_NAME)}>
+        {[0, 1, 2].map((item) => (
           <div key={item} className="flex min-h-[74px] items-center gap-3 border-b border-[var(--cp-border-subtle)] py-3">
             <div className="size-11 animate-pulse rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-muted)]" />
             <div className="flex-1">

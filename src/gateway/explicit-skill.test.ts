@@ -59,6 +59,7 @@ test("rejects browser paths, disabled skills, unsafe names, and relative catalog
         skills: [
           { name: "disabled-skill", path: "/srv/skills/disabled/SKILL.md", enabled: false },
           { name: "relative-skill", path: "skills/relative/SKILL.md", enabled: true },
+          { name: "commerce-product-main-image", path: "/srv/internal/main/SKILL.md", enabled: true },
         ],
       },
     ],
@@ -66,5 +67,6 @@ test("rejects browser paths, disabled skills, unsafe names, and relative catalog
 
   assert.equal(resolveExplicitSkillFromCatalog(catalog, cwd, "disabled-skill"), null);
   assert.equal(resolveExplicitSkillFromCatalog(catalog, cwd, "relative-skill"), null);
+  assert.equal(resolveExplicitSkillFromCatalog(catalog, cwd, "commerce-product-main-image"), null);
   assert.equal(resolveExplicitSkillFromCatalog(catalog, cwd, "../../host-skill"), null);
 });

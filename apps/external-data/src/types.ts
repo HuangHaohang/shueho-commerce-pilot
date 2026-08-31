@@ -1,5 +1,16 @@
 export type JsonObject = Record<string, unknown>;
 
+export type FirstPartyResearchSubject = {
+  version: 1;
+  subjectRef: string;
+  snapshotSha256: string;
+  productCount: number;
+  products: Array<{
+    productId: string;
+    productRevisionId: string;
+  }>;
+};
+
 export type ExternalDataScope = {
   tenantId: string;
   workspaceId: string;
@@ -17,6 +28,7 @@ export type ExternalDataScope = {
   workflowStepInstanceId?: string | null;
   workflowTargetId?: string | null;
   enrichmentQueryTerms?: string[];
+  firstPartySubject?: FirstPartyResearchSubject | null;
 };
 
 export type ExternalDataBusinessIntent = {
@@ -43,6 +55,7 @@ export type ExternalDataBusinessIntent = {
   localizedKeywords?: string[];
   marketContext?: JsonObject | null;
   qualityPolicy?: JsonObject | null;
+  firstPartySubject?: FirstPartyResearchSubject | null;
 };
 
 export type ProviderEndpoint = {

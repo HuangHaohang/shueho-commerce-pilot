@@ -3,6 +3,10 @@ import { NextResponse } from "next/server";
 import { getAuthDatabase } from "@/lib/auth/database";
 import { getAuthenticatedUserId } from "@/lib/auth/require-session";
 import { ENTERPRISE_PERMISSIONS, type EnterprisePermission } from "@/lib/enterprise/permissions";
+import {
+  readRuntimeTenantPin,
+  RuntimeTenantConfigurationError,
+} from "@/lib/enterprise/runtime-tenant";
 import type { EnterpriseContext } from "@/lib/enterprise/types";
 
 type ContextRow = {
@@ -66,9 +70,24 @@ export async function resolveEnterpriseContext(
       response: NextResponse.json({ error: "工作区标识无效。" }, { status: 400 }),
     };
   }
-  let loaded = await loadEnterpriseContext(userId, requestedWorkspaceId);
+  let runtimeTenantId: string | null;
+  try {
+    runtimeTenantId = readRuntimeTenantPin();
+  } catch (error) {
+    if (error instanceof RuntimeTenantConfigurationError) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: "企业运行环境尚未正确绑定。", code: "RUNTIME_TENANT_CONFIGURATION_INVALID" },
+          { status: 503, headers: { "Cache-Control": "no-store" } },
+        ),
+      };
+    }
+    throw error;
+  }
+  let loaded = await loadEnterpriseContext(userId, requestedWorkspaceId, runtimeTenantId);
   if (!loaded && !requestedWorkspaceHeader && requestedWorkspaceCookie) {
-    loaded = await loadEnterpriseContext(userId, null);
+    loaded = await loadEnterpriseContext(userId, null, runtimeTenantId);
   }
   const row = loaded?.row;
   const roles = loaded?.roles ?? [];
@@ -175,6 +194,7 @@ export async function resolveEnterpriseContext(
 async function loadEnterpriseContext(
   userId: string,
   requestedWorkspaceId: string | null,
+  runtimeTenantId: string | null,
 ): Promise<{ row: ContextRow; roles: RoleRow[] } | null> {
   const client = await getAuthDatabase().connect();
   try {
@@ -192,11 +212,12 @@ async function loadEnterpriseContext(
           AND tenant_member.status = 'active'
           AND workspace_member.status = 'active'
           AND ($2::uuid IS NULL OR workspace_member.workspace_id = $2::uuid)
+          AND ($3::uuid IS NULL OR tenant_member.tenant_id = $3::uuid)
         ORDER BY tenant_member.is_default DESC, workspace_member.is_default DESC,
                  tenant_member.created_at, workspace_member.created_at
         LIMIT 1
       `,
-      [userId, requestedWorkspaceId],
+      [userId, requestedWorkspaceId, runtimeTenantId],
     );
     const candidate = candidates.rows[0];
     if (!candidate) {

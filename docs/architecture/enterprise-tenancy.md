@@ -28,7 +28,7 @@ This model is informed by OpenAI's documented Enterprise workspace, roles, group
 
 ## Implemented Data Model
 
-The current Enterprise schema is migrations `001` through `032`. Versioned migrations are applied by `npm run auth:migrate` under a PostgreSQL advisory lock:
+The current Enterprise schema is migrations `001` through `043`. Versioned migrations are applied by `npm run auth:migrate` under a PostgreSQL advisory lock:
 
 - `001` creates the tenant/workspace/RBAC/contract/thread/usage/lease/audit foundation;
 - `002` separates organization from tenant and adds tenant-wide admission scope;
@@ -58,6 +58,13 @@ The current Enterprise schema is migrations `001` through `032`. Versioned migra
 - `030` reads provider `requestId` and `recordTime` from either the direct response envelope or the MCP `raw` envelope and backfills existing archives.
 - `031` stores compact external-data warehouse receipts without copying provider result bodies into the control-plane database.
 - `032` records the dynamic-tool contract installed at `thread/start`; existing rows remain version `0` and are never falsely upgraded by `thread/resume`.
+- `034` identifies Creative Space projects as ordinary tenant/workspace-owned Harness threads.
+- `035` through `038` add the workspace-owned Product/SPU and Variant/SKU master, immutable import lineage, Turn-bound product context, and connector registry.
+- `039` identifies the conversational product-onboarding Recipe without introducing a second Agent runtime.
+- `040` closes the remaining multi-company boundary: all retained Agent threads require tenant/workspace ownership, the legacy NULL-tenant RLS branch is removed, every Enterprise constraint is validated, historical global-id relationships are replaced by compound tenant/workspace foreign keys, and deletion-job claiming requires a matching tenant pin.
+- `041` grants ordinary workspace operators bounded product file import while retaining product review, publication, connector management, and secret administration as separate higher-trust permissions.
+- `042` binds the Web/BFF and Product Catalog secret resolution to one tenant, replaces user-supplied env references with workspace-scoped opaque handles, and adds import storage budgets, content replay deduplication, legal hold, retention cleanup, and audit readback.
+- `043` adds immutable UUID receipts for Harness mapping proposal and validation operations.
 
 | Area | Primary records | Boundary |
 | --- | --- | --- |
@@ -357,17 +364,19 @@ Runtime and migration credentials are separate:
 - `DATABASE_URL` is the web/BFF role. In production it must be non-superuser, must not have `BYPASSRLS`, and receives only the table/sequence privileges needed at runtime. Application initialization refuses to run when production detects either dangerous role flag.
 - `MIGRATION_DATABASE_URL` is the owner/migration credential loaded only by migration, provisioning, and isolation-verification jobs (locally from `.env.migration`). Production migration fails closed when it is absent. Do not mount that file or inject the variable into the long-running web process.
 
-After migrations, run `npm run enterprise:verify-isolation` with distinct URLs. The verifier confirms the runtime role flags, unscoped invisibility, self-membership discovery, organization/tenant/workspace isolation, rejected cross-tenant writes, and tenant-wide same-tenant lease aggregation. `COMMERCE_ENFORCE_DATABASE_RLS=true` enables the same role check in CI/local runs; production enforces it regardless.
+After migrations, run `npm run enterprise:verify-isolation` with distinct URLs. The verifier confirms the runtime role flags, unscoped invisibility, self-membership discovery, organization/tenant/workspace isolation, rejected cross-tenant and cross-workspace relationships, and tenant-wide same-tenant lease aggregation. It also discovers every `commerce_*` table from the PostgreSQL catalog and fails when a tenant-owned table lacks enabled and forced RLS, a policy, or a validated compound scope foreign key; when a scoped relationship omits `tenant_id`; when any Enterprise constraint remains `NOT VALID`; or when the application role can mutate approved global master data. `COMMERCE_ENFORCE_DATABASE_RLS=true` enables the same role check in CI/local runs; production enforces it regardless.
 
-The thread policy temporarily permits legacy rows whose `tenant_id` is `NULL` when their legacy `user_id` matches the current user. Bootstrap backfills the selected owner's old rows. Before a sensitive multi-company production migration is declared complete, every retained legacy row must be assigned or quarantined, the foreign key validated, and the legacy RLS branch removed in a follow-up migration.
+Migration `040` is deliberately fail-closed for legacy installations: it refuses to apply while any retained Agent thread lacks `tenant_id`, `workspace_id`, or `created_by_user_id`. The operator must first run the controlled Enterprise bootstrap/backfill for each retained owner. After `040`, those columns are `NOT NULL`, the workspace foreign key is validated, and no legacy NULL-tenant RLS access path remains.
 
 ### Codex Runtime
 
 Production uses one dedicated Gateway, Codex App Server process, `CODEX_HOME`, provider credential set, runtime workspace, generated-artifact volume, Hook audit, and event outbox per tenant. Direction-change input remains in App Server's durable queue; no application pending-steer file exists. `COMMERCE_RUNTIME_TENANT_ID` is mandatory in production and prevents a dedicated Gateway from accepting a different tenant id.
 
+The durable thread-deletion worker uses the same mandatory tenant pin. Its `SECURITY DEFINER` claim function rejects a missing tenant, rejects a transaction scope that differs from the requested tenant, and filters the claim/update by that exact tenant. The worker never loads `.env.migration` or a migration credential.
+
 App Server runs as a non-root identity in a container or equivalent OS isolation boundary. Mount only the tenant's runtime and artifact volumes. Do not mount the source repository, developer home, Docker socket, SSH agent, cloud metadata socket, or another tenant's volume. Application tool filtering remains mandatory but is not a replacement for OS isolation.
 
-The current application has one static `COMMERCE_GATEWAY_URL`; it is not yet a central runtime manager for many dedicated tenants. Until tenant-aware runtime provisioning and routing are implemented, production must deploy a tenant-specific application/Gateway stack or an equivalently isolated per-tenant route configured outside browser control. Local development may omit the tenant pin for cross-tenant authorization tests, but that mode is not production hard isolation.
+The current application has one static `COMMERCE_GATEWAY_URL`; it is not yet a central runtime manager for many dedicated tenants. Until tenant-aware runtime provisioning and routing are implemented, production must deploy a tenant-specific application/Gateway stack or an equivalently isolated per-tenant route configured outside browser control. A local Gateway may omit its tenant pin only for explicit cross-tenant authorization tests, but that mode is not production hard isolation; durable workers always require a tenant pin.
 
 ## Revocation And Concurrent Use
 

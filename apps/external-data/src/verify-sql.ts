@@ -419,6 +419,13 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
   const tenantId = randomUUID();
   const rootCallId = `workflow_verify_${randomUUID().replaceAll("-", "")}`;
   const requestText = "帮我通过关键词查询京东轻量通勤双肩包的商品详情和价格";
+  const firstPartySubject = {
+    version: 1 as const,
+    subjectRef: randomUUID(),
+    snapshotSha256: "a".repeat(64),
+    productCount: 1,
+    products: [{ productId: randomUUID(), productRevisionId: randomUUID() }],
+  };
   const baseScope = {
     tenantId,
     workspaceId: randomUUID(),
@@ -427,6 +434,7 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
     sourceCallId: rootCallId,
     requestText,
     topN: 20,
+    firstPartySubject,
   };
   try {
     const request: MarketplaceResearchRequest = {
@@ -441,7 +449,7 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
       maxResults: 20,
       detailSampleSize: 2,
     };
-    const plan = await planMarketplaceProductResearch(request);
+    const plan = await planMarketplaceProductResearch(request, {}, firstPartySubject);
     assert.equal(plan.workflow.workflowId, "jd.products_by_keyword_v1");
     assert.equal(plan.estimatedProviderCalls,5);
     const planScope = {
@@ -450,6 +458,14 @@ async function verifyMarketplaceKeywordWorkflow(models: LocalModelClient): Promi
       businessIntent: toExternalBusinessIntent(plan.businessIntent),
     };
     const persisted = await persistMarketplaceResearchPlan(planScope,request,plan);
+    await assert.rejects(
+      () => loadExecutableMarketplaceResearchPlan({
+        ...baseScope,
+        firstPartySubject: { ...firstPartySubject, snapshotSha256: "b".repeat(64) },
+      },persisted.planId),
+      (error: unknown) => error instanceof Error &&
+        "code" in error && error.code === "PLAN_SUBJECT_MISMATCH",
+    );
     const loaded = await loadExecutableMarketplaceResearchPlan(baseScope,persisted.planId);
     assert.equal(loaded.plan.planKey,plan.planKey);
     const execution = await beginMarketplaceWorkflowExecution({

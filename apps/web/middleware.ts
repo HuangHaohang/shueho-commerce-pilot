@@ -1,14 +1,35 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { requireBoundedContentLength } from "@/lib/http/content-length";
+
 const MAX_API_BODY_BYTES = 64 * 1024;
 const MAX_ATTACHMENT_BODY_BYTES = 5 * 1024 * 1024 + 256 * 1024;
+const MAX_PRODUCT_IMPORT_BODY_BYTES = 5 * 1024 * 1024 + 256 * 1024;
 const MAX_EXTERNAL_DATA_CONTROL_BODY_BYTES = 6 * 1024 * 1024 + 256 * 1024;
 
 export function middleware(request: NextRequest) {
   if (!["POST", "PUT", "PATCH"].includes(request.method)) return NextResponse.next();
+  const productUpload = request.nextUrl.pathname === "/api/internal/product-catalog/import-artifact" ||
+    request.nextUrl.pathname === "/api/products/imports";
+  if (productUpload) {
+    const maximum = request.nextUrl.pathname === "/api/internal/product-catalog/import-artifact"
+      ? MAX_PRODUCT_IMPORT_BODY_BYTES
+      : MAX_PRODUCT_IMPORT_BODY_BYTES;
+    const length = requireBoundedContentLength(request.headers, maximum);
+    if (!length.ok) {
+      return NextResponse.json(
+        { error: "请求长度缺失、无效或过大。", code: length.code },
+        { status: length.status, headers: { "Cache-Control": "no-store" } },
+      );
+    }
+  }
   const contentLength = Number.parseInt(request.headers.get("content-length") || "0", 10);
   const maximumBytes = request.nextUrl.pathname === "/api/internal/external-data"
     ? MAX_EXTERNAL_DATA_CONTROL_BODY_BYTES
+    : request.nextUrl.pathname === "/api/internal/product-catalog/import-artifact"
+      ? MAX_PRODUCT_IMPORT_BODY_BYTES
+    : request.nextUrl.pathname === "/api/products/imports"
+      ? MAX_PRODUCT_IMPORT_BODY_BYTES
     : /^\/api\/agent\/threads\/[^/]+\/attachments$/.test(request.nextUrl.pathname)
       ? MAX_ATTACHMENT_BODY_BYTES
       : MAX_API_BODY_BYTES;

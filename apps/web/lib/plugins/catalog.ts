@@ -9,13 +9,14 @@ export const commercePluginManifestSchema = z.object({
     shortDescription: z.string().min(1).max(120),
     category: z.enum(["研究", "创作", "电商运营", "数据", "自动化"]),
     capabilities: z.array(z.string().min(1).max(40)).max(8),
-    icon: z.enum(["search", "image"]),
+    icon: z.enum(["search", "image", "package"]),
     coverImage: z.string().startsWith("/plugins/"),
   }),
   components: z.object({
     skills: z.array(z.string()).default([]),
     mcpServers: z.array(z.string()).default([]),
     tools: z.array(z.string()).default([]),
+    displayNames: z.record(z.string(), z.string().min(1).max(80)).default({}),
     ui: z.boolean().default(false),
   }),
   security: z.object({
@@ -58,6 +59,9 @@ export type PluginRuntimeSignals = {
     tools: string[];
     error: string | null;
   };
+  productCatalog: {
+    configured: boolean;
+  };
 };
 
 const builtinManifests = [
@@ -76,6 +80,10 @@ const builtinManifests = [
     components: {
       mcpServers: ["commerce_web"],
       tools: ["commerce_web.search"],
+      displayNames: {
+        commerce_web: "网页检索服务",
+        "commerce_web.search": "搜索公开网页",
+      },
     },
     security: {
       network: "provider-only",
@@ -97,11 +105,67 @@ const builtinManifests = [
     },
     components: {
       tools: ["image_gen"],
+      displayNames: {
+        image_gen: "生成电商图片",
+      },
     },
     security: {
       network: "provider-only",
       dataAccess: "tenant-artifacts",
       writeEffects: false,
+    },
+  }),
+  commercePluginManifestSchema.parse({
+    name: "commerce-product-library",
+    version: "1.1.0",
+    description: "将企业自有产品源归一为可审计的 Product/SPU 与 Variant/SKU 主数据，并通过 Codex Harness 工具为电商任务提供有界产品上下文。",
+    interface: {
+      displayName: "产品库",
+      shortDescription: "归一企业产品数据，并为 Agent 提供可信商品上下文",
+      category: "数据",
+      capabilities: ["对话式接入", "产品主数据", "来源留存", "AI 字段映射", "工作区隔离"],
+      icon: "package",
+      coverImage: "/plugins/product-library-cover.png",
+    },
+    components: {
+      tools: [
+        "commerce_product.list_connectors",
+        "commerce_product.list_sources",
+        "commerce_product.list_imports",
+        "commerce_product.create_import_from_artifact",
+        "commerce_product.create_source_draft",
+        "commerce_product.test_source",
+        "commerce_product.search_products",
+        "commerce_product.get_product",
+        "commerce_product.get_selected_product_context",
+        "commerce_product.inspect_import",
+        "commerce_product.propose_mapping",
+        "commerce_product.validate_mapping",
+        "commerce_product.activate_import",
+        "commerce_product.import_status",
+      ],
+      displayNames: {
+        "commerce_product.list_connectors": "查看可用接入方式",
+        "commerce_product.list_sources": "查看已接入数据源",
+        "commerce_product.list_imports": "查看导入批次",
+        "commerce_product.create_import_from_artifact": "从会话文件创建导入",
+        "commerce_product.create_source_draft": "创建数据源配置",
+        "commerce_product.test_source": "测试数据源连接",
+        "commerce_product.search_products": "搜索产品",
+        "commerce_product.get_product": "读取产品详情",
+        "commerce_product.get_selected_product_context": "读取已选产品上下文",
+        "commerce_product.inspect_import": "检查导入批次",
+        "commerce_product.propose_mapping": "生成字段映射建议",
+        "commerce_product.validate_mapping": "验证字段映射",
+        "commerce_product.activate_import": "发布导入结果",
+        "commerce_product.import_status": "读取导入状态",
+      },
+      ui: true,
+    },
+    security: {
+      network: "none",
+      dataAccess: "commerce-records",
+      writeEffects: true,
     },
   }),
 ] as const;
@@ -124,6 +188,19 @@ export function buildCommercePluginInventory(
         health: enabled ? "ready" : signals.managedMcp.state === "failed" ? "unavailable" : "degraded",
         statusLabel: enabled ? "运行正常" : signals.managedMcp.error || "等待 MCP 运行时",
         lockedReason: "由 Commerce Pilot 托管并按线程校验 MCP 工具目录。",
+      };
+    }
+
+    if (manifest.name === "commerce-product-library") {
+      const enabled = signals.gatewayReady && signals.productCatalog?.configured === true;
+      return {
+        manifest,
+        source: "application-managed",
+        installed: true,
+        enabled,
+        health: enabled ? "ready" : "degraded",
+        statusLabel: enabled ? "运行正常 · 工作区产品主数据" : "等待产品库控制服务",
+        lockedReason: "产品事实由工作区 RLS、字段来源和 Harness 工具共同约束；导入发布需要授权、幂等与读回。",
       };
     }
 
@@ -162,6 +239,7 @@ export function filterCommercePlugins(
       ...plugin.manifest.components.skills,
       ...plugin.manifest.components.mcpServers,
       ...plugin.manifest.components.tools,
+      ...Object.values(plugin.manifest.components.displayNames),
     ]
       .join(" ")
       .toLocaleLowerCase("zh-CN");

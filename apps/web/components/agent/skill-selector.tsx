@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, ChevronRight, FileUp, ImageIcon, Loader2, Search, WandSparkles, X } from "lucide-react";
+import { Check, ChevronRight, FileUp, ImageIcon, Loader2, PackageSearch, Search, WandSparkles, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 
 import {
@@ -210,7 +210,11 @@ export function ComposerAddMenu({
             <MenuLoading label="正在读取插件" />
           ) : visiblePlugins.length ? (
             visiblePlugins.map((plugin) => {
-              const Icon = plugin.manifest.interface.icon === "search" ? Search : ImageIcon;
+              const Icon = plugin.manifest.interface.icon === "search"
+                ? Search
+                : plugin.manifest.interface.icon === "package"
+                  ? PackageSearch
+                  : ImageIcon;
               return (
                 <button
                   key={plugin.manifest.name}
@@ -223,7 +227,9 @@ export function ComposerAddMenu({
                     "flex size-6 items-center justify-center rounded-[6px] border border-[var(--cp-border-subtle)]",
                     plugin.manifest.interface.icon === "search"
                       ? "bg-[#e9f6f2] text-[#176c5a]"
-                      : "bg-[#fff0eb] text-[#a74736]",
+                      : plugin.manifest.interface.icon === "package"
+                        ? "bg-[var(--cp-info-bg)] text-[var(--cp-info)]"
+                        : "bg-[#fff0eb] text-[#a74736]",
                   )}>
                     <Icon className="size-3.5" strokeWidth={1.8} />
                   </span>

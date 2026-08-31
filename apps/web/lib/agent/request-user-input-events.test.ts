@@ -70,4 +70,24 @@ describe("request_user_input protocol channels", () => {
       origin: "commerce_approval",
     })).toBeNull();
   });
+
+  it("preserves the application-owned product activation approval identity", () => {
+    expect(readPendingRequestUserInputEvent({
+      type: "notification",
+      method: "commerce/approval/requested",
+      params: {
+        requestId: "product_call-1",
+        threadId: "thread_12345678",
+        turnId: "turn_12345678",
+        itemId: "call_12345678",
+        questions: [{ ...question, options: [{ label: "激活并导入", description: "发布并回读" }] }],
+        action: "product_catalog.activate_import",
+        origin: "commerce_approval",
+      },
+    })).toMatchObject({
+      requestId: "product_call-1",
+      origin: "commerce_approval",
+      action: "product_catalog.activate_import",
+    });
+  });
 });

@@ -14,7 +14,15 @@ export type PendingRequestUserInput = {
   isBlocking: boolean;
   receivedAt: string;
   origin: "codex_app_server" | "commerce_approval";
-  action?: "skill.publish" | "external_data.call";
+  action?:
+    | "skill.publish"
+    | "external_data.call"
+    | "product_catalog.activate_import"
+    | "product_catalog.create_import_from_artifact"
+    | "product_catalog.create_source_draft"
+    | "product_catalog.test_source"
+    | "product_catalog.propose_mapping"
+    | "product_catalog.validate_mapping";
 };
 
 export function readPendingRequestUserInput(

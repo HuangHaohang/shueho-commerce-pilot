@@ -15,10 +15,14 @@
     "enterprise:verify-external-data": "tsx scripts/verify-external-data-governance.ts",
     "enterprise:import-justoneapi-pricing": "tsx scripts/import-justoneapi-pricing.ts",
     "enterprise:reconcile-usage": "tsx scripts/reconcile-enterprise-usage.ts",
+    "enterprise:provision-product-secret": "tsx scripts/provision-product-secret-handle.ts",
     "jobs:thread-deletion": "tsx scripts/run-thread-deletion-worker.ts",
+    "jobs:product-import-retention": "tsx scripts/run-product-import-retention-worker.ts",
     "jobs:external-data-retention": "tsx scripts/run-external-data-retention-worker.ts"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "^1.1.23",
+    "@radix-ui/react-popover": "^1.1.23",
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@tanstack/react-query": "^5.85.5",

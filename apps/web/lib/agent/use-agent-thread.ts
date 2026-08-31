@@ -13,8 +13,14 @@ import {
   readWebSourcesFromToolItem,
   type WebSource,
 } from "./web-sources";
-import { readDynamicToolActivity, readMcpToolActivity } from "./tool-activity";
-import type { TaskCategory } from "./task-category";
+import {
+  readDynamicToolActivity,
+  readMcpToolActivity,
+  type ResearchToolProjection,
+} from "./tool-activity";
+import type { AgentRecipeId, AgentWorkflowId, TaskCategory } from "./task-category";
+import type { CreativeMethod } from "@/lib/creative/creative-method-contract";
+import type { ProductInsightMethod } from "@/lib/research/product-insight-contract";
 import { readNativeSkillMessage, readVisibleAttachmentMessage } from "./skill-invocation";
 import {
   isAgentMessageFeedbackRating,
@@ -79,6 +85,7 @@ export type AgentActivity = {
   label: string;
   detail?: string;
   durationMs?: number | null;
+  research?: ResearchToolProjection;
   sources?: WebSource[];
   status: "running" | "completed" | "failed";
 };
@@ -117,16 +124,44 @@ export type PendingRequestUserInput = {
   isBlocking: boolean;
   receivedAt: string;
   origin: RequestUserInputOrigin;
-  action?: "skill.publish" | "external_data.call";
+  action?: "skill.publish" | "external_data.call" | "product_catalog.activate_import";
 };
 
 export type AgentSubmitOptions = {
-  workflow?: "commerce-copywriting" | "commerce-market-research";
+  workflow?: AgentWorkflowId;
+  creativeMethod?: CreativeMethod;
+  insightMethod?: ProductInsightMethod;
   skillName?: string;
   displaySkillName?: string;
   attachments?: PendingAttachmentUpload[];
   externalDataApprovalMode?: "always_ask" | "task" | "policy";
+  productIds?: string[];
+  productContextMode?: "auto" | "selected" | "none";
 };
+
+export function buildAgentTurnRequestBody(input: {
+  message: string;
+  model: string;
+  effort?: string;
+  options?: AgentSubmitOptions;
+  attachmentIds: string[];
+  clientRequestId: string;
+}) {
+  return {
+    message: input.message,
+    model: input.model,
+    effort: input.effort,
+    workflow: input.options?.workflow,
+    creativeMethod: input.options?.creativeMethod,
+    insightMethod: input.options?.insightMethod,
+    skillName: input.options?.skillName,
+    attachmentIds: input.attachmentIds,
+    externalDataApprovalMode: input.options?.externalDataApprovalMode ?? "always_ask",
+    productIds: input.options?.productIds ?? [],
+    productContextMode: input.options?.productContextMode ?? "none",
+    clientRequestId: input.clientRequestId,
+  };
+}
 
 export type AgentThreadSummary = {
   threadId: string;
@@ -137,20 +172,10 @@ export type AgentThreadSummary = {
   activeTurnId: string | null;
   turnStartedAt: string | null;
   durationMs: number | null;
-  recipeId: "copywriting" | "market_research" | null;
+  recipeId: AgentRecipeId | null;
   category: TaskCategory;
   toolContractVersion: number;
 };
-
-function recipeIdForWorkflow(
-  workflow: AgentSubmitOptions["workflow"],
-): AgentThreadSummary["recipeId"] {
-  return workflow === "commerce-copywriting"
-    ? "copywriting"
-    : workflow === "commerce-market-research"
-      ? "market_research"
-      : null;
-}
 
 type StoredThreadResponse = {
   thread: {
@@ -160,7 +185,7 @@ type StoredThreadResponse = {
     status: "running" | "completed" | "interrupted" | "failed";
     durationMs: number | null;
     startedAt: string | null;
-    recipeId: "copywriting" | "market_research" | null;
+    recipeId: AgentRecipeId | null;
     category: TaskCategory;
   };
   messages: ConversationMessage[];
@@ -217,6 +242,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const threadIdRef = useRef<string | null>(null);
+  const messagesRef = useRef<ConversationMessage[]>([]);
   const pendingUserInputRef = useRef<PendingRequestUserInput | null>(null);
   const sequenceRef = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
@@ -229,9 +256,27 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const feedbackSubmittingIdsRef = useRef(new Set<string>());
   const pendingSubmitClientIdRef = useRef<string | null>(null);
   const pendingSubmitStartedAtRef = useRef<number | null>(null);
+  const pendingSteerClientIdRef = useRef<string | null>(null);
+  const confirmedSteerClientIdRef = useRef<string | null>(null);
+  const unconfirmedSteerRef = useRef<{
+    threadId: string;
+    turnId: string;
+    workflow: AgentWorkflowId;
+    insightMethod?: ProductInsightMethod;
+    message: string;
+    clientRequestId: string;
+  } | null>(null);
   const historySequenceFloorRef = useRef(0);
   const historyLoadRequestRef = useRef(0);
   const historyLoadControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    threadIdRef.current = threadId;
+  }, [threadId]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const refreshQueue = useCallback(async (id: string): Promise<void> => {
     try {
@@ -398,6 +443,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           if (pendingSubmitClientIdRef.current === clientId) {
             pendingSubmitClientIdRef.current = null;
             pendingSubmitStartedAtRef.current = null;
+          }
+          if (pendingSteerClientIdRef.current === clientId) {
+            confirmedSteerClientIdRef.current = clientId;
           }
         }
         if (content) {
@@ -812,6 +860,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setFeedbackError(null);
     pendingSubmitClientIdRef.current = null;
     pendingSubmitStartedAtRef.current = null;
+    pendingSteerClientIdRef.current = null;
+    confirmedSteerClientIdRef.current = null;
+    unconfirmedSteerRef.current = null;
     historySequenceFloorRef.current = 0;
   }, []);
 
@@ -853,6 +904,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setFeedbackSubmittingIds(new Set());
       queueRefreshSuppressionRef.current = 0;
       threadReconcileInFlightRef.current = false;
+      pendingSteerClientIdRef.current = null;
+      confirmedSteerClientIdRef.current = null;
+      unconfirmedSteerRef.current = null;
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       try {
@@ -970,6 +1024,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       if ((!message && !pendingAttachments.length) || status === "running" || status === "connecting") {
         return false;
       }
+      unconfirmedSteerRef.current = null;
       setStatus("connecting");
       setError(null);
       setInterrupting(false);
@@ -1011,8 +1066,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               model,
-              title: requestedTitle,
-              recipeId: recipeIdForWorkflow(options?.workflow),
+              workflow: options?.workflow,
+              insightMethod: options?.insightMethod,
             }),
           });
           const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
@@ -1034,16 +1089,14 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/turns`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          body: JSON.stringify(buildAgentTurnRequestBody({
             message,
             model,
             effort,
-            workflow: options?.workflow,
-            skillName: options?.skillName,
+            options,
             attachmentIds: uploadedAttachments.map((attachment) => attachment.id),
-            externalDataApprovalMode: options?.externalDataApprovalMode ?? "always_ask",
             clientRequestId,
-          }),
+          })),
         });
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         turnStartAmbiguous = response.status >= 500;
@@ -1060,8 +1113,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 model,
-                title: requestedTitle,
-                recipeId: recipeIdForWorkflow(options?.workflow),
+                workflow: options?.workflow,
+                insightMethod: options?.insightMethod,
               }),
             });
             const createPayload = (await createResponse.json().catch(() => null)) as Record<string, unknown> | null;
@@ -1088,16 +1141,14 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             const retryResponse = await fetch(`/api/agent/threads/${encodeURIComponent(replacementThreadId)}/turns`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
+              body: JSON.stringify(buildAgentTurnRequestBody({
                 message,
                 model,
                 effort,
-                workflow: options?.workflow,
-                skillName: options?.skillName,
+                options,
                 attachmentIds: uploadedAttachments.map((attachment) => attachment.id),
-                externalDataApprovalMode: options?.externalDataApprovalMode ?? "always_ask",
                 clientRequestId,
-              }),
+              })),
             });
             const retryPayload = (await retryResponse.json().catch(() => null)) as Record<string, unknown> | null;
             turnStartAmbiguous = retryResponse.status >= 500;
@@ -1151,6 +1202,133 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     [activateTurn, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
   );
 
+  const steerMessage = useCallback(
+    async (
+      text: string,
+      options: Pick<AgentSubmitOptions, "workflow" | "insightMethod">,
+    ): Promise<boolean> => {
+      const message = text.trim();
+      const currentThreadId = threadId;
+      const currentTurnId = activeTurnIdRef.current;
+      if (
+        !message ||
+        !currentThreadId ||
+        !options.workflow ||
+        status !== "running" ||
+        !currentTurnId ||
+        compactingRef.current ||
+        interrupting ||
+        queueSubmitting
+      ) {
+        return false;
+      }
+      setError(null);
+      setQueueSubmitting(true);
+      const previousUnconfirmed = unconfirmedSteerRef.current;
+      const clientRequestId =
+        previousUnconfirmed?.threadId === currentThreadId &&
+        previousUnconfirmed.turnId === currentTurnId &&
+        previousUnconfirmed.workflow === options.workflow &&
+        previousUnconfirmed.insightMethod === options.insightMethod &&
+        previousUnconfirmed.message === message
+          ? previousUnconfirmed.clientRequestId
+          : crypto.randomUUID();
+      unconfirmedSteerRef.current = {
+        threadId: currentThreadId,
+        turnId: currentTurnId,
+        workflow: options.workflow,
+        insightMethod: options.insightMethod,
+        message,
+        clientRequestId,
+      };
+      if (
+        messagesRef.current.some(
+          (item) => item.role === "user" && item.clientId === clientRequestId && item.delivery === "committed",
+        )
+      ) {
+        unconfirmedSteerRef.current = null;
+        setQueueSubmitting(false);
+        return true;
+      }
+      const optimisticMessageId = `user-${clientRequestId}`;
+      pendingSteerClientIdRef.current = clientRequestId;
+      confirmedSteerClientIdRef.current = null;
+      setMessages((current) =>
+        current.some((item) => item.clientId === clientRequestId)
+          ? current
+          : [
+              ...current,
+              {
+                id: optimisticMessageId,
+                sequence: nextSequence(sequenceRef),
+                turnId: currentTurnId,
+                role: "user",
+                content: message,
+                variant: "steer",
+                clientId: clientRequestId,
+                delivery: "pending",
+                status: "completed",
+              },
+            ],
+      );
+      let definitiveFailure = false;
+      try {
+        let definitiveError: Error | null = null;
+        try {
+          const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/steer`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              message,
+              clientRequestId,
+              workflow: options.workflow,
+              insightMethod: options.insightMethod,
+              expectedTurnId: currentTurnId,
+            }),
+          });
+          const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+          if (!response.ok && response.status < 500) {
+            definitiveFailure = true;
+            definitiveError = new Error(readError(payload) || "无法调整当前任务方向。");
+          }
+        } catch {
+          // The Harness may have accepted the steer before the response connection failed.
+        }
+        if (definitiveError) throw definitiveError;
+        const confirmed = await waitForCommittedUserMessage(
+          currentThreadId,
+          clientRequestId,
+          () => confirmedSteerClientIdRef.current === clientRequestId,
+          (payload) => {
+            if (threadIdRef.current !== currentThreadId) return;
+            sequenceRef.current = Math.max(
+              sequenceRef.current,
+              ...payload.messages.map((item) => item.sequence),
+            );
+            setMessages((current) => mergeAuthoritativeMessages(current, payload.messages));
+          },
+        );
+        if (!confirmed) {
+          throw new Error("Harness 未确认这次方向调整，请重新发送。");
+        }
+        pendingSteerClientIdRef.current = null;
+        confirmedSteerClientIdRef.current = null;
+        unconfirmedSteerRef.current = null;
+        return true;
+      } catch (steerError) {
+        pendingSteerClientIdRef.current = null;
+        confirmedSteerClientIdRef.current = null;
+        if (definitiveFailure) unconfirmedSteerRef.current = null;
+        setMessages((current) => current.filter((item) => item.clientId !== clientRequestId));
+        setError(steerError instanceof Error ? steerError.message : "无法调整当前任务方向。");
+        return false;
+      } finally {
+        setQueueSubmitting(false);
+      }
+    },
+    [interrupting, queueSubmitting, status, threadId],
+  );
+
   const enqueueMessage = useCallback(
     async (text: string): Promise<boolean> => {
       const message = text.trim();
@@ -1171,7 +1349,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const response = await fetch(`/api/agent/threads/${encodeURIComponent(currentThreadId)}/queue`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, clientRequestId: crypto.randomUUID() }),
+          body: JSON.stringify({
+            message,
+            clientRequestId: crypto.randomUUID(),
+          }),
         });
         const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
         if (!response.ok) {
@@ -1492,6 +1673,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     feedbackError,
     feedbackSubmittingIds,
     submit,
+    steerMessage,
     enqueueMessage,
     updateQueuedMessage,
     deleteQueuedMessage,
@@ -1504,6 +1686,40 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     loadThread,
     loadOlderHistory,
   };
+}
+
+export async function waitForCommittedUserMessage(
+  threadId: string,
+  clientRequestId: string,
+  isAlreadyConfirmed: () => boolean,
+  onRead: (payload: StoredThreadResponse) => void,
+  timeoutMs = 12_000,
+  pollIntervalMs = 500,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (isAlreadyConfirmed()) return true;
+    try {
+      const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}`, {
+        cache: "no-store",
+      });
+      const payload = (await response.json().catch(() => null)) as StoredThreadResponse | null;
+      if (response.ok && payload) {
+        onRead(payload);
+        if (
+          payload.messages.some(
+            (item) => item.role === "user" && item.clientId === clientRequestId,
+          )
+        ) {
+          return true;
+        }
+      }
+    } catch {
+      // A later read or the SSE stream may still confirm the same client id.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, pollIntervalMs));
+  }
+  return isAlreadyConfirmed();
 }
 
 function resequenceHistoricalPage(
@@ -1724,6 +1940,7 @@ function activityFromItem(
               : "正在调用工具",
       ...(metadata.detail ? { detail: metadata.detail } : {}),
       durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
+      ...(metadata.research ? { research: metadata.research } : {}),
       ...(metadata.sources.length > 0 ? { sources: metadata.sources } : {}),
       status,
     };
@@ -1901,7 +2118,8 @@ export function readPendingRequestUserInputPayload(value: unknown): PendingReque
     })
     .filter((question): question is RequestUserInputQuestion => Boolean(question));
   if (!questions.length || questions.length > 3) return null;
-  const action = value.action === "skill.publish" || value.action === "external_data.call"
+  const action = value.action === "skill.publish" || value.action === "external_data.call" ||
+    value.action === "product_catalog.activate_import"
     ? value.action
     : undefined;
   const origin = value.origin === "commerce_approval" || action
@@ -1963,10 +2181,10 @@ function readUserMessageText(item: Record<string, unknown>): string {
     .trim();
 }
 
-function readUserMessageSkillName(item: Record<string, unknown>): string | null {
+export function readUserMessageSkillName(item: Record<string, unknown>): string | null {
   const content = Array.isArray(item.content) ? item.content.filter(isRecord) : [];
-  const skill = content.find(
-    (entry) => entry.type === "skill" && typeof entry.name === "string",
-  );
+  const skill = content
+    .filter((entry) => entry.type === "skill" && typeof entry.name === "string")
+    .at(-1);
   return skill && typeof skill.name === "string" ? skill.name : null;
 }

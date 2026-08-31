@@ -25,6 +25,9 @@ type GatewayHealthPayload = {
     tools?: string[];
     error?: string | null;
   };
+  productCatalog?: {
+    configured?: boolean;
+  };
 };
 
 export async function GET(request: Request) {
@@ -55,6 +58,9 @@ export async function GET(request: Request) {
         ? payload.managedMcp.tools.filter((tool): tool is string => typeof tool === "string")
         : [],
       error: typeof payload?.managedMcp?.error === "string" ? payload.managedMcp.error : null,
+    },
+    productCatalog: {
+      configured: payload?.productCatalog?.configured === true,
     },
   };
 

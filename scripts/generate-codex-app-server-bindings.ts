@@ -4,11 +4,9 @@ import { resolve } from "node:path";
 
 const root = process.cwd();
 const output = resolve(root, "src/codex/generated");
-const codex = resolve(
-  root,
-  "node_modules/.bin",
-  process.platform === "win32" ? "codex.cmd" : "codex",
-);
+const codex = process.platform === "win32"
+  ? resolve(root, "node_modules/@openai/codex/bin/codex.js")
+  : resolve(root, "node_modules/.bin/codex");
 
 if (!existsSync(codex)) {
   throw new Error(`Codex binary is unavailable at ${codex}. Run npm install first.`);
@@ -18,8 +16,15 @@ rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
 const generated = spawnSync(
-  codex,
-  ["app-server", "generate-ts", "--experimental", "--out", output],
+  process.platform === "win32" ? process.execPath : codex,
+  [
+    ...(process.platform === "win32" ? [codex] : []),
+    "app-server",
+    "generate-ts",
+    "--experimental",
+    "--out",
+    output,
+  ],
   { cwd: root, stdio: "inherit" },
 );
 if (generated.status !== 0) {

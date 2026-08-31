@@ -158,9 +158,9 @@ function normalizeThreadHistory(
           .map((entry) => entry.text as string)
           .join("\n")
           .trim();
-        const nativeSkill = content.find(
-          (entry) => entry.type === "skill" && typeof entry.name === "string",
-        );
+        const nativeSkill = content
+          .filter((entry) => entry.type === "skill" && typeof entry.name === "string")
+          .at(-1);
         const nativeSkillName = nativeSkill && typeof nativeSkill.name === "string" ? nativeSkill.name : null;
         const explicitSkillMessage = readNativeSkillMessage(rawText, nativeSkillName);
         const text = readVisibleAttachmentMessage(explicitSkillMessage.content);
@@ -293,6 +293,7 @@ function normalizeActivity(
       label: metadata.isWebSearch ? "完成了搜索" : "调用了工具",
       ...(metadata.detail ? { detail: metadata.detail } : {}),
       durationMs,
+      ...(metadata.research ? { research: metadata.research } : {}),
       ...(metadata.sources.length > 0 ? { sources: metadata.sources } : {}),
       status,
     };

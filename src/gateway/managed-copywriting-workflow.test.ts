@@ -45,16 +45,34 @@ test("rejects browser-selected workflow names and keeps the skill instruction-on
   assert.doesNotMatch(skill, /scripts\//);
 });
 
-test("maps market research to Harness tools without a parallel output loop", () => {
+test("maps market research to Harness tools with one Harness-owned report schema", () => {
   const runtimeRoot = "/srv/commerce-runtime";
   const turn = buildManagedWorkflowTurn(runtimeRoot, "commerce-market-research", "研究通勤包价格带");
-  assert.equal(turn.input.length, 2);
+  assert.equal(turn.input.length, 3);
   assert.deepEqual(turn.input[1], {
+    type: "skill",
+    name: "commerce-product-insight",
+    path: managedWorkflowSkillPath(runtimeRoot, "commerce-product-insight"),
+  });
+  assert.deepEqual(turn.input[2], {
     type: "skill",
     name: "commerce-market-research",
     path: managedWorkflowSkillPath(runtimeRoot, "commerce-market-research"),
   });
-  assert.equal(turn.outputSchema, undefined);
+  assert.ok(turn.outputSchema);
+  const outputSchema = turn.outputSchema as { required: string[]; properties: Record<string, unknown> };
+  assert.deepEqual(outputSchema.required, [
+    "responseType", "insightType", "subject", "scope", "executiveSummary", "reportMarkdown", "claims", "receipts", "recommendations", "message",
+  ]);
+  assert.ok(outputSchema.properties.claims);
+  assert.ok(outputSchema.properties.receipts);
+  const receiptSchema = outputSchema.properties.receipts as {
+    items: { required: string[]; properties: Record<string, unknown> };
+  };
+  assert.ok(receiptSchema.items.properties.reviewEvidenceCount);
+  assert.ok(receiptSchema.items.properties.evidenceKinds);
+  assert.ok(receiptSchema.items.required.includes("reviewEvidenceCount"));
+  assert.ok(receiptSchema.items.required.includes("evidenceKinds"));
   const skill = renderManagedWorkflowSkill("commerce-market-research");
   assert.match(skill, /commerce_data\.research_social_content/);
   assert.match(skill, /latest_content/);
@@ -74,7 +92,21 @@ test("maps market research to Harness tools without a parallel output loop", () 
   assert.match(skill, /do not silently substitute Web Search/);
   assert.match(skill, /user does not need to name JustOneAPI/);
   assert.match(skill, /Do not make a paid external-data call merely because the tool is available/);
+  assert.match(skill, /commerce_product\.get_selected_product_context/);
+  assert.match(skill, /first_party_subject/);
+  assert.match(skill, /product_fact, market_signal, derived_comparison, or hypothesis/);
+  assert.match(skill, /Only quality-checked review evidence may support a claim labelled as a buyer pain point/);
+  assert.match(skill, /Every product_fact MUST have at least one productFactRef/);
+  assert.match(skill, /Every market_signal MUST have at least one evidenceId/);
+  assert.match(skill, /category-only comparison between external competitors may use two or more evidenceIds/);
+  assert.match(skill, /selected-Product-to-market comparison requires both Product fact references and market evidence ids/);
+  assert.match(skill, /reviewEvidenceCount counts only accepted review evidence/);
+  assert.match(skill, /Public Web Search is not a substitute for missing external review evidence/);
+  assert.match(skill, /Never send product ids, revision ids, subject refs, snapshot hashes, internal SKU\/SPU, costs, inventory/);
   assert.match(skill, /Never retry a completed, stale, expired or uncertain paid plan automatically/);
+  assert.match(skill, /Use responseType=answer only when the user asks for a method explanation/);
+  assert.match(skill, /Do not classify by sentence form/);
+  assert.match(skill, /research request phrased as a question still returns responseType=report/);
   assert.match(skill, /Do not use shell, arbitrary network requests/);
   assert.doesNotMatch(skill, /scripts\//);
 });

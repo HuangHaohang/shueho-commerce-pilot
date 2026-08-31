@@ -41,11 +41,28 @@ test("creates, reads back, and idempotently updates an app-owned instruction-onl
   assert.equal(updated.operation, "updated");
 });
 
-test("rejects reserved names, paths, foreign owners, and symlink targets", async () => {
-  assert.throws(
-    () => validateManagedSkillDraft({ ...draft, name: "commerce-copywriting" }),
-    /unreserved commerce-/,
-  );
+test("rejects reserved names, paths, foreign owners, and symlink targets", async (t) => {
+  for (const reservedName of [
+    "commerce-copywriting",
+    "commerce-creative-project",
+    "commerce-market-research",
+    "commerce-product-insight",
+    "commerce-product-onboarding",
+    "commerce-listing-copy",
+    "commerce-promotion-copy",
+    "commerce-product-main-image",
+    "commerce-product-gallery",
+    "commerce-product-detail-page",
+    "commerce-product-shooting-script",
+    "commerce-short-video-storyboard",
+    "commerce-new-product-development",
+    "commerce-product-retrospective",
+  ]) {
+    assert.throws(
+      () => validateManagedSkillDraft({ ...draft, name: reservedName }),
+      /unreserved commerce-/,
+    );
+  }
   assert.throws(
     () => validateManagedSkillDraft({ ...draft, name: "commerce-../escape" }),
     /unreserved commerce-/,
@@ -59,10 +76,23 @@ test("rejects reserved names, paths, foreign owners, and symlink targets", async
     /another Commerce Pilot principal/,
   );
 
-  const symlinkRoot = await mkdtemp(join(tmpdir(), "commerce-managed-skill-symlink-"));
-  const skillRoot = join(symlinkRoot, ".agents", "skills");
-  const outside = await mkdtemp(join(tmpdir(), "commerce-managed-skill-outside-"));
-  await mkdir(skillRoot, { recursive: true });
-  await symlink(outside, join(skillRoot, draft.name));
-  await assert.rejects(new ManagedSkillStore(symlinkRoot).publish(draft, scope), /real directory/);
+  await t.test("rejects a managed skill symlink target when the host permits symlink creation", async (symlinkTest) => {
+    const symlinkRoot = await mkdtemp(join(tmpdir(), "commerce-managed-skill-symlink-"));
+    const skillRoot = join(symlinkRoot, ".agents", "skills");
+    const outside = await mkdtemp(join(tmpdir(), "commerce-managed-skill-outside-"));
+    await mkdir(skillRoot, { recursive: true });
+    try {
+      await symlink(outside, join(skillRoot, draft.name));
+    } catch (error) {
+      const code = error instanceof Error && "code" in error
+        ? (error as NodeJS.ErrnoException).code
+        : null;
+      if (process.platform === "win32" && (code === "EPERM" || code === "ENOTSUP")) {
+        symlinkTest.skip("Windows symlink creation is unavailable without Developer Mode or elevated privilege.");
+        return;
+      }
+      throw error;
+    }
+    await assert.rejects(new ManagedSkillStore(symlinkRoot).publish(draft, scope), /real directory/);
+  });
 });

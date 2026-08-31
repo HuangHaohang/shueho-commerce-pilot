@@ -13,10 +13,14 @@ Read documents in this order when joining the project or starting an AI-assisted
 - [`architecture/overview.md`](architecture/overview.md) - system map, technology stack, ownership boundaries, and request flows.
 - [`architecture/codex-app-server-gateway.md`](architecture/codex-app-server-gateway.md) - App Server process, protocol adapter, event fan-out, and runtime policy.
 - [`architecture/enterprise-tenancy.md`](architecture/enterprise-tenancy.md) - organization, tenant, workspace, RBAC, quota, RLS, and production isolation.
+- [`architecture/data-isolation.md`](architecture/data-isolation.md) - cross-company/workspace data isolation, forced RLS, compound integrity, API/tool scope, secrets, artifacts, and verification.
 - [`architecture/authentication.md`](architecture/authentication.md) - Better Auth and invitation-only access.
 - [`architecture/commerce-plugin-runtime.md`](architecture/commerce-plugin-runtime.md) - application-managed plugin catalog.
 - [`architecture/commerce-skill-runtime.md`](architecture/commerce-skill-runtime.md) - Codex Skills, explicit invocation, and managed Skill publication.
 - [`architecture/commerce-copywriting-workflow.md`](architecture/commerce-copywriting-workflow.md) - conversational copywriting Task Recipe.
+- [`architecture/creative-space-workbench.md`](architecture/creative-space-workbench.md) - Harness-thread projects, three-pane canvas workbench, and native creative artifacts.
+- [`architecture/product-catalog.md`](architecture/product-catalog.md) - company product sources, AI mapping, canonical Product/SKU revisions, composer context, and Harness tools.
+- [`architecture/product-insight-skills.md`](architecture/product-insight-skills.md) - shared Harness orchestrator plus market research, new-product development, and Product retrospective specialist Skills.
 - [`architecture/external-data-mcp.md`](architecture/external-data-mcp.md) - Harness-to-SHUEHO MCP boundary, approval, audit, billing and customer MCP access.
 - [`architecture/external-data-service.md`](architecture/external-data-service.md) - independent JustOneAPI REST collector, raw/normalized/business warehouse, pgvector, local Qwen3 models and Elasticsearch.
 - [`architecture/commerce-thread-titles.md`](architecture/commerce-thread-titles.md) - Spark-generated titles and deterministic category correction.

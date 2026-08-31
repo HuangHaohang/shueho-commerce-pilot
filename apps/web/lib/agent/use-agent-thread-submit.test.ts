@@ -1,0 +1,78 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  buildAgentTurnRequestBody,
+  readUserMessageSkillName,
+} from "./use-agent-thread";
+
+describe("agent Turn request body", () => {
+  it("forwards only the allowlisted creative method identifier", () => {
+    expect(buildAgentTurnRequestBody({
+      message: "为这款产品生成主图",
+      model: "gpt-5.6-luna",
+      effort: "medium",
+      options: {
+        workflow: "commerce-creative-project",
+        creativeMethod: "main_image",
+        productIds: ["33333333-3333-4333-8333-333333333333"],
+        productContextMode: "selected",
+      },
+      attachmentIds: ["44444444-4444-4444-8444-444444444444"],
+      clientRequestId: "55555555-5555-4555-8555-555555555555",
+    })).toEqual({
+      message: "为这款产品生成主图",
+      model: "gpt-5.6-luna",
+      effort: "medium",
+      workflow: "commerce-creative-project",
+      creativeMethod: "main_image",
+      insightMethod: undefined,
+      skillName: undefined,
+      attachmentIds: ["44444444-4444-4444-8444-444444444444"],
+      externalDataApprovalMode: "always_ask",
+      productIds: ["33333333-3333-4333-8333-333333333333"],
+      productContextMode: "selected",
+      clientRequestId: "55555555-5555-4555-8555-555555555555",
+    });
+  });
+
+  it("does not invent a specialist method for an ordinary Turn", () => {
+    expect(buildAgentTurnRequestBody({
+      message: "继续分析",
+      model: "gpt-5.6-luna",
+      effort: "low",
+      attachmentIds: [],
+      clientRequestId: "66666666-6666-4666-8666-666666666666",
+    }).creativeMethod).toBeUndefined();
+  });
+
+  it("forwards only the allowlisted product insight method instead of Skill instructions", () => {
+    const body = buildAgentTurnRequestBody({
+      message: "复盘这款砂锅",
+      model: "gpt-5.6-luna",
+      options: {
+        workflow: "commerce-product-insight",
+        insightMethod: "product_retrospective",
+        productIds: ["33333333-3333-4333-8333-333333333333"],
+        productContextMode: "selected",
+      },
+      attachmentIds: [],
+      clientRequestId: "66666666-6666-4666-8666-666666666666",
+    });
+    expect(body.insightMethod).toBe("product_retrospective");
+    expect(body).not.toHaveProperty("skillBody");
+    expect(body).not.toHaveProperty("outputSchema");
+  });
+
+  it("uses the final native Skill as the visible specialist label", () => {
+    expect(readUserMessageSkillName({
+      content: [
+        { type: "text", text: "生成一张主图" },
+        { type: "skill", name: "commerce-creative-project", path: "hidden-base-path" },
+        { type: "skill", name: "commerce-product-main-image", path: "hidden-method-path" },
+      ],
+    })).toBe("commerce-product-main-image");
+    expect(readUserMessageSkillName({
+      content: [{ type: "skill", name: "commerce-copywriting", path: "hidden-path" }],
+    })).toBe("commerce-copywriting");
+  });
+});

@@ -1,9 +1,13 @@
 import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context";
 import type { EnterpriseScope } from "@/lib/enterprise/types";
-import type { TaskCategory } from "@/lib/agent/task-category";
+import {
+  categoryForRecipeId,
+  type AgentRecipeId,
+  type TaskCategory,
+} from "@/lib/agent/task-category";
 
-export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 2;
-export const SUPPORTED_AGENT_TOOL_CONTRACT_VERSIONS = new Set([1,2]);
+export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 5;
+export const SUPPORTED_AGENT_TOOL_CONTRACT_VERSIONS = new Set([CURRENT_AGENT_TOOL_CONTRACT_VERSION]);
 
 export function isSupportedAgentToolContractVersion(version: number): boolean {
   return SUPPORTED_AGENT_TOOL_CONTRACT_VERSIONS.has(version);
@@ -20,7 +24,7 @@ export type AgentThreadRecord = {
   durationMs: number | null;
   titleModel: string | null;
   titleGeneratedAt: string | null;
-  recipeId: "copywriting" | "market_research" | null;
+  recipeId: AgentRecipeId | null;
   category: TaskCategory;
   toolContractVersion: number;
 };
@@ -36,7 +40,7 @@ type AgentThreadRow = {
   duration_ms: number | null;
   title_model: string | null;
   title_generated_at: Date | null;
-  recipe_id: "copywriting" | "market_research" | null;
+  recipe_id: AgentRecipeId | null;
   category: TaskCategory;
   tool_contract_version: number;
 };
@@ -45,12 +49,8 @@ export async function registerAgentThreadOwner(
   threadId: string,
   scope: EnterpriseScope,
   title: string,
-  recipeId: "copywriting" | "market_research" | null = null,
-  category: TaskCategory = recipeId === "copywriting"
-    ? "creative"
-    : recipeId === "market_research"
-      ? "research"
-      : "general",
+  recipeId: AgentRecipeId | null = null,
+  category: TaskCategory = categoryForRecipeId(recipeId),
 ): Promise<void> {
   await withEnterpriseDatabaseContext(scope, async (client) => {
     const result = await client.query<{ created_by_user_id: string }>(

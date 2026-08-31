@@ -30,7 +30,13 @@ export function mergeAuthoritativeMessages(
         : candidate,
     );
   }
-  return next;
+  const seenUserClientIds = new Set<string>();
+  return next.filter((message) => {
+    if (message.role !== "user" || !message.clientId) return true;
+    if (seenUserClientIds.has(message.clientId)) return false;
+    seenUserClientIds.add(message.clientId);
+    return true;
+  });
 }
 
 export function findMatchingConversationMessage(

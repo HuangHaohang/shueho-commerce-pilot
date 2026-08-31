@@ -9,17 +9,86 @@ export const taskCategoryValues = [
 
 export type TaskCategory = (typeof taskCategoryValues)[number];
 
+export const agentWorkflowValues = [
+  "commerce-copywriting",
+  "commerce-market-research",
+  "commerce-product-insight",
+  "commerce-creative-project",
+  "commerce-product-onboarding",
+] as const;
+
+export type AgentWorkflowId = (typeof agentWorkflowValues)[number];
+
+export const agentRecipeIdValues = [
+  "copywriting",
+  "market_research",
+  "new_product_development",
+  "product_retrospective",
+  "creative_project",
+  "product_onboarding",
+] as const;
+
+export type AgentRecipeId = (typeof agentRecipeIdValues)[number];
+
 export function isTaskCategory(value: unknown): value is TaskCategory {
   return typeof value === "string" && taskCategoryValues.includes(value as TaskCategory);
 }
 
+export function isAgentWorkflowId(value: unknown): value is AgentWorkflowId {
+  return typeof value === "string" && agentWorkflowValues.includes(value as AgentWorkflowId);
+}
+
+export function recipeIdForWorkflow(
+  workflow: AgentWorkflowId | null | undefined,
+  insightMethod?: "market_research" | "new_product_development" | "product_retrospective" | null,
+): AgentRecipeId | null {
+  return workflow === "commerce-copywriting"
+    ? "copywriting"
+    : workflow === "commerce-market-research"
+      ? "market_research"
+      : workflow === "commerce-product-insight"
+        ? insightMethod ?? null
+      : workflow === "commerce-creative-project"
+        ? "creative_project"
+        : workflow === "commerce-product-onboarding"
+          ? "product_onboarding"
+        : null;
+}
+
+export function categoryForRecipeId(recipeId: AgentRecipeId | null | undefined): TaskCategory {
+  return recipeId === "copywriting" || recipeId === "creative_project"
+    ? "creative"
+    : recipeId === "market_research" || recipeId === "new_product_development" || recipeId === "product_retrospective"
+      ? "research"
+      : recipeId === "product_onboarding"
+        ? "operations"
+      : "general";
+}
+
+export function isWorkflowAllowedForRecipeId(
+  recipeId: AgentRecipeId | null | undefined,
+  workflow: AgentWorkflowId | null | undefined,
+): boolean {
+  if (recipeId === "creative_project") return workflow === "commerce-creative-project";
+  if (recipeId === "copywriting") {
+    return workflow === "commerce-copywriting" || workflow === "commerce-creative-project";
+  }
+  if (recipeId === "market_research") {
+    return workflow === "commerce-market-research" || workflow === "commerce-product-insight";
+  }
+  if (recipeId === "new_product_development" || recipeId === "product_retrospective") {
+    return workflow === "commerce-product-insight";
+  }
+  if (recipeId === "product_onboarding") return workflow === "commerce-product-onboarding";
+  return workflow == null;
+}
+
 export function resolveTaskCategory(input: {
   category?: TaskCategory | null;
-  recipeId?: "copywriting" | "market_research" | null;
+  recipeId?: AgentRecipeId | null;
   title: string;
 }): TaskCategory {
-  if (input.recipeId === "copywriting") return "creative";
-  if (input.recipeId === "market_research") return "research";
+  if (input.recipeId) return categoryForRecipeId(input.recipeId);
   return inferTaskCategoryFromTitle(input.title) ?? input.category ?? "general";
 }
 

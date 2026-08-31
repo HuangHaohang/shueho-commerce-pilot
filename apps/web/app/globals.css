@@ -110,6 +110,13 @@ button {
   outline: none;
 }
 
+[data-product-search-input]:focus,
+[data-product-search-input]:focus-visible,
+[data-product-form-input]:focus,
+[data-product-form-input]:focus-visible {
+  outline: none;
+}
+
 .cp-composer-textarea {
   scrollbar-width: thin;
   scrollbar-color: var(--cp-border-strong) transparent;

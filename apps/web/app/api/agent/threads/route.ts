@@ -11,6 +11,12 @@ import {
 import type { EnterpriseContext } from "@/lib/enterprise/types";
 import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
 import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
+import {
+  categoryForRecipeId,
+  isAgentWorkflowId,
+  recipeIdForWorkflow,
+} from "@/lib/agent/task-category";
+import { isProductInsightMethod } from "@/lib/research/product-insight-contract";
 
 export async function POST(request: Request) {
   const access = await requireAgentContext(request, "thread.create");
@@ -21,19 +27,34 @@ export async function POST(request: Request) {
   const rateLimited = await enforceEnterpriseRateLimit(context, "thread.create", 20, 60);
   if (rateLimited) return rateLimited;
 
-  const body = (await request.json().catch(() => null)) as { model?: unknown; recipeId?: unknown } | null;
+  const body = (await request.json().catch(() => null)) as {
+    model?: unknown;
+    workflow?: unknown;
+    insightMethod?: unknown;
+    recipeId?: unknown;
+  } | null;
   if (!body || typeof body.model !== "string" || body.model.length > 128) {
     return NextResponse.json({ error: "请选择有效模型。" }, { status: 400 });
   }
-  const title = "新任务";
-  const recipeId = body.recipeId === "copywriting"
-    ? "copywriting"
-    : body.recipeId === "market_research"
-      ? "market_research"
-      : null;
-  if (body.recipeId !== undefined && body.recipeId !== null && !recipeId) {
-    return NextResponse.json({ error: "任务类型无效。" }, { status: 400 });
+  if (body.recipeId !== undefined) {
+    return NextResponse.json({ error: "任务类型必须通过受支持的工作流标识选择。" }, { status: 400 });
   }
+  if (body.workflow !== undefined && body.workflow !== null && !isAgentWorkflowId(body.workflow)) {
+    return NextResponse.json({ error: "工作流标识无效。" }, { status: 400 });
+  }
+  const title = "新任务";
+  const workflow = isAgentWorkflowId(body.workflow) ? body.workflow : null;
+  const insightMethod = isProductInsightMethod(body.insightMethod) ? body.insightMethod : null;
+  if (body.insightMethod !== undefined && !insightMethod) {
+    return NextResponse.json({ error: "商品决策 Skill 标识无效。" }, { status: 400 });
+  }
+  if (workflow === "commerce-product-insight" && !insightMethod) {
+    return NextResponse.json({ error: "请选择一个商品决策 Skill。" }, { status: 400 });
+  }
+  if (workflow !== "commerce-product-insight" && insightMethod) {
+    return NextResponse.json({ error: "商品决策 Skill 只能用于商品决策工作流。" }, { status: 400 });
+  }
+  const recipeId = recipeIdForWorkflow(workflow, insightMethod);
 
   try {
     const response = await fetch(gatewayUrl("/api/threads"), {
@@ -60,7 +81,7 @@ export async function POST(request: Request) {
       context,
       title,
       recipeId,
-      recipeId === "copywriting" ? "creative" : recipeId === "market_research" ? "research" : "general",
+      categoryForRecipeId(recipeId),
     );
     return NextResponse.json(
       { result: { thread: { id: threadId } } },

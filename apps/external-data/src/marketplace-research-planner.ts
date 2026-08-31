@@ -11,7 +11,7 @@ import {
   type MarketplaceMarketContext,
   validateLocalizedKeywords,
 } from "./market-localization.js";
-import type { JsonObject, ProviderEndpoint } from "./types.js";
+import type { FirstPartyResearchSubject, JsonObject, ProviderEndpoint } from "./types.js";
 import { listMarketplaceBusinessWorkflows } from "./workflow-registry.js";
 
 export type MarketplaceResearchMetric = "price_band" | "sales_level" | "brand_competition" | "property_distribution";
@@ -56,6 +56,7 @@ export type MarketplaceResearchPlan = {
   marketContext: MarketplaceMarketContext | null;
   detailSampleSize: number;
   estimatedProviderCalls: number;
+  firstPartySubject: FirstPartyResearchSubject | null;
 };
 
 export class MarketplaceResearchPlanningError extends Error {
@@ -79,19 +80,22 @@ export class MarketplaceResearchPlanningError extends Error {
 export async function planMarketplaceProductResearch(
   input: MarketplaceResearchRequest,
   constraints: MarketplaceResearchConstraints = {},
+  firstPartySubject: FirstPartyResearchSubject | null = null,
 ): Promise<MarketplaceResearchPlan> {
   const workflows = (await listMarketplaceBusinessWorkflows()).filter((workflow) =>
     (!constraints.allowedCatalogPlatforms?.length || constraints.allowedCatalogPlatforms.includes(workflow.platformId)) &&
     (!constraints.allowedEndpointIds?.length || workflow.steps.every((step) => constraints.allowedEndpointIds!.includes(step.endpoint.endpointId)))
   );
-  return selectMarketplaceProductResearchPlan(workflows, input);
+  return selectMarketplaceProductResearchPlan(workflows, input, firstPartySubject);
 }
 
 export function selectMarketplaceProductResearchPlan(
   workflows: ProviderBusinessWorkflow[],
   input: MarketplaceResearchRequest,
+  firstPartySubject: FirstPartyResearchSubject | null = null,
 ): MarketplaceResearchPlan {
   const request = normalizeRequest(input);
+  const normalizedSubject = normalizeFirstPartySubject(firstPartySubject);
   const platformId = request.platform.toLowerCase();
   const workflow = workflows
     .filter((candidate) => candidate.platformId === platformId && candidate.businessTool === "research_marketplace_products")
@@ -138,6 +142,7 @@ export function selectMarketplaceProductResearchPlan(
     localized_keywords: localizedKeywords,
     market_context: marketContext,
     quality_policy: marketContext?.qualityPolicy ?? {},
+    first_party_subject: toStoredFirstPartySubject(normalizedSubject),
   };
   const estimatedProviderCalls = 1 + Math.max(0, steps.length - 1) * detailSampleSize;
   const coverage: JsonObject = {
@@ -154,9 +159,10 @@ export function selectMarketplaceProductResearchPlan(
     workflow_roles: steps.map((step) => step.role),
     detailed_products_planned: detailSampleSize,
     market_context: marketContext,
+    first_party_subject: toStoredFirstPartySubject(normalizedSubject),
   };
   const planKey = sha256Json({
-    contractVersion: 3,
+    contractVersion: 4,
     businessTool: "research_marketplace_products",
     workflowId: workflow.workflowId,
     workflowVersion: workflow.workflowVersion,
@@ -172,6 +178,7 @@ export function selectMarketplaceProductResearchPlan(
       outputBindings: step.outputBindings,
     })),
     businessIntent,
+    firstPartySubject: toStoredFirstPartySubject(normalizedSubject),
   });
   return {
     planKey,
@@ -183,6 +190,62 @@ export function selectMarketplaceProductResearchPlan(
     marketContext,
     detailSampleSize,
     estimatedProviderCalls,
+    firstPartySubject: normalizedSubject,
+  };
+}
+
+export function normalizeFirstPartySubject(
+  value: FirstPartyResearchSubject | null | undefined,
+): FirstPartyResearchSubject | null {
+  if (value === null || value === undefined) return null;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (
+    value.version !== 1 || !uuid.test(value.subjectRef) ||
+    !/^[a-f0-9]{64}$/.test(value.snapshotSha256) ||
+    !Number.isInteger(value.productCount) || value.productCount < 1 || value.productCount > 20 ||
+    !Array.isArray(value.products) || value.products.length !== value.productCount ||
+    value.products.some((product) =>
+      !product || !uuid.test(product.productId) || !uuid.test(product.productRevisionId))
+  ) {
+    throw new MarketplaceResearchPlanningError(
+      "一方产品研究快照无效。",
+      "INVALID_RESEARCH_REQUEST",
+      { firstPartySubjectInvalid: true, providerDispatched: false },
+    );
+  }
+  const identities = value.products.map((product) => `${product.productId}:${product.productRevisionId}`);
+  if (new Set(identities).size !== identities.length) {
+    throw new MarketplaceResearchPlanningError(
+      "一方产品研究快照包含重复产品 revision。",
+      "INVALID_RESEARCH_REQUEST",
+      { firstPartySubjectDuplicate: true, providerDispatched: false },
+    );
+  }
+  return {
+    version: 1,
+    subjectRef: value.subjectRef.toLowerCase(),
+    snapshotSha256: value.snapshotSha256,
+    productCount: value.productCount,
+    products: value.products.map((product) => ({
+      productId: product.productId.toLowerCase(),
+      productRevisionId: product.productRevisionId.toLowerCase(),
+    })),
+  };
+}
+
+export function toStoredFirstPartySubject(
+  value: FirstPartyResearchSubject | null,
+): JsonObject | null {
+  if (!value) return null;
+  return {
+    version: value.version,
+    subject_ref: value.subjectRef,
+    snapshot_sha256: value.snapshotSha256,
+    product_count: value.productCount,
+    products: value.products.map((product) => ({
+      product_id: product.productId,
+      product_revision_id: product.productRevisionId,
+    })),
   };
 }
 

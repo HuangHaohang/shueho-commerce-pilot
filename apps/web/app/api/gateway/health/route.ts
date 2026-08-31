@@ -38,6 +38,9 @@ type GatewayHealth = {
     checkedAt?: string | null;
     error?: string | null;
   };
+  productCatalog?: {
+    configured?: boolean;
+  };
   runtimePolicy?: {
     maxTurnDurationMs?: number;
   };
@@ -65,6 +68,7 @@ export async function GET() {
       provider: data?.provider ?? null,
       managedMcp: data?.managedMcp ?? null,
       externalData: data?.externalData ?? null,
+      productCatalog: data?.productCatalog ?? null,
       runtimePolicy: data?.runtimePolicy ?? null,
     });
   } catch (error) {
@@ -78,6 +82,7 @@ export async function GET() {
       provider: null,
       managedMcp: null,
       externalData: null,
+      productCatalog: null,
       runtimePolicy: null,
       error: error instanceof Error ? error.message : "Gateway health check failed.",
     });

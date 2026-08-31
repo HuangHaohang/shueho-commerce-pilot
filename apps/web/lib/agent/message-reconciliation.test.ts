@@ -54,6 +54,35 @@ describe("conversation message reconciliation", () => {
     expect(mergeAuthoritativeMessages([first], [second])).toEqual([first, second]);
   });
 
+  it("collapses duplicate pending bubbles for one authoritative steer client id", () => {
+    const first: ConversationMessage = {
+      id: "user-local-1",
+      sequence: 1,
+      turnId: "turn-1",
+      role: "user",
+      content: "标题改得更克制",
+      variant: "steer",
+      clientId: "client-steer-1",
+      delivery: "pending",
+      status: "completed",
+    };
+    const duplicate: ConversationMessage = {
+      ...first,
+      id: "user-local-2",
+      sequence: 2,
+    };
+    const authoritative: ConversationMessage = {
+      ...first,
+      id: "message-harness",
+      sequence: 3,
+      delivery: "committed",
+    };
+
+    expect(mergeAuthoritativeMessages([first, duplicate], [authoritative])).toEqual([
+      authoritative,
+    ]);
+  });
+
   it("reconciles one commentary message across SSE and thread-read ids", () => {
     const streamed: ConversationMessage = {
       id: "msg-provider-id",

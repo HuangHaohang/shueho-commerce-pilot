@@ -54,6 +54,7 @@ docker run --rm \
   -e COMMERCE_AGENT_AUTHORIZATION_URL="http://commerce-web:3000/api/internal/agent-authorization" \
   -e COMMERCE_AGENT_ADMISSION_URL="http://commerce-web:3000/api/internal/agent-admission" \
   -e COMMERCE_EXTERNAL_DATA_CONTROL_URL="http://commerce-web:3000/api/internal/external-data" \
+  -e COMMERCE_PRODUCT_CATALOG_CONTROL_URL="http://commerce-web:3000/api/internal/product-catalog" \
   -e EXTERNAL_DATA_SERVICE_MCP_URL="https://shueho-external-data.internal/mcp" \
   -e EXTERNAL_DATA_SERVICE_MCP_TOKEN \
   -e COMMERCE_AGENT_AUTHORIZATION_POLL_MS="10000" \
@@ -96,6 +97,7 @@ Gateway production requirements:
 - `COMMERCE_AGENT_AUTHORIZATION_URL`, the private active-authorization callback;
 - `COMMERCE_AGENT_ADMISSION_URL`, the private compaction-admission/release callback;
 - `COMMERCE_EXTERNAL_DATA_CONTROL_URL`, the private authorization/budget/audit/billing callback when JustOneAPI is enabled;
+- `COMMERCE_PRODUCT_CATALOG_CONTROL_URL`, the private workspace Product Catalog read/mapping/approval/readback callback; Gateway derives the sibling `/import-artifact` multipart route for checksum-verified tenant thread artifacts and must never expose either route publicly;
 - `EXTERNAL_DATA_SERVICE_MCP_URL` and `EXTERNAL_DATA_SERVICE_MCP_TOKEN`, private credentials for the SHUEHO data service;
 - `COMMERCE_AGENT_AUTHORIZATION_POLL_MS`, `5000-60000`, default `10000`;
 - `COMMERCE_AGENT_MAX_THREADS_PER_SESSION`, `1-16`, default `4`, aligned at or below the tenant contract;
@@ -105,6 +107,7 @@ Gateway production requirements:
 BFF production requirements:
 
 - `DATABASE_URL` using TLS and a least-privilege PostgreSQL role that is neither superuser nor `BYPASSRLS`; production refuses a dangerous role;
+- `COMMERCE_RUNTIME_TENANT_ID`, the same exact tenant UUID as the dedicated Gateway; login context and private Product Catalog callbacks fail closed on mismatch;
 
 External-data service production requirements:
 
@@ -127,13 +130,17 @@ Secrets must come from a secret manager or protected runtime injection. Do not p
 
 ## Background Workers
 
-Run one `npm run jobs:thread-deletion` worker beside each tenant-dedicated Gateway. The worker uses the least-privilege application `DATABASE_URL`, the internal `COMMERCE_GATEWAY_URL` and token, and the same optional `COMMERCE_RUNTIME_TENANT_ID` pin. It must not receive `MIGRATION_DATABASE_URL`.
+Run one `npm run jobs:thread-deletion` worker beside each tenant-dedicated Gateway. The worker uses the least-privilege application `DATABASE_URL`, the internal `COMMERCE_GATEWAY_URL` and token, and the same required `COMMERCE_RUNTIME_TENANT_ID` pin. It fails startup without that exact tenant UUID, never loads `.env.migration`, and must not receive `MIGRATION_DATABASE_URL`.
 
 The worker claims durable deletion jobs with `FOR UPDATE SKIP LOCKED`, invokes Gateway `thread/delete`, waits for application artifact cleanup, and only then removes the Commerce Pilot thread index and marks the item deleted. Monitor queued/running age, partial/failed jobs, worker liveness, and `$CODEX_HOME/thread_artifacts` storage. A web process is not a replacement for this worker; deleting in a detached Next.js callback is not durable.
 
 Uploaded photos and documents are stored below `$CODEX_HOME/thread_artifacts/<threadId>/<artifactId>`. The Gateway image/document parsers are application dependencies and must be installed from the production lockfile. App Server and Gateway need the same dedicated tenant artifact volume; the web process does not need direct filesystem access. Enforce the 5 MB total-per-Turn limit at the edge/BFF and Gateway, and keep the multipart overhead allowance restricted to the authenticated attachment route. Backups and retention must include the artifact volume, while permanent thread deletion removes its complete thread directory.
 
 Run `npm run jobs:external-data-retention` with the least-privilege application database role and the exact `COMMERCE_RUNTIME_TENANT_ID`. It invokes only the tenant-pinned security-definer archive and call-ledger purge functions in bounded batches. Monitor worker liveness and stale eligible rows; unresolved, permanent-policy, and legal-hold rows are intentionally excluded. Backups must include `commerce_external_data_archive`; thread-rollout backup and deletion rules do not cover this independent SQL dataset.
+
+Run `npm run jobs:product-import-retention` with the same least-privilege role and exact tenant pin. It scrubs only expired, non-held raw Product Catalog payloads in bounded batches and records released estimated bytes in tenant audit. Configure `COMMERCE_PRODUCT_RETENTION_INTERVAL_MS` and `COMMERCE_PRODUCT_RETENTION_BATCH_SIZE`, and monitor budget saturation and worker liveness.
+
+Provision connector credentials out of band with `npm run enterprise:provision-product-secret -- --tenant-id=... --workspace-id=... --connector-key=postgres_readonly --connector-version=1.0.0 --env-name=COMMERCE_PRODUCT_SOURCE_... --label=...`. The command stores only the env name and a random scope-bound handle in PostgreSQL; the secret value remains in the tenant-dedicated runtime environment. Never send an env name or secret value through browser or Harness input.
 
 ## Provider Configuration
 
@@ -187,7 +194,7 @@ Before accepting customer traffic, verify:
 
 1. the commercial organization is linked one-to-one to the intended tenant;
 2. the tenant UUID in PostgreSQL matches `COMMERCE_RUNTIME_TENANT_ID` and its runtime/contract are in the intended lifecycle state;
-3. `enterprise:verify-isolation` proves the BFF role is non-superuser/non-`BYPASSRLS`, unscoped reads see nothing, cross-tenant writes fail, and tenant-wide reads stay inside one tenant;
+3. `enterprise:verify-isolation` proves the BFF role is non-superuser/non-`BYPASSRLS`, unscoped reads see nothing, cross-tenant and cross-workspace writes fail, every tenant table has enabled/forced RLS and a scoped policy, every workspace table has a validated compound scope foreign key, no Enterprise constraint remains `NOT VALID`, global master data is runtime-read-only, and tenant-wide reads stay inside one tenant;
 4. Gateway health reports the dedicated tenant, ready managed MCP, configured authorization/event endpoints, fresh successful checks, and zero pending/dead-letter/error backlog;
 5. cross-tenant thread reads return `404` and cannot be distinguished from missing records;
 6. invitation-only registration/acceptance, role-escalation denial, seat/workspace races, token reservations, manual/auto/Harness compaction admission, interrupt-and-queue-start idempotency, active revocation interrupt/queue clear, terminal lease release, restart/outbox replay/dead-letter, durable queue recovery, and backup restore paths pass;

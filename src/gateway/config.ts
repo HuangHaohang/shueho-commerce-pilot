@@ -25,6 +25,7 @@ export type GatewayConfig = {
   titleModel: string;
   externalDataService: ExternalDataServiceMcpConfig;
   externalDataControlUrl?: string;
+  productCatalogControlUrl?: string;
 };
 
 export type CommerceProviderConfig = {
@@ -57,6 +58,10 @@ export function readGatewayConfig(): GatewayConfig {
   const agentAuthorizationUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_AUTHORIZATION_URL);
   const agentAdmissionUrl = parseOptionalHttpUrl(process.env.COMMERCE_AGENT_ADMISSION_URL);
   const externalDataControlUrl = parseOptionalHttpUrl(process.env.COMMERCE_EXTERNAL_DATA_CONTROL_URL);
+  const productCatalogControlUrl = parseOptionalHttpUrl(
+    process.env.COMMERCE_PRODUCT_CATALOG_CONTROL_URL ||
+      (process.env.NODE_ENV === "production" ? undefined : "http://127.0.0.1:3000/api/internal/product-catalog"),
+  );
   const runtimeTenantId = emptyToUndefined(process.env.COMMERCE_RUNTIME_TENANT_ID);
   const externalDataService = readExternalDataServiceMcpConfig();
   if (process.env.NODE_ENV === "production" && (!internalToken || internalToken.length < 32)) {
@@ -121,6 +126,7 @@ export function readGatewayConfig(): GatewayConfig {
     titleModel: process.env.COMMERCE_TITLE_MODEL?.trim() || "gpt-5.3-codex-spark",
     externalDataService,
     externalDataControlUrl,
+    productCatalogControlUrl,
   };
 }
 

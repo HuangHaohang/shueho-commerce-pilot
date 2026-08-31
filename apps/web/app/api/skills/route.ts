@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { gatewayHeaders, gatewayUrl, requireAgentContext } from "@/lib/agent/http";
+import { sanitizeSkillInventoryPayload } from "@/lib/agent/browser-skill-inventory";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export async function GET(request: Request) {
       cache: "no-store",
       signal: AbortSignal.timeout(15_000),
     });
-    const payload = await response.json().catch(() => null);
+    const payload = sanitizeSkillInventoryPayload(await response.json().catch(() => null));
     return NextResponse.json(
       payload ?? { error: "Agent Gateway 返回了无效响应。" },
       { status: response.status, headers: { "Cache-Control": "no-store" } },

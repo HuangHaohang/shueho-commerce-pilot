@@ -17,17 +17,19 @@ const healthySignals = {
     tools: ["search"],
     error: null,
   },
+  productCatalog: { configured: true },
 };
 
 describe("commerce plugin catalog", () => {
   it("publishes valid manifests for the real application-managed capabilities", () => {
     const plugins = buildCommercePluginInventory(healthySignals);
 
-    expect(plugins).toHaveLength(2);
+    expect(plugins).toHaveLength(3);
     expect(plugins.every((plugin) => commercePluginManifestSchema.safeParse(plugin.manifest).success)).toBe(true);
     expect(plugins.map((plugin) => plugin.manifest.name)).toEqual([
       "commerce-web-search",
       "commerce-image-generation",
+      "commerce-product-library",
     ]);
   });
 
@@ -39,6 +41,7 @@ describe("commerce plugin catalog", () => {
 
     expect(plugins[0]).toMatchObject({ enabled: false, health: "unavailable", statusLabel: "MCP failed" });
     expect(plugins[1]).toMatchObject({ enabled: true, health: "ready" });
+    expect(plugins[2]).toMatchObject({ enabled: true, health: "ready" });
   });
 
   it("filters the managed directory by display metadata and registered tool names", () => {
@@ -50,7 +53,10 @@ describe("commerce plugin catalog", () => {
     expect(filterCommercePlugins(plugins, "image_gen").map((plugin) => plugin.manifest.name)).toEqual([
       "commerce-image-generation",
     ]);
-    expect(filterCommercePlugins(plugins, "  ")).toHaveLength(2);
+    expect(filterCommercePlugins(plugins, "commerce_product").map((plugin) => plugin.manifest.name)).toEqual([
+      "commerce-product-library",
+    ]);
+    expect(filterCommercePlugins(plugins, "  ")).toHaveLength(3);
   });
 
   it("rejects manifests that request an invalid package name", () => {

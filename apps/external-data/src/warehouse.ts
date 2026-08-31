@@ -1319,7 +1319,7 @@ async function calculateResearchMetrics(
       itemCount: Number(brand.item_count ?? 0),
       share: total ? Number((Number(brand.item_count ?? 0) / total).toFixed(6)) : 0,
     }));
-    await upsertMetric(client, scope, prepared.researchRequestId, "brand_concentration", {
+    await upsertMetric(client, scope, prepared.researchRequestId, "brand_competition", {
       totalFacetCount: total,
       brandCount: distribution.length,
       top3Share: Number(distribution.slice(0, 3).reduce((sum, brand) => sum + brand.share, 0).toFixed(6)),
@@ -1525,10 +1525,13 @@ export async function loadCompactResearchResult(
       ORDER BY observation.property_name,observation.item_count DESC NULLS LAST LIMIT 50
     `, [researchRequestId, latestJobId]);
     const contentEvidence = await client.query<JsonObject>(`
-      SELECT query_row.endpoint_id,content.source_platform,'content'::text AS evidence_kind,
+      SELECT content.id AS evidence_id,content.research_request_id,
+             query_row.endpoint_id,content.source_platform,'content'::text AS evidence_kind,
              source.provider_entity_id,content.title,content.summary,content.author,
              content.canonical_url,content.published_at,content.metrics,
-             content.relevance_score,content.confidence,content.source_json_pointer
+             'ai_promoted_text'::text AS quality_basis,
+             content.relevance_score,content.confidence,content.source_json_pointer,
+             content.observed_at
       FROM business_content_observation content
       JOIN social_search_item source ON source.id=content.source_social_item_id
       JOIN social_search_snapshot snapshot ON snapshot.id=source.snapshot_id
@@ -1538,10 +1541,13 @@ export async function loadCompactResearchResult(
       ORDER BY content.relevance_score DESC,content.published_at DESC NULLS LAST LIMIT 50
     `, [researchRequestId, latestJobId]);
     const genericEvidence = await client.query<JsonObject>(`
-      SELECT evidence.endpoint_id,evidence.source_platform,evidence.evidence_kind,
+      SELECT evidence.id AS evidence_id,evidence.research_request_id,
+             evidence.endpoint_id,evidence.source_platform,evidence.evidence_kind,
              evidence.provider_entity_id,evidence.title,evidence.summary,evidence.author,
              evidence.canonical_url,evidence.published_at,evidence.metrics,
-             evidence.relevance_score,evidence.confidence,evidence.source_json_pointer
+             'ai_promoted_text'::text AS quality_basis,
+             evidence.relevance_score,evidence.confidence,evidence.source_json_pointer,
+             evidence.observed_at
       FROM business_evidence_observation evidence
       JOIN ai_enrichment_result enrichment ON enrichment.id=evidence.enrichment_result_id
       WHERE evidence.research_request_id=$1 AND enrichment.job_id=$2
@@ -1562,6 +1568,12 @@ export async function loadCompactResearchResult(
     const metricValues: JsonObject = Object.fromEntries(storedMetrics.rows.map((row) => [row.metric_name, {
       ...row.metric_value, sampleCount: row.sample_count, confidence: row.confidence,
     }]));
+    // Read receipts created before the metric-contract correction without
+    // reporting a requested brand_competition metric as missing.
+    if (!metricValues.brand_competition && isRecord(metricValues.brand_concentration)) {
+      metricValues.brand_competition = metricValues.brand_concentration;
+    }
+    delete metricValues.brand_concentration;
     const priceGroups = new Map<string, number[]>();
     for (const row of products) {
       const amount = nullableNumber(row.price_amount ?? row.price_yuan);

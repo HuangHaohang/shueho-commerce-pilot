@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { selectMarketplaceProductResearchPlan } from "./marketplace-research-planner.js";
+import {
+  selectMarketplaceProductResearchPlan,
+  type MarketplaceResearchRequest,
+} from "./marketplace-research-planner.js";
 import type { ProviderBusinessWorkflow } from "./business-workflows.js";
 import { buildProviderMarketOptions } from "./market-options.js";
 import type { ProviderEndpoint } from "./types.js";
@@ -31,6 +34,75 @@ describe("marketplace product research planning", () => {
     expect(plan.steps[1]?.dynamicParameterBindings).toEqual({ itemId: "item_id" });
     expect(plan.coverage.provider_calls_planned).toBe(7);
     expect(plan.coverage.detailed_products_planned).toBe(3);
+  });
+
+  it("pins an immutable first-party product subject into the plan identity and receipts", () => {
+    const request: MarketplaceResearchRequest = {
+      platform: "TAOBAO",
+      keyword: "砂锅",
+      localizedKeyword: null,
+      market: null,
+      tmallOnly: false,
+      minPriceYuan: null,
+      maxPriceYuan: null,
+      requestedMetrics: ["price_band"],
+      maxResults: 20,
+    };
+    const subject = {
+      version: 1 as const,
+      subjectRef: "11111111-1111-4111-8111-111111111111",
+      snapshotSha256: "a".repeat(64),
+      productCount: 1,
+      products: [{
+        productId: "22222222-2222-4222-8222-222222222222",
+        productRevisionId: "33333333-3333-4333-8333-333333333333",
+      }],
+    };
+    const withSubject = selectMarketplaceProductResearchPlan([workflow()], request, subject);
+    const withoutSubject = selectMarketplaceProductResearchPlan([workflow()], request);
+
+    expect(withSubject.planKey).not.toBe(withoutSubject.planKey);
+    expect(withSubject.firstPartySubject).toEqual(subject);
+    expect(withSubject.businessIntent.first_party_subject).toEqual({
+      version: 1,
+      subject_ref: subject.subjectRef,
+      snapshot_sha256: subject.snapshotSha256,
+      product_count: 1,
+      products: [{
+        product_id: subject.products[0]?.productId,
+        product_revision_id: subject.products[0]?.productRevisionId,
+      }],
+    });
+    expect(withSubject.coverage.first_party_subject).toEqual(withSubject.businessIntent.first_party_subject);
+  });
+
+  it("rejects a malformed or duplicate first-party product snapshot before provider planning", () => {
+    expect(() => selectMarketplaceProductResearchPlan([workflow()], {
+      platform: "TAOBAO",
+      keyword: "砂锅",
+      localizedKeyword: null,
+      market: null,
+      tmallOnly: false,
+      minPriceYuan: null,
+      maxPriceYuan: null,
+      requestedMetrics: ["price_band"],
+      maxResults: 20,
+    }, {
+      version: 1,
+      subjectRef: "11111111-1111-4111-8111-111111111111",
+      snapshotSha256: "b".repeat(64),
+      productCount: 2,
+      products: [
+        {
+          productId: "22222222-2222-4222-8222-222222222222",
+          productRevisionId: "33333333-3333-4333-8333-333333333333",
+        },
+        {
+          productId: "22222222-2222-4222-8222-222222222222",
+          productRevisionId: "33333333-3333-4333-8333-333333333333",
+        },
+      ],
+    })).toThrowError(expect.objectContaining({ code: "INVALID_RESEARCH_REQUEST" }));
   });
 
   it("requires a Shopee site before any provider plan is produced", () => {

@@ -43,6 +43,8 @@ There is no custom Agent loop. New and resumed threads receive the `commerce_dat
 
 Marketplace research is a composed two-phase contract. Before asking about scope, the Agent reads `list_marketplace_research_platforms` and `get_marketplace_options`, uses native `request_user_input` only for missing user choices, and generates localized variants only from the selected profile's `preferredQueryLocale`, `queryLocales` and script policy. Free planning persists a tenant/user/thread/Turn-bound plan pinned to exact catalog, workflow and profile revisions and obtains a no-reservation control-plane quote. Paid execution accepts only `plan_id`; the model cannot alter platform, site, localization, sample size or endpoint set.
 
+For product-grounded research, Gateway attaches the server-resolved `_commerce_context.first_party_subject` contract `{version: 1, subject_ref, snapshot_sha256, product_count, products[{product_id, product_revision_id}]}`. It is not a model argument and contains no product body, SKU, price, cost, inventory, source credential or connector metadata. SHUEHO binds the receipt to the free plan and rejects paid execution if the subject is absent or its snapshot/product revisions differ.
+
 `get_marketplace_options` deliberately omits internal quality thresholds, profile ids/revisions and maximum representative-sample policy. Unless the user explicitly requests a sample count, the Agent plans with `detail_sample_size=null` and waits for the free quote. If policy permits fewer representatives, the Agent's immediate next action is native `request_user_input` with one accept-reduced-coverage or pause choice; it must not first emit an assistant message, numbered list or an unexecutable sample promise.
 
 Search runs first. The service deduplicates complete identifier bindings, selects relevance/title/shop-diversified representatives, records immutable targets, and materializes one independent detail/price/review/SKU step instance per target. With `always_ask`, every actual provider request produces its own Commerce approval prompt while the original Harness `item/tool/call` remains pending. A known failure is recorded without retry and does not erase independent completed targets; an uncertain result stops automatic execution and requires reconciliation.
@@ -56,6 +58,23 @@ Commerce Pilot follows the App Server dynamic-tool failure contract instead of r
 This contract follows the [official App Server dynamic-tool lifecycle](https://developers.openai.com/codex/app-server/) and the pinned Codex [`DynamicToolHandler`](https://github.com/openai/codex/blob/rust-v0.150.1/codex-rs/core/src/tools/handlers/dynamic.rs), where returned content and `success` become the model-visible function output and the authoritative completed/failed item state.
 
 The user does not have to mention JustOneAPI, an endpoint id, or a tool in the prompt. The Harness decides from the business objective whether governed external data would materially improve the answer and which business evidence objective is required. It must not spend money merely because a tool is available. Once the Harness chooses a paid business research tool, Commerce Pilot applies the selected approval mode below while the original `item/tool/call` remains pending.
+
+## Product-Grounded Market Research
+
+The market-research Task Recipe may bind one or more canonical Product revisions from the shared composer. The browser submits only scope-checked Product UUIDs and a context mode. Before planning paid marketplace research, the same Codex Harness Turn must call `commerce_product.get_selected_product_context`; Gateway then marks that Turn's immutable first-party subject as read and supplies the exact Product revision references, subject reference, Product count, and SHA-256 snapshot. Product titles, descriptions and attributes remain untrusted tenant data and never become instructions.
+
+The managed Skill separates four claim types in one fixed App Server output schema:
+
+- `product_fact`: directly supported by the bound canonical Product revision;
+- `market_signal`: directly supported by accepted external business evidence;
+- `derived_comparison`: an AI comparison that references both Product facts and market evidence;
+- `hypothesis`: an explicitly unconfirmed AI inference.
+
+Each report Claim carries compact Product-fact references, external evidence ids, confidence and limitations. Each report receipt carries only the safe research request id, platform, observation time, accepted evidence count, accepted review-evidence count, evidence kinds, coverage summary and limitations. `reviewEvidenceCount` counts only accepted review evidence. A product row that merely contains a review-count field, a social post, a product detail, or sales evidence is not itself buyer-review evidence. When the accepted review count is zero, the UI and report must describe consumer pain points only as hypotheses.
+
+The final result remains a native Harness assistant Item. `responseType=report` projects the fixed Markdown, Claims and receipts into the conversation; `responseType=answer` projects a normal conversational answer. Commerce Pilot does not create a second report store, browser-side Agent, or parallel form state machine. Opening a persisted creative or market-research task reloads the latest tenant/user/thread-bound Product context through the authenticated Product-context read route; request ids plus `AbortController` prevent a slow prior task from overwriting the current selection.
+
+Completed `commerce_data` Item results are projected into the UI through a strict allowlist. A free-plan card may display Product count, Product snapshot hash, platform, market, representative sample, estimated provider calls, customer quote, coverage and expiry. An evidence card may display the safe research id, platform, observation time, accepted evidence/review counts, missing metrics and limitations. This projection never reads or renders raw archives, provider endpoint ids, author identities, raw rows, request parameters or vendor credentials. Desktop uses the work-output evidence panel; narrow layouts expose the same projection through a bottom Sheet, and every activity disclosure uses the same receipt component.
 
 ## Internal Service Contract
 

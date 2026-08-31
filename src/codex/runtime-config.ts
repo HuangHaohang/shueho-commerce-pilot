@@ -8,9 +8,23 @@ import {
   runtimeProviderActorAuthorizationHeader,
 } from "../provider/runtime-provider-proxy.js";
 import {
+  COMMERCE_INSIGHT_METHODS,
+  renderCommerceInsightMethodSkill,
+  renderCommerceInsightMethodSkillMetadata,
+} from "./commerce-analysis-skills.js";
+import {
+  CREATIVE_METHOD_VALUES,
   MANAGED_WORKFLOW_IDS,
+  commerceInsightMethodSkillDirectory,
+  commerceInsightMethodSkillMetadataPath,
+  commerceInsightMethodSkillPath,
+  creativeMethodSkillDirectory,
+  creativeMethodSkillMetadataPath,
+  creativeMethodSkillPath,
   managedWorkflowSkillDirectory,
   managedWorkflowSkillPath,
+  renderCreativeMethodSkill,
+  renderCreativeMethodSkillMetadata,
   renderManagedWorkflowSkill,
 } from "./managed-workflows.js";
 
@@ -37,6 +51,42 @@ export async function ensureAppOwnedCodexConfig(config: GatewayConfig): Promise<
     await writeFileIfChanged(
       managedWorkflowSkillPath(config.runtimeRoot, workflow),
       renderManagedWorkflowSkill(workflow),
+      0o600,
+    );
+  }
+  for (const method of CREATIVE_METHOD_VALUES) {
+    await mkdir(join(creativeMethodSkillDirectory(config.runtimeRoot, method), "agents"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await writeFileIfChanged(
+      creativeMethodSkillPath(config.runtimeRoot, method),
+      renderCreativeMethodSkill(method),
+      0o600,
+    );
+    await writeFileIfChanged(
+      creativeMethodSkillMetadataPath(config.runtimeRoot, method),
+      renderCreativeMethodSkillMetadata(method),
+      0o600,
+    );
+  }
+  for (const method of COMMERCE_INSIGHT_METHODS) {
+    await mkdir(join(commerceInsightMethodSkillDirectory(config.runtimeRoot, method), "agents"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    // commerce-market-research remains the historical workflow Skill as well as
+    // the market specialist, so its existing managed body is the single source.
+    if (method !== "market_research") {
+      await writeFileIfChanged(
+        commerceInsightMethodSkillPath(config.runtimeRoot, method),
+        renderCommerceInsightMethodSkill(method),
+        0o600,
+      );
+    }
+    await writeFileIfChanged(
+      commerceInsightMethodSkillMetadataPath(config.runtimeRoot, method),
+      renderCommerceInsightMethodSkillMetadata(method),
       0o600,
     );
   }
@@ -283,6 +333,48 @@ const allowedTools = new Set([
   "commerce_data.get_research_result",
   "commerce_data_get_research_result",
   "commerce_dataget_research_result",
+  "commerce_product.list_connectors",
+  "commerce_product_list_connectors",
+  "commerce_productlist_connectors",
+  "commerce_product.list_sources",
+  "commerce_product_list_sources",
+  "commerce_productlist_sources",
+  "commerce_product.list_imports",
+  "commerce_product_list_imports",
+  "commerce_productlist_imports",
+  "commerce_product.create_import_from_artifact",
+  "commerce_product_create_import_from_artifact",
+  "commerce_productcreate_import_from_artifact",
+  "commerce_product.create_source_draft",
+  "commerce_product_create_source_draft",
+  "commerce_productcreate_source_draft",
+  "commerce_product.test_source",
+  "commerce_product_test_source",
+  "commerce_producttest_source",
+  "commerce_product.search_products",
+  "commerce_product_search_products",
+  "commerce_productsearch_products",
+  "commerce_product.get_product",
+  "commerce_product_get_product",
+  "commerce_productget_product",
+  "commerce_product.get_selected_product_context",
+  "commerce_product_get_selected_product_context",
+  "commerce_productget_selected_product_context",
+  "commerce_product.inspect_import",
+  "commerce_product_inspect_import",
+  "commerce_productinspect_import",
+  "commerce_product.propose_mapping",
+  "commerce_product_propose_mapping",
+  "commerce_productpropose_mapping",
+  "commerce_product.validate_mapping",
+  "commerce_product_validate_mapping",
+  "commerce_productvalidate_mapping",
+  "commerce_product.activate_import",
+  "commerce_product_activate_import",
+  "commerce_productactivate_import",
+  "commerce_product.import_status",
+  "commerce_product_import_status",
+  "commerce_productimport_status",
   "commerce_web.search",
   "commerce_web_search",
   "commerce_websearch",
@@ -298,6 +390,20 @@ const allowedTools = new Set([
   "execute_marketplace_research",
   "list_marketplace_research_platforms",
   "get_marketplace_options",
+  "list_connectors",
+  "list_sources",
+  "list_imports",
+  "create_import_from_artifact",
+  "create_source_draft",
+  "test_source",
+  "search_products",
+  "get_product",
+  "get_selected_product_context",
+  "inspect_import",
+  "propose_mapping",
+  "validate_mapping",
+  "activate_import",
+  "import_status",
 ]);
 
 let output = {};

@@ -219,6 +219,50 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260828_033_external_data_plan_lineage",
       path: resolve(process.cwd(), "migrations/033_external_data_plan_lineage.sql"),
     },
+    {
+      version: "20260830_034_creative_project_recipe",
+      path: resolve(process.cwd(), "migrations/034_creative_project_recipe.sql"),
+    },
+    {
+      version: "20260830_035_product_catalog_foundation",
+      path: resolve(process.cwd(), "migrations/035_product_catalog_foundation.sql"),
+    },
+    {
+      version: "20260830_036_product_catalog_context",
+      path: resolve(process.cwd(), "migrations/036_product_catalog_context.sql"),
+    },
+    {
+      version: "20260830_037_product_catalog_delete_immutability",
+      path: resolve(process.cwd(), "migrations/037_product_catalog_delete_immutability.sql"),
+    },
+    {
+      version: "20260830_038_product_connector_registry",
+      path: resolve(process.cwd(), "migrations/038_product_connector_registry.sql"),
+    },
+    {
+      version: "20260830_039_product_onboarding_recipe",
+      path: resolve(process.cwd(), "migrations/039_product_onboarding_recipe.sql"),
+    },
+    {
+      version: "20260830_040_enterprise_data_isolation_closure",
+      path: resolve(process.cwd(), "migrations/040_enterprise_data_isolation_closure.sql"),
+    },
+    {
+      version: "20260830_041_product_operator_file_import",
+      path: resolve(process.cwd(), "migrations/041_product_operator_file_import.sql"),
+    },
+    {
+      version: "20260830_042_product_secret_handles_and_storage_governance",
+      path: resolve(process.cwd(), "migrations/042_product_secret_handles_and_storage_governance.sql"),
+    },
+    {
+      version: "20260830_043_product_mapping_operation_idempotency",
+      path: resolve(process.cwd(), "migrations/043_product_mapping_operation_idempotency.sql"),
+    },
+    {
+      version: "20260831_044_product_insight_recipes",
+      path: resolve(process.cwd(), "migrations/044_product_insight_recipes.sql"),
+    },
   ];
 
   for (const migration of migrations) {

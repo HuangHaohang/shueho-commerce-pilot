@@ -27,10 +27,10 @@ Commerce manifests intentionally mirror the stable subset of Codex plugin metada
 
 - package identity: `name`, `version`, `description`
 - install-surface metadata: display name, category, and declared capabilities
-- components: skills, MCP servers, application tools, and optional UI
+- components: skills, MCP servers, application tools, localized display names, and optional UI
 - security declaration: network scope, data scope, and external write effects
 
-The browser directory is a workbench view, not a separate product shell. It keeps navigation and account context stable, renders installed plugins from `GET /api/plugins`, and opens a read-only detail view inside the same main region. The per-plugin plus control means "view details" until a reviewed lifecycle API exists; it must never imply that a browser-side install succeeded. Lucide icons identify plugin types, while application-owned raster covers may illustrate detail pages without becoming executable plugin content.
+The browser directory is a workbench view, not a separate product shell. It keeps navigation and account context stable, renders installed plugins from `GET /api/plugins`, and opens a read-only detail view inside the same main region. The per-plugin plus control means "view details" until a reviewed lifecycle API exists; it must never imply that a browser-side install succeeded. Detail rows lead with application-owned Chinese capability names; protocol identifiers such as `commerce_web.search` and `image_gen` remain visible only as technical subtitles. Lucide icons identify plugin types, while application-owned raster covers may illustrate detail pages without becoming executable plugin content.
 
 Runtime support is narrower than the manifest vocabulary:
 

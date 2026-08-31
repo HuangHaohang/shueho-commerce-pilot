@@ -77,7 +77,27 @@ if (/broadcastEvent\(\{\s*type:\s*"server_request"/.test(gatewaySource)) {
 if (gatewaySource.includes('"thread/inject_items"')) {
   throw new Error("Harness question answers must not be duplicated into model history.");
 }
-if (gatewaySource.includes('codex.request("turn/steer"')) {
+const managedSteerRouteStart = gatewaySource.indexOf("const steerMatch =");
+const managedSteerRouteEnd = gatewaySource.indexOf("const turnMatch =", managedSteerRouteStart);
+const managedSteerRoute = gatewaySource.slice(managedSteerRouteStart, managedSteerRouteEnd);
+if (
+  managedSteerRouteStart < 0 ||
+  managedSteerRouteEnd < 0 ||
+  !managedSteerRoute.includes('codex.request("turn/steer"')
+) {
+  throw new Error("Managed workflows must use the dedicated native Harness turn/steer route.");
+}
+if (managedSteerRoute.includes('codex.request("turn/interrupt"')) {
+  throw new Error("Managed workflow steering must not interrupt its schema-constrained Harness turn.");
+}
+const queuedSteerStart = gatewaySource.indexOf("async function promoteQueuedSubmissionToSteer");
+const queuedSteerEnd = gatewaySource.indexOf("async function interruptTurnWithRaceRetry", queuedSteerStart);
+const queuedSteerTransition = gatewaySource.slice(queuedSteerStart, queuedSteerEnd);
+if (
+  queuedSteerStart < 0 ||
+  queuedSteerEnd < 0 ||
+  queuedSteerTransition.includes('codex.request("turn/steer"')
+) {
   throw new Error("Queued direction changes must not steer and then interrupt the same Harness turn.");
 }
 if (gatewaySource.includes("PendingSteerStore") || gatewaySource.includes("PendingSteerRegistry")) {

@@ -6,6 +6,7 @@ describe("curateBusinessSearchResult", () => {
   it("keeps bounded business evidence and removes tenancy and retrieval internals", () => {
     const result = curateBusinessSearchResult({
       entity_type: "product",
+      evidence_kind: "product",
       id: "product-id",
       title: "蘑菇勺",
       price_yuan: 19.9,
@@ -14,6 +15,10 @@ describe("curateBusinessSearchResult", () => {
       observed_at: "2026-08-26T00:00:00.000Z",
       research_request_id: "research-id",
       query_key: "query-key",
+      metrics: { price_yuan: 19.9 },
+      published_at: null,
+      quality_basis: "ai_promoted_text",
+      confidence: 0.88,
       relevance_score: 0.8,
       rerank_score: 0.9,
       tenant_id: "tenant-secret",
@@ -24,8 +29,18 @@ describe("curateBusinessSearchResult", () => {
     });
     expect(result).toMatchObject({
       entity_type: "product",
+      evidence_id: "product-id",
+      evidence_kind: "product",
       title: "蘑菇勺",
       price_yuan: 19.9,
+      research_request_id: "research-id",
+      query_key: "query-key",
+      source_name: "淘宝",
+      canonical_url: "https://item.taobao.com/item.htm?id=1",
+      observed_at: "2026-08-26T00:00:00.000Z",
+      metrics: { price_yuan: 19.9 },
+      quality_basis: "ai_promoted_text",
+      confidence: 0.88,
       retrieval_score: 0.9,
     });
     expect(result).not.toHaveProperty("tenant_id");

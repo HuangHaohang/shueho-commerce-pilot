@@ -1,11 +1,13 @@
 import { withScope } from "./database.js";
 import { config } from "./config.js";
 import {
+  normalizeFirstPartySubject,
   planMarketplaceProductResearch,
+  toStoredFirstPartySubject,
   type MarketplaceResearchPlan,
   type MarketplaceResearchRequest,
 } from "./marketplace-research-planner.js";
-import type { ExternalDataScope, JsonObject } from "./types.js";
+import type { ExternalDataScope, FirstPartyResearchSubject, JsonObject } from "./types.js";
 
 type StoredPlanRow = {
   id: string;
@@ -56,6 +58,11 @@ export async function persistMarketplaceResearchPlan(
   if (scope.source === "archive_import") {
     throw new MarketplaceResearchPlanError("Archive imports cannot create executable plans.", "PLAN_SOURCE_INVALID");
   }
+  assertSameFirstPartySubject(
+    plan.firstPartySubject,
+    scope.firstPartySubject ?? null,
+    "PLAN_SUBJECT_MISMATCH",
+  );
   const expiresAt = new Date(Date.now() + config.marketplacePlanTtlMs);
   const stepTemplates = plan.steps.map((step) => ({
     step_id: step.stepId,
@@ -129,6 +136,12 @@ export async function loadExecutableMarketplaceResearchPlan(
   ) {
     throw new MarketplaceResearchPlanError("Marketplace research plan was not found.", "PLAN_NOT_FOUND");
   }
+  const storedSubject = readStoredFirstPartySubject(stored.business_intent.first_party_subject);
+  assertSameFirstPartySubject(
+    storedSubject,
+    scope.firstPartySubject ?? null,
+    "PLAN_SUBJECT_MISMATCH",
+  );
   let replayOfSameExecution = false;
   if (stored.state === "executing" && stored.workflow_execution_id) {
     replayOfSameExecution = await withScope(scope,async (client) => {
@@ -151,7 +164,7 @@ export async function loadExecutableMarketplaceResearchPlan(
     throw new MarketplaceResearchPlanError("Marketplace research plan expired before execution.", "PLAN_EXPIRED");
   }
   const request = readStoredRequest(stored.requested_input);
-  const plan = await planMarketplaceProductResearch(request, constraints);
+  const plan = await planMarketplaceProductResearch(request, constraints, storedSubject);
   if (
     plan.planKey !== stored.plan_key || plan.workflow.workflowId !== stored.workflow_id ||
     plan.workflow.workflowVersion !== stored.workflow_version ||
@@ -241,6 +254,63 @@ function numberValue(value: unknown): number {
 
 function nullableNumber(value: unknown): number | null {
   return value === null || value === undefined ? null : numberValue(value);
+}
+
+function readStoredFirstPartySubject(value: unknown): FirstPartyResearchSubject | null {
+  if (value === null || value === undefined) return null;
+  if (!isRecord(value) || !Array.isArray(value.products)) {
+    throw new MarketplaceResearchPlanError(
+      "Stored marketplace research subject is invalid.",
+      "PLAN_SUBJECT_INVALID",
+    );
+  }
+  try {
+    return normalizeFirstPartySubject({
+      version: value.version as 1,
+      subjectRef: stringValue(value.subject_ref),
+      snapshotSha256: stringValue(value.snapshot_sha256),
+      productCount: numberValue(value.product_count),
+      products: value.products.map((product) => {
+        if (!isRecord(product)) return { productId: "", productRevisionId: "" };
+        return {
+          productId: stringValue(product.product_id),
+          productRevisionId: stringValue(product.product_revision_id),
+        };
+      }),
+    });
+  } catch {
+    throw new MarketplaceResearchPlanError(
+      "Stored marketplace research subject is invalid.",
+      "PLAN_SUBJECT_INVALID",
+    );
+  }
+}
+
+function assertSameFirstPartySubject(
+  expected: FirstPartyResearchSubject | null,
+  actual: FirstPartyResearchSubject | null,
+  code: string,
+): void {
+  const expectedStored = toStoredFirstPartySubject(expected);
+  let actualStored: JsonObject | null;
+  try {
+    actualStored = toStoredFirstPartySubject(normalizeFirstPartySubject(actual));
+  } catch {
+    throw new MarketplaceResearchPlanError(
+      "Marketplace research plan received an invalid first-party product snapshot.",
+      code,
+    );
+  }
+  if (JSON.stringify(expectedStored) !== JSON.stringify(actualStored)) {
+    throw new MarketplaceResearchPlanError(
+      "Marketplace research plan is bound to a different first-party product snapshot.",
+      code,
+    );
+  }
+}
+
+function isRecord(value: unknown): value is JsonObject {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export class MarketplaceResearchPlanError extends Error {
