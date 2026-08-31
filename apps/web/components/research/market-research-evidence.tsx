@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Database, ExternalLink, Globe2, ReceiptText, ShieldCheck } from "lucide-react";
+import { ChevronDown, Database, ExternalLink, Globe2, ReceiptText, ShieldCheck, ShieldQuestion } from "lucide-react";
 
 import {
   Sheet,
@@ -13,6 +13,7 @@ import type { AgentActivity } from "@/lib/agent/use-agent-thread";
 import type { WebSource } from "@/lib/agent/web-sources";
 import type { ResearchEvidenceReceipt, ResearchPlanReceipt } from "@/lib/agent/tool-activity";
 import type { MarketResearchReceipt } from "@/lib/research/market-report";
+import { cn } from "@/lib/utils";
 
 type SafeEvidenceRow = {
   id: string;
@@ -236,10 +237,17 @@ function evidenceProjectionRow(receipt: ResearchEvidenceReceipt): SafeEvidenceRo
 }
 
 function EvidenceReceiptDisclosure({ row }: { row: SafeEvidenceRow }) {
+  const ReceiptIcon = row.verified ? ShieldCheck : ShieldQuestion;
   return (
     <details className="group rounded-[var(--cp-radius-item)] border border-[var(--cp-border-subtle)] px-3 py-2">
       <summary className="flex min-h-8 cursor-pointer list-none items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]">
-        <ShieldCheck className="size-4 shrink-0 text-[var(--cp-success)]" aria-hidden="true" />
+        <ReceiptIcon
+          className={cn(
+            "size-4 shrink-0",
+            row.verified ? "text-[var(--cp-success)]" : "text-[var(--cp-warning)]",
+          )}
+          aria-hidden="true"
+        />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs font-medium">{row.platform || "外部市场数据"}</span>
           <span className="block truncate text-[10px] text-[var(--cp-text-faint)]">

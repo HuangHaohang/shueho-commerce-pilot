@@ -31,12 +31,14 @@ The globally discoverable `skill-creator` remains the Codex system Skill. In the
 Creative Space keeps `commerce-creative-project` as the project-level Skill and adds one optional application-managed specialist Skill to the same native Turn input. These are product capabilities, not tenant-authored prompts:
 
 - `commerce-listing-copy`
+- `commerce-campaign-pack`
 - `commerce-promotion-copy`
 - `commerce-product-main-image`
 - `commerce-product-gallery`
 - `commerce-product-detail-page`
 - `commerce-product-shooting-script`
 - `commerce-short-video-storyboard`
+- `commerce-creative-qa`
 
 The browser chooses a Chinese business method and submits only its closed `creativeMethod` enum. Gateway owns the method-to-Skill registry, resolves the absolute path, and sends the user's unmodified text plus native `skill` Items. It rejects a method outside that registry and never accepts a Skill name/path/body, tool schema, output schema, developer instruction, `cwd`, or policy override from the browser. The general `@` Skill selector remains hidden in Creative Space so a user cannot replace the fixed project workflow with an arbitrary Skill.
 
@@ -50,7 +52,9 @@ All specialist Skills share these commerce rules:
 - return the complete latest delivery and its `deliverableType`, channel, and review gaps through the server-owned creative output schema;
 - never publish to a catalog, marketplace, store, ad account, or social platform. Any future write needs a separate application tool with authorization, approval, idempotency, audit, and downstream readback.
 
-`commerce-product-main-image`, `commerce-product-gallery`, and image-producing storyboard work use only Harness-native `image_gen`. A catalog URL alone is not a trusted image input. Product-fidelity claims require a tenant-owned, thread-authorized `localImage` attachment or future Product Media revision; without one the Skill must deliver a brief or clearly labelled concept. Native `imageGeneration` Items remain the artifact authority and the canvas groups all images from the same delivery Turn.
+`commerce-product-main-image`, `commerce-product-gallery`, and image-producing storyboard work use exactly one Harness-owned image path per artifact: either Provider-hosted Responses image generation or the namespace `image_gen` extension supported by the configured Provider. A catalog URL alone is not a trusted image input. Product-fidelity claims require a tenant-owned, thread-authorized `localImage` attachment or future Product Media revision; without one the Skill must deliver a brief or clearly labelled concept. Completed native `imageGeneration` Items remain the sole artifact authority and the canvas groups all images from the same delivery Turn. Gateway must not dispatch a second Provider call or fabricate that Item.
+
+Campaign asset packs and creative QA are also native specialist Skills in the same project Turn. The Campaign pack outputs a Product-revision-grounded brief, claim matrix, channel derivative matrix and four independent QA gates. Creative QA returns separate product-fidelity, claim-evidence, brand and channel tables with `pass / hold / fail`; missing authority is held as unavailable. Neither Skill publishes, schedules, approves, spends budget, directly calls a Provider, or fabricates rendered media.
 
 There is deliberately no `commerce-video-render` Skill while no real video tool exists. `commerce-short-video-storyboard` produces script, shot list, voice-over, captions, and optional native keyframe images only. Rendered video can be enabled later only with an application-owned asynchronous tool implementing quote/approval, live authorization, budget reservation, exact-once dispatch, idempotency, tenant artifact ownership, audit, and authoritative job/content readback; it must never fabricate a Codex-native video Item.
 

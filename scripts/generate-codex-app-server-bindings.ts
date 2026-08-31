@@ -2,23 +2,18 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
+import { resolveCodexBin } from "../src/codex/resolve-codex-bin.js";
+
 const root = process.cwd();
 const output = resolve(root, "src/codex/generated");
-const codex = process.platform === "win32"
-  ? resolve(root, "node_modules/@openai/codex/bin/codex.js")
-  : resolve(root, "node_modules/.bin/codex");
-
-if (!existsSync(codex)) {
-  throw new Error(`Codex binary is unavailable at ${codex}. Run npm install first.`);
-}
+const codex = resolveCodexBin(root, process.env.CODEX_BIN);
 
 rmSync(output, { recursive: true, force: true });
 mkdirSync(output, { recursive: true });
 
 const generated = spawnSync(
-  process.platform === "win32" ? process.execPath : codex,
+  codex,
   [
-    ...(process.platform === "win32" ? [codex] : []),
     "app-server",
     "generate-ts",
     "--experimental",

@@ -144,6 +144,8 @@ import {
 } from "@/lib/creative/creative-method-contract";
 import {
   creativeMethodActiveRequirement,
+  creativeMethodRequiresReferenceImage,
+  creativeMethodRequiresSelectedProduct,
   creativeMethodStarterPrompt,
 } from "@/lib/creative/creative-method-presentation";
 import {
@@ -152,7 +154,6 @@ import {
   useCreativeCanvasNavigation,
 } from "@/lib/creative/creative-canvas-navigation";
 import type { CreativeCanvasMessageReference } from "@/lib/creative/creative-canvas-types";
-import { getThreadProductContext } from "@/lib/products/thread-product-context";
 import type { ProductContextMode, ProductSummary } from "@/lib/products/catalog";
 import {
   parseMarketResearchResponse,
@@ -341,8 +342,6 @@ export function CommerceWorkbenchShell({
   const previousAuthUserIdRef = useRef<string | null | undefined>(undefined);
   const composerAttachmentsRef = useRef<PendingAttachmentUpload[]>([]);
   const warmedThreadIdsRef = useRef(new Set<string>());
-  const productContextRequestRef = useRef(0);
-  const productContextAbortRef = useRef<AbortController | null>(null);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -350,7 +349,6 @@ export function CommerceWorkbenchShell({
   }, [composerAttachments]);
 
   useEffect(() => () => {
-    productContextAbortRef.current?.abort();
     for (const attachment of composerAttachmentsRef.current) {
       if (attachment.kind === "image" && attachment.url.startsWith("blob:")) URL.revokeObjectURL(attachment.url);
     }
@@ -575,9 +573,6 @@ export function CommerceWorkbenchShell({
       previousAuthUserIdRef.current !== undefined &&
       previousAuthUserIdRef.current !== currentUserId
     ) {
-      productContextRequestRef.current += 1;
-      productContextAbortRef.current?.abort();
-      productContextAbortRef.current = null;
       agentThread.resetThread();
       setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
       setSelectedSkill(null);
@@ -605,14 +600,13 @@ export function CommerceWorkbenchShell({
     autoRestoreAttemptedRef.current = true;
     const latestThread = threadsQuery.data?.threads[0];
     if (!agentThread.threadId && latestThread) {
+      resetProductContext();
       setActiveManagedEntryWorkflow(isProductOnboardingThread(latestThread) ? "commerce-product-onboarding" : null);
       if (isCreativeProjectThread(latestThread)) {
         setActiveView("creative");
-        void restoreThreadProductContext(latestThread.threadId);
       } else if (isProductInsightThread(latestThread)) {
         setProductInsightMethod(productInsightMethodForThread(latestThread));
         setActiveView("research");
-        void restoreThreadProductContext(latestThread.threadId);
       }
       void agentThread.loadThread(latestThread);
     }
@@ -660,8 +654,28 @@ export function CommerceWorkbenchShell({
           setDraft("");
         }
       } else if (activeView === "creative" || activeView === "research") {
+        if (
+          activeView === "creative" &&
+          creativeMethod &&
+          creativeMethodRequiresSelectedProduct(creativeMethod) &&
+          (productContextMode !== "selected" || selectedProducts.length === 0)
+        ) {
+          setAttachmentError("该创作方式必须先通过“产品库”选择至少一个产品版本。");
+          return;
+        }
+        if (
+          activeView === "creative" &&
+          creativeMethod &&
+          creativeMethodRequiresReferenceImage(creativeMethod) &&
+          !composerAttachments.some((attachment) => attachment.kind === "image")
+        ) {
+          setAttachmentError("商品主图和副图生成必须在本轮上传可识别商品外观的参考图。");
+          return;
+        }
+        setAttachmentError(null);
         const attachmentsForSubmit = takeComposerAttachments();
         const creativeMethodForSubmit = activeView === "creative" ? creativeMethod : null;
+        const productsForSubmit = productContextMode === "selected" ? selectedProducts : [];
         setDraft("");
         if (creativeMethodForSubmit) setCreativeMethod(null);
         const submitted = await agentThread.submit(value || "请结合附件继续处理。", {
@@ -671,11 +685,14 @@ export function CommerceWorkbenchShell({
           ...(creativeMethodForSubmit ? { displaySkillName: creativeMethodSkillName(creativeMethodForSubmit) } : {}),
           attachments: attachmentsForSubmit,
           externalDataApprovalMode,
-          productIds: selectedProducts.map((product) => product.id),
+          productIds: productsForSubmit.map((product) => product.id),
           productContextMode,
+          displayProducts: productsForSubmit,
+          onTurnAccepted: resetProductContext,
         });
-        if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
-        else {
+        if (submitted) {
+          finalizeSubmittedAttachments(attachmentsForSubmit);
+        } else {
           restoreComposerAttachments(attachmentsForSubmit);
           setDraft(value);
           if (creativeMethodForSubmit) setCreativeMethod(creativeMethodForSubmit);
@@ -683,6 +700,7 @@ export function CommerceWorkbenchShell({
       } else {
         const attachmentsForSubmit = takeComposerAttachments();
         const skillForSubmit = selectedSkill;
+        const productsForSubmit = productContextMode === "selected" ? selectedProducts : [];
         setDraft("");
         setSelectedSkill(null);
         const submitted = await agentThread.submit(
@@ -692,8 +710,10 @@ export function CommerceWorkbenchShell({
             ...(skillForSubmit ? { skillName: skillForSubmit.name } : {}),
             attachments: attachmentsForSubmit,
             externalDataApprovalMode,
-            productIds: selectedProducts.map((product) => product.id),
+            productIds: productsForSubmit.map((product) => product.id),
             productContextMode,
+            displayProducts: productsForSubmit,
+            onTurnAccepted: resetProductContext,
           },
         );
         if (submitted) {
@@ -716,7 +736,6 @@ export function CommerceWorkbenchShell({
   }
 
   async function logout() {
-    cancelThreadProductContextRestore();
     agentThread.resetThread();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     setActiveManagedEntryWorkflow(null);
@@ -740,7 +759,6 @@ export function CommerceWorkbenchShell({
     setActiveManagedEntryWorkflow(null);
     setCreativeMethod(null);
     setProductInsightMethod("market_research");
-    cancelThreadProductContextRestore();
     resetProductContext();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
@@ -769,12 +787,7 @@ export function CommerceWorkbenchShell({
         ? "research"
         : "workbench";
     setActiveView(threadView);
-    if (threadView === "creative" || threadView === "research") {
-      void restoreThreadProductContext(thread.threadId);
-    } else {
-      cancelThreadProductContextRestore();
-      resetProductContext();
-    }
+    resetProductContext();
     if (
       thread.threadId === agentThread.threadId &&
       (agentThread.loadingHistory || agentThread.status !== "failed" || agentThread.messages.length > 0)
@@ -849,18 +862,15 @@ export function CommerceWorkbenchShell({
     clearComposerAttachments();
     setActiveView("creative");
     autoRestoreAttemptedRef.current = true;
-    cancelThreadProductContextRestore();
+    resetProductContext();
 
     const currentProject = creativeProjects.find((project) => project.threadId === agentThread.threadId);
     if (currentProject) {
-      void restoreThreadProductContext(currentProject.threadId);
       return;
     }
-    resetProductContext();
     agentThread.resetThread();
     const latestProject = creativeProjects[0];
     if (latestProject) {
-      void restoreThreadProductContext(latestProject.threadId);
       void agentThread.loadThread(latestProject);
     }
   }
@@ -874,7 +884,6 @@ export function CommerceWorkbenchShell({
     setActiveManagedEntryWorkflow(null);
     setCreativeMethod(null);
     setProductInsightMethod("market_research");
-    cancelThreadProductContextRestore();
     resetProductContext();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
@@ -894,7 +903,7 @@ export function CommerceWorkbenchShell({
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
     setActiveView("creative");
-    void restoreThreadProductContext(project.threadId);
+    resetProductContext();
     if (
       project.threadId === agentThread.threadId &&
       (agentThread.loadingHistory || agentThread.status !== "failed" || agentThread.messages.length > 0)
@@ -948,7 +957,6 @@ export function CommerceWorkbenchShell({
     setProductInsightMethod("market_research");
     clearComposerAttachments();
     setActiveView("research");
-    cancelThreadProductContextRestore();
     resetProductContext();
     setFreshTaskEntry("research");
     startTransition(() => {
@@ -970,6 +978,7 @@ export function CommerceWorkbenchShell({
   async function executeProductInsight(method: ProductInsightMethod, goal: string) {
     const attachmentsForSubmit = takeComposerAttachments();
     const skillForSubmit = selectedSkill;
+    const productsForSubmit = productContextMode === "selected" ? selectedProducts : [];
     setSelectedSkill(null);
     const submitted = await agentThread.submit(goal, {
       workflow: "commerce-product-insight",
@@ -977,14 +986,18 @@ export function CommerceWorkbenchShell({
       displaySkillName: productInsightSkillName(method),
       attachments: attachmentsForSubmit,
       externalDataApprovalMode,
-      productIds: selectedProducts.map((product) => product.id),
+      productIds: productsForSubmit.map((product) => product.id),
       productContextMode,
+      displayProducts: productsForSubmit,
+      onTurnAccepted: resetProductContext,
     });
-    if (submitted) finalizeSubmittedAttachments(attachmentsForSubmit);
-    else {
+    if (submitted) {
+      finalizeSubmittedAttachments(attachmentsForSubmit);
+    } else {
       restoreComposerAttachments(attachmentsForSubmit);
       setSelectedSkill(skillForSubmit);
     }
+    return submitted;
   }
 
   function useSkill(skill: SkillInventoryItem) {
@@ -998,7 +1011,6 @@ export function CommerceWorkbenchShell({
     setSubmittedDraft(null);
     setSelectedSkill(skill);
     setActiveManagedEntryWorkflow(null);
-    cancelThreadProductContextRestore();
     resetProductContext();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
@@ -1036,7 +1048,6 @@ export function CommerceWorkbenchShell({
     setSubmittedDraft(null);
     setSelectedSkill(null);
     setActiveManagedEntryWorkflow("commerce-product-onboarding");
-    cancelThreadProductContextRestore();
     resetProductContext();
     setExternalDataApprovalMode(approvalModeAfterTaskBoundary);
     clearComposerAttachments();
@@ -1056,38 +1067,6 @@ export function CommerceWorkbenchShell({
   function resetProductContext() {
     setProductContextMode("auto");
     setSelectedProducts([]);
-  }
-
-  function cancelThreadProductContextRestore() {
-    productContextRequestRef.current += 1;
-    productContextAbortRef.current?.abort();
-    productContextAbortRef.current = null;
-  }
-
-  async function restoreThreadProductContext(threadId: string) {
-    productContextAbortRef.current?.abort();
-    const controller = new AbortController();
-    productContextAbortRef.current = controller;
-    const requestId = productContextRequestRef.current + 1;
-    productContextRequestRef.current = requestId;
-    resetProductContext();
-    try {
-      const context = await getThreadProductContext(threadId, controller.signal);
-      if (controller.signal.aborted || requestId !== productContextRequestRef.current) return;
-      if (context.turnId && context.products.length) {
-        setSelectedProducts(context.products);
-        setProductContextMode("selected");
-      } else {
-        resetProductContext();
-      }
-    } catch {
-      if (controller.signal.aborted || requestId !== productContextRequestRef.current) return;
-      resetProductContext();
-    } finally {
-      if (requestId === productContextRequestRef.current) {
-        productContextAbortRef.current = null;
-      }
-    }
   }
 
   function removeSelectedProduct(productId: string) {
@@ -1772,6 +1751,16 @@ function ConversationWorkspace({
   const currentActivities = currentTurnId
     ? activities.filter((activity) => activity.turnId === currentTurnId)
     : [];
+  const activitiesByTurnId = useMemo(() => {
+    const grouped = new Map<string, AgentActivity[]>();
+    for (const activity of activities) {
+      if (!activity.turnId) continue;
+      const current = grouped.get(activity.turnId) ?? [];
+      current.push(activity);
+      grouped.set(activity.turnId, current);
+    }
+    return grouped;
+  }, [activities]);
   const webSources = useMemo(() => collectRecentWebSources(activities), [activities]);
   const marketResearchReceipts = useMemo(() => {
     const receipts = new Map<string, MarketResearchReceipt>();
@@ -2003,6 +1992,7 @@ function ConversationWorkspace({
                   <ConversationTimelineMessage
                     key={entry.message.id}
                     message={entry.message}
+                    activities={entry.message.turnId ? activitiesByTurnId.get(entry.message.turnId) ?? [] : []}
                     skills={skills}
                     feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
                     retryAvailable={Boolean(findRetrySourceMessage(messages, entry.message))}
@@ -2032,6 +2022,7 @@ function ConversationWorkspace({
                       <ConversationTimelineMessage
                         key={entry.message.id}
                         message={entry.message}
+                        activities={entry.message.turnId ? activitiesByTurnId.get(entry.message.turnId) ?? [] : []}
                         skills={skills}
                         feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
                         retryAvailable={Boolean(findRetrySourceMessage(messages, entry.message))}
@@ -2797,6 +2788,7 @@ function resizeTextarea(node: HTMLTextAreaElement, minHeight: number, maxHeight:
 
 function ConversationTimelineMessage({
   message,
+  activities,
   skills,
   feedbackSubmitting,
   retryAvailable,
@@ -2806,6 +2798,7 @@ function ConversationTimelineMessage({
   onMessageRetry,
 }: {
   message: ConversationMessage;
+  activities: AgentActivity[];
   skills: SkillInventoryItem[];
   feedbackSubmitting: boolean;
   retryAvailable: boolean;
@@ -2832,7 +2825,7 @@ function ConversationTimelineMessage({
       data-minimap-kind={message.role}
       data-minimap-preview={preview}
     >
-      <ConversationMessageView message={message} skills={skills} />
+      <ConversationMessageView message={message} activities={activities} skills={skills} />
       {message.role === "assistant" && message.phase !== "commentary" && canvasRefs.length > 0 ? (
         <CreativeCanvasMessageLinks
           refs={canvasRefs}
@@ -2976,9 +2969,11 @@ function ConversationAttachmentList({ attachments }: { attachments: Conversation
 
 function ConversationMessageView({
   message,
+  activities,
   skills,
 }: {
   message: ConversationMessage;
+  activities: AgentActivity[];
   skills: SkillInventoryItem[];
 }) {
   if (message.role === "user") {
@@ -2995,6 +2990,9 @@ function ConversationMessageView({
               }}
               inlineMessage
             />
+          ) : null}
+          {message.products?.length ? (
+            <SelectedProductChips products={message.products} compact readOnly inline />
           ) : null}
           {content}
         </div>
@@ -3016,7 +3014,9 @@ function ConversationMessageView({
   }
 
   const marketResearchResponse = parseMarketResearchResponse(message.content);
-  if (marketResearchResponse) return <MarketResearchReportView response={marketResearchResponse} />;
+  if (marketResearchResponse) {
+    return <MarketResearchReportView response={marketResearchResponse} activities={activities} />;
+  }
   const copywritingDraft = tryParseStructuredCopywritingDraft(message.content);
   if (copywritingDraft) return <CopywritingDraftResponse draft={copywritingDraft} />;
   const content = tryParseStructuredCopywritingAnswer(message.content) ?? message.content;

@@ -369,24 +369,35 @@ export function SelectedProductChips({
   products,
   compact = false,
   disabled = false,
+  readOnly = false,
+  inline = false,
   onRemove,
 }: {
   products: ProductSummary[];
   compact?: boolean;
   disabled?: boolean;
-  onRemove: (productId: string) => void;
+  readOnly?: boolean;
+  inline?: boolean;
+  onRemove?: (productId: string) => void;
 }) {
   if (!products.length) return null;
   const visibleProducts = products.slice(0, compact ? 2 : 4);
   const remaining = products.length - visibleProducts.length;
 
   return (
-    <div className="mb-2 flex max-w-full flex-wrap gap-1.5" aria-label={`已选择 ${products.length} 个产品`}>
+    <div
+      className={cn(inline ? "mb-1.5" : "mb-2", "flex max-w-full flex-wrap gap-1.5")}
+      aria-label={readOnly ? `本条消息包含 ${products.length} 个产品` : `已选择 ${products.length} 个产品`}
+      data-product-chips-variant={inline ? "inline" : "composer"}
+    >
       {visibleProducts.map((product) => (
         <span
           key={product.id}
           data-selected-product={product.id}
-          className="inline-flex h-8 max-w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] pl-1.5 pr-1 text-xs text-[var(--cp-text-soft)]"
+          className={cn(
+            "inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-full border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] text-xs text-[var(--cp-text-soft)]",
+            inline ? "h-7 px-1.5" : "h-8 pl-1.5 pr-1",
+          )}
         >
           {product.imageUrl ? (
             <img src={product.imageUrl} alt="" className="size-5 shrink-0 rounded-[5px] object-cover" />
@@ -394,19 +405,24 @@ export function SelectedProductChips({
             <Package className="size-3.5 shrink-0 text-[var(--cp-text-muted)]" strokeWidth={1.8} />
           )}
           <span className={cn("truncate", compact ? "max-w-[104px]" : "max-w-[180px]")}>{product.title}</span>
-          <button
-            type="button"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:opacity-50"
-            aria-label={`移除产品 ${product.title}`}
-            disabled={disabled}
-            onClick={() => onRemove(product.id)}
-          >
-            <X className="size-3.5" />
-          </button>
+          {!readOnly && onRemove ? (
+            <button
+              type="button"
+              className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label={`移除产品 ${product.title}`}
+              disabled={disabled}
+              onClick={() => onRemove(product.id)}
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
         </span>
       ))}
       {remaining > 0 ? (
-        <span className="inline-flex h-8 items-center rounded-full border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] px-2.5 text-xs text-[var(--cp-text-muted)]">
+        <span className={cn(
+          "inline-flex items-center rounded-full border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] px-2.5 text-xs text-[var(--cp-text-muted)]",
+          inline ? "h-7" : "h-8",
+        )}>
           +{remaining}
         </span>
       ) : null}

@@ -65,18 +65,20 @@ export async function reconcileCreativeCanvasState(
   scope: EnterpriseScope,
   threadId: string,
   sources: CreativeCanvasSourceNode[],
+  options: { sourceHistoryComplete: boolean },
 ): Promise<CreativeCanvasState> {
   return withEnterpriseDatabaseContext(scope, async (client) => {
     await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
       `creative-canvas:${scope.tenantId}:${scope.workspaceId}:${scope.userId}:${threadId}`,
     ]);
-    for (const source of sources.slice(0, 240)) {
+    for (const source of sources) {
       await reconcileSourceNode(client, scope, threadId, source);
     }
-    const activeSourceKeys = sources.slice(0, 240).map((source) =>
-      [source.sourceKind, source.sourceItemId, source.sourceBlockKey].join("\u001f"));
-    await client.query(
-      `DELETE FROM commerce_creative_canvas_node node
+    if (options.sourceHistoryComplete) {
+      const activeSourceKeys = sources.map((source) =>
+        [source.sourceKind, source.sourceItemId, source.sourceBlockKey].join("\u001f"));
+      await client.query(
+        `DELETE FROM commerce_creative_canvas_node node
        WHERE node.tenant_id = $1 AND node.workspace_id = $2
          AND node.user_id = $3 AND node.thread_id = $4
          AND node.source_kind IN ('agent_message', 'image_generation')
@@ -91,8 +93,9 @@ export async function reconcileCreativeCanvasState(
              AND revision.node_id = node.id
              AND revision.origin = 'user'
          )`,
-      [scope.tenantId, scope.workspaceId, scope.userId, threadId, activeSourceKeys],
-    );
+        [scope.tenantId, scope.workspaceId, scope.userId, threadId, activeSourceKeys],
+      );
+    }
     return readCreativeCanvasStateWithClient(client, scope, threadId);
   });
 }

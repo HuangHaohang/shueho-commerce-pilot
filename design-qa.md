@@ -67,6 +67,101 @@ final result: passed
 
 ---
 
+# Provider-Hosted Image Recovery QA
+
+- Browser: signed-in local development browser
+- Existing project: an existing tenant-owned Creative Space project
+- Managed Codex runtime: `codex-cli 0.150.1`, patch revision `shueho.1`
+- Runtime integrity: application manifest verification passed
+
+## Findings And Fix
+
+1. The Provider had already completed a Responses `image_generation_call`; the missing UI artifact was caused by Codex 0.150.1 omitting that raw hosted output from the native `imageGeneration` lifecycle and thread-history projection.
+2. The application-owned Harness patch now projects the completed hosted output through native Item lifecycle events and rebuilds the same Item from persisted raw history. Gateway still persists only the native Item and never parses rollouts, fabricates protocol Items, or dispatches a second Provider request.
+3. Provider request and stream retries are both zero. A 120-second SSE idle timeout surfaces an uncertain paid call instead of silently replaying it.
+4. Windows builds normalize the upstream state SQL migrations to CRLF before compilation, matching official Windows SQLx migration checksums without rewriting an existing state database.
+
+## Browser And Artifact Checks
+
+- The existing project loaded one generated-image node on the canvas and one native “生成了图片” activity plus preview in the conversation.
+- The composer returned to `继续追问`; the bound Product appeared with the committed user message and did not remain as an unsent input chip.
+- The generated PNG was persisted under the ignored tenant runtime directory and rendered successfully in both canvas and conversation.
+- Before and after replay, the source rollout retained its original size, modification time, and digest. Therefore the recovery performed no new Turn and no new Provider call.
+- The page showed a completed duration instead of an active processing state, and the Gateway remained on the manifest-verified `.runtime/bin/win32-x64/codex.exe` process.
+
+final result: passed
+
+---
+
+# Commercial Product Decision And Creative Expansion QA
+
+- Desktop, side-by-side, authentication-gate, and `390 × 844` mobile audit artifacts were inspected from the ignored local runtime directory and were not staged.
+
+## Visible Outcome
+
+1. 商品决策从三个切换提示词的入口升级为真实交付流程：决策范围 / 产品事实 / 证据账本 / Scorecard 与 Gate。Header 不再显示内部 `commerce-*` Skill id，并同步展示公开网页、市场证据和产品事实状态。
+2. 新品开发明确显示“机会证据 → 概念假设 → 机会 Scorecard → 验证 Gate”，不会把一个黑盒 AI 总分当作立项依据。
+3. Product retrospective 保留必须选择真实 Product revision、经营附件待核验的诚实门禁。新报告 schema 还要求 proposed experiments、success signal 和 stop condition。
+4. Campaign 资产包与创作合规检查已经进入同一 Creative Space method registry。前者输出 brief、claim/channel/QA matrices；后者分开 product fidelity、claim evidence、brand、channel 四层 pass/hold/fail。
+5. 主图/副图提交在 browser、BFF 和 Gateway 三层要求显式 Product revision 与本 Turn tenant-owned image artifact；文档和 catalog URL 不能冒充参考图。
+6. 长画布移除了 240 source 静默截断。历史未完全读取时只能 upsert，UI 告知未加载资产已保留；完整历史才允许删除没有 user revision 的 obsolete projection。
+7. 移动端文档、正文和 composer 均为 `390px`，无页面级横向溢出；四阶段轨道重排为两列，composer 和三个 Skill 仍保持可见。
+
+## Evidence Limits
+
+- Current audit screenshots used an unauthenticated in-app browser. This was sufficient for the public Product Decision entry and authentication gate, but not for a signed-in Creative Space method menu screenshot. The Creative method UI/Skill/migration contracts were verified through Web/Gateway tests and the already-running tenant-isolated application; no real paid data, image generation, publishing or commerce write was triggered.
+- Screenshots support layout, hierarchy and visible focus findings only. They do not establish complete keyboard, screen-reader or WCAG conformance.
+
+final result: passed
+
+---
+
+# Product Insight Skill Card Simplification QA
+
+- The user-provided reference and ignored local desktop/mobile audit screenshots were inspected together and were not staged.
+- Desktop viewport: `1920 x 889`; mobile viewport: `390 x 844`.
+
+## Visible Comparison
+
+The reference and fixed implementation were inspected together. Each Skill option now contains only the existing lucide icon, Chinese title and one short Chinese subtitle. The `commerce-*` protocol identifier and the separate requirement/status line are absent. Desktop cards measured `260 x 64.5625px`; the three options remain one quiet, aligned row. At mobile width the cards measured approximately `111.33 x 74.56px`, retain their subtitles, and the document has no horizontal overflow.
+
+## Verification
+
+- `ProductInsightWorkspace` focused tests: 3 passed.
+- `npm run web:check`: passed.
+- Authenticated desktop and mobile browser inspection found no overlap, clipping, missing subtitle, unexpected scrollbar or console error.
+
+final result: passed
+
+---
+
+# Sent Product Context Message Migration QA
+
+- The user-provided reference and ignored authenticated-history audit screenshot were inspected together and were not staged.
+- Browser viewport: `1920 x 945`; creative Harness rail: `429px`; composer form: `403px`.
+
+## Flow Health
+
+1. **Accepted send — healthy.** The selected Product summary enters the optimistic default user message. It leaves the composer only after a confirmed Turn receipt, a durable queue receipt, SSE `userMessage.clientId`, or matching authoritative history.
+2. **Failure recovery — healthy.** Explicit failure and unconfirmed ambiguous startup retain the Product selection. A later authoritative acceptance clears it; a 12-second rejection removes the optimistic message without discarding the composer selection.
+3. **History ownership — healthy.** Refresh and project switching render each immutable bound Product revision on its own Turn's first user message. Historical context never repopulates the next-turn composer; steer and native question-answer messages are not decorated.
+4. **Fail-closed projection — healthy.** Missing live `product_catalog.read`, no binding, or projection failure returns authoritative `products: []`, clearing stale optimistic summaries. The read path scopes tenant, workspace, user, thread and requested Turn ids and projects no attributes, raw rows, connector configuration or credentials.
+5. **Layout — healthy.** The fixed browser state showed the Product chip inside each persisted user bubble and `产品库上下文：自动匹配` in the empty composer. Document, rail and composer all reported `scrollWidth === clientWidth`; the compact conversation rail therefore covers the narrow-container constraint used by the three-pane creative workbench.
+
+## Verification
+
+- Focused Web tests: 6 files / 33 tests passed.
+- Full Web suite: 81 files / 297 tests passed.
+- `npm run web:check`: passed.
+- `npm run web:build`: production build passed; 42 static pages generated.
+- Enterprise isolation: 78 controls passed; runtime security: 29 controls passed.
+- Browser history reload confirmed message-bound Product chips and an empty auto-mode composer.
+- Database readback confirmed no active Turn; the two recorded attempts are both terminal `interrupted` states rather than a currently stuck execution.
+
+final result: passed
+
+---
+
 # Product-Grounded Market Research And Evidence Projection QA
 
 - Baseline entry: `C:\Users\Huanghaohang\.codex\visualizations\2026\08\31\product-market-research-audit\01-market-research-entry.png`

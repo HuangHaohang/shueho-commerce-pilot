@@ -64,6 +64,12 @@ test("new-product development stays evidence-backed and stops before a launch or
   assert.match(skill, /reviewEvidenceCount=0/);
   assert.match(skill, /Price evidence supports a market-position hypothesis/);
   assert.match(skill, /validation status is hypothesis only/);
+  assert.match(skill, /unexplained aggregate is a prohibited black-box score/);
+  assert.match(skill, /MUST use evidenceState=unavailable, score=0/);
+  assert.match(skill, /decisionGate is a decision recommendation only/);
+  assert.match(skill, /status=proposed/);
+  assert.match(skill, /decisionGate\.status=insufficient_evidence/);
+  assert.match(skill, /experiments=\[\]/);
   assert.match(skill, /must not recruit users, place orders, create products, publish listings/);
   assert.match(skill, /No governed company-performance tool is currently registered/);
   assert.match(skill, /current schema rejects company_metric/);
@@ -85,6 +91,12 @@ test("product retrospective fails honest when company performance evidence is ab
   assert.match(skill, /public marketplace sales display/);
   assert.match(skill, /reviewEvidenceCount=0/);
   assert.match(skill, /effect on conversion, traffic, or sales remains a hypothesis/);
+  assert.match(skill, /unexplained aggregate is a prohibited black-box score/);
+  assert.match(skill, /MUST use evidenceState=unavailable, score=0/);
+  assert.match(skill, /decisionGate is a decision recommendation only/);
+  assert.match(skill, /status=proposed/);
+  assert.match(skill, /decisionGate\.status=insufficient_evidence/);
+  assert.match(skill, /experiments=\[\]/);
   assert.match(skill, /current schema rejects company_metric/);
   assert.match(skill, /keep companyEvidenceRefs empty/);
   assert.match(skill, /do not output company-performance comparisons, ROI conclusions/);
@@ -110,6 +122,9 @@ test("shares one method-fixed insight report schema without inventing a second r
     "insightType",
     "subject",
     "scope",
+    "scorecard",
+    "decisionGate",
+    "experiments",
     "executiveSummary",
     "reportMarkdown",
     "claims",
@@ -170,6 +185,104 @@ test("shares one method-fixed insight report schema without inventing a second r
     type: "array",
     items: { type: "string" },
     maxItems: 0,
+  });
+
+  const scorecard = schema.properties.scorecard as {
+    required: string[];
+    additionalProperties: boolean;
+    properties: {
+      weightedScore: Record<string, unknown>;
+      confidence: { enum: string[] };
+      dimensions: {
+        items: {
+          required: string[];
+          additionalProperties: boolean;
+          properties: Record<string, Record<string, unknown>>;
+        };
+      };
+    };
+  };
+  assert.equal(scorecard.additionalProperties, false);
+  assert.deepEqual(scorecard.required, ["weightedScore", "confidence", "dimensions"]);
+  assert.deepEqual(scorecard.properties.weightedScore, {
+    type: "number",
+    minimum: 0,
+    maximum: 100,
+  });
+  assert.deepEqual(scorecard.properties.confidence.enum, ["high", "medium", "low"]);
+  assert.equal(scorecard.properties.dimensions.items.additionalProperties, false);
+  assert.deepEqual(scorecard.properties.dimensions.items.required, [
+    "dimensionId",
+    "label",
+    "score",
+    "weight",
+    "evidenceState",
+    "rationale",
+    "evidenceIds",
+    "productFactRefs",
+    "companyEvidenceRefs",
+    "limitations",
+  ]);
+  assert.deepEqual(scorecard.properties.dimensions.items.properties.score, {
+    type: "number",
+    minimum: 0,
+    maximum: 100,
+  });
+  assert.deepEqual(scorecard.properties.dimensions.items.properties.weight, {
+    type: "number",
+    minimum: 0,
+    maximum: 1,
+  });
+  assert.deepEqual(scorecard.properties.dimensions.items.properties.evidenceState, {
+    type: "string",
+    enum: ["supported", "mixed", "hypothesis", "unavailable"],
+  });
+  assert.deepEqual(scorecard.properties.dimensions.items.properties.companyEvidenceRefs, {
+    type: "array",
+    items: { type: "string" },
+    maxItems: 0,
+  });
+
+  const decisionGate = schema.properties.decisionGate as {
+    required: string[];
+    additionalProperties: boolean;
+    properties: Record<string, Record<string, unknown>>;
+  };
+  assert.equal(decisionGate.additionalProperties, false);
+  assert.deepEqual(decisionGate.required, [
+    "status",
+    "summary",
+    "blockingGaps",
+    "requiredEvidence",
+  ]);
+  assert.deepEqual(decisionGate.properties.status, {
+    type: "string",
+    enum: ["proceed", "validate", "hold", "insufficient_evidence"],
+  });
+
+  const experiments = schema.properties.experiments as {
+    items: {
+      required: string[];
+      additionalProperties: boolean;
+      properties: Record<string, Record<string, unknown>>;
+    };
+  };
+  assert.equal(experiments.items.additionalProperties, false);
+  assert.deepEqual(experiments.items.required, [
+    "experimentId",
+    "title",
+    "hypothesis",
+    "method",
+    "successSignal",
+    "stopCondition",
+    "evidenceNeeded",
+    "evidenceIds",
+    "productFactRefs",
+    "status",
+  ]);
+  assert.deepEqual(experiments.items.properties.status, {
+    type: "string",
+    enum: ["proposed"],
   });
 
   for (const prohibited of [

@@ -6,6 +6,8 @@ import {
   Globe2,
   Lightbulb,
   PackageSearch,
+  Scale,
+  ShieldCheck,
   Telescope,
   type LucideIcon,
 } from "lucide-react";
@@ -14,7 +16,6 @@ import { useEffect, useState } from "react";
 
 import type { ProductContextMode, ProductSummary } from "@/lib/products/catalog";
 import {
-  productInsightSkillName,
   type ProductInsightMethod,
 } from "@/lib/research/product-insight-contract";
 import { cn } from "@/lib/utils";
@@ -29,7 +30,6 @@ type InsightMethodDefinition = {
   id: ProductInsightMethod;
   label: string;
   description: string;
-  requirement: string;
   icon: LucideIcon;
 };
 
@@ -37,22 +37,19 @@ export const productInsightMethods: readonly InsightMethodDefinition[] = [
   {
     id: "market_research",
     label: "市场调研",
-    description: "用真实市场、竞品与买家反馈验证机会",
-    requirement: "可从品类或产品开始",
+    description: "真实竞品与买家反馈验证",
     icon: Telescope,
   },
   {
     id: "new_product_development",
     label: "新品开发",
-    description: "从需求缺口形成定位、规格与验证方案",
-    requirement: "可参考现有产品",
+    description: "定位、规格与验证方案",
     icon: Lightbulb,
   },
   {
     id: "product_retrospective",
     label: "产品复盘",
-    description: "结合产品事实、待核验经营附件与市场证据复盘",
-    requirement: "必须选择产品",
+    description: "产品事实与市场适配复盘",
     icon: ChartNoAxesCombined,
   },
 ] as const;
@@ -78,6 +75,27 @@ export type ProductInsightPresentation = {
   starterLabel: string;
   productRequired: boolean;
 };
+
+const decisionWorkflowStages = {
+  market_research: [
+    ["决策范围", "明确市场、商品与问题"],
+    ["事实基线", "读取产品版本与已知限制"],
+    ["证据账本", "核验市场、竞品与评论回执"],
+    ["Scorecard / Gate", "给出可解释评分与下一步"],
+  ],
+  new_product_development: [
+    ["机会证据", "区分需求信号与普通属性"],
+    ["概念假设", "形成定位、规格与风险"],
+    ["机会 Scorecard", "逐维评分，不用黑盒总分"],
+    ["验证 Gate", "定义实验、成功与停止条件"],
+  ],
+  product_retrospective: [
+    ["冻结产品版本", "以当前 Product revision 为准"],
+    ["证据分层", "经营数据缺失时明确不可用"],
+    ["诊断假设", "相关性不冒充经营根因"],
+    ["行动 Gate", "保留、验证、暂停都有依据"],
+  ],
+} as const satisfies Record<ProductInsightMethod, readonly (readonly [string, string])[]>;
 
 export function productInsightPresentation(
   method: ProductInsightMethod,
@@ -183,7 +201,7 @@ export function ProductInsightWorkspace({
   onMethodChange: (method: ProductInsightMethod) => void;
   onComposerChange: (value: string) => void;
   renderComposer: (config: ComposerRenderConfig) => ReactNode;
-  onExecute: (method: ProductInsightMethod, goal: string) => void | Promise<void>;
+  onExecute: (method: ProductInsightMethod, goal: string) => boolean | Promise<boolean>;
 }) {
   const [goalError, setGoalError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -207,9 +225,15 @@ export function ProductInsightWorkspace({
     }
     setGoalError(null);
     setStarting(true);
-    onComposerChange("");
     try {
-      await onExecute(method, goal);
+      const accepted = await onExecute(method, goal);
+      if (accepted) {
+        onComposerChange("");
+      } else {
+        setGoalError("任务没有被 Harness 接受，输入已保留，请检查上方提示后重试。");
+      }
+    } catch {
+      setGoalError("任务提交失败，输入已保留，请稍后重试。");
     } finally {
       setStarting(false);
     }
@@ -225,18 +249,24 @@ export function ProductInsightWorkspace({
           <div className="min-w-0">
             <h1 className="m-0 truncate text-base font-semibold">商品决策</h1>
             <p className="m-0 truncate text-xs text-[var(--cp-text-faint)]">
-              {definition.label} · {productInsightSkillName(method)} · {modelLabel}
+              {definition.label} · 证据账本 · Scorecard · 决策 Gate · {modelLabel}
             </p>
           </div>
         </div>
         <div className="hidden items-center gap-4 text-xs text-[var(--cp-text-muted)] lg:flex" aria-label="商品决策数据源状态">
           <span className="inline-flex items-center gap-1.5">
             <Globe2 className="size-3.5" strokeWidth={1.8} />
-            公开网页
+            公开网页辅助
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Database className="size-3.5" strokeWidth={1.8} />
-            {externalDataAvailable ? "外部数据已连接" : "外部数据待配置"}
+            {externalDataAvailable ? "市场证据已连接" : "市场证据待配置"}
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <PackageSearch className="size-3.5" strokeWidth={1.8} />
+            {productContextMode === "selected" && selectedProducts.length > 0
+              ? `产品事实 ${selectedProducts.length}`
+              : "产品事实自动匹配"}
           </span>
         </div>
       </header>
@@ -254,7 +284,7 @@ export function ProductInsightWorkspace({
                 aria-selected={selected}
                 data-insight-method={item.id}
                 className={cn(
-                  "min-w-0 rounded-[var(--cp-radius-item)] border px-2 py-2.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] sm:px-3 sm:py-3 sm:text-left",
+                  "min-w-0 rounded-[var(--cp-radius-item)] border px-2 py-2.5 text-center transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--cp-focus)] sm:px-3 sm:py-3 sm:text-left",
                   selected
                     ? "border-[#9fc6ba] bg-[#f1f7f5] text-[var(--cp-text)]"
                     : "border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] text-[var(--cp-text-soft)] hover:bg-[var(--cp-surface-hover)]",
@@ -265,21 +295,37 @@ export function ProductInsightWorkspace({
                   <Icon className="size-4 shrink-0" strokeWidth={1.8} />
                   <span className="truncate text-sm font-medium">{item.label}</span>
                 </span>
-                <span className="mt-1.5 hidden text-[11px] leading-4 text-[var(--cp-text-muted)] sm:block">{item.description}</span>
-                <span className="mt-1 hidden truncate font-mono text-[10px] text-[var(--cp-text-faint)] md:block">
-                  {productInsightSkillName(item.id)}
+                <span className="mt-1.5 block text-[10px] leading-[15px] text-[var(--cp-text-muted)] sm:text-[11px] sm:leading-4">
+                  {item.description}
                 </span>
-                <span className="mt-1 hidden text-[10px] text-[var(--cp-text-faint)] sm:block">{item.requirement}</span>
               </button>
             );
           })}
         </div>
 
-        <div className="mt-7 text-center">
+        <ol className="m-0 mt-4 grid list-none grid-cols-2 gap-x-4 gap-y-3 border-y border-[var(--cp-border-subtle)] px-0 py-3 sm:grid-cols-4" aria-label={`${definition.label}交付流程`}>
+          {decisionWorkflowStages[method].map(([label, description], index) => (
+            <li key={label} className="min-w-0">
+              <div className="flex items-center gap-1.5 text-[11px] font-medium text-[var(--cp-text)]">
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--cp-bg-muted)] text-[10px] tabular-nums text-[var(--cp-text-muted)]">
+                  {index + 1}
+                </span>
+                <span className="truncate">{label}</span>
+              </div>
+              <p className="mb-0 mt-1 pl-[26px] text-[10px] leading-4 text-[var(--cp-text-faint)]">{description}</p>
+            </li>
+          ))}
+        </ol>
+
+        <div className="mt-6 text-center">
           <span className="mx-auto flex size-10 items-center justify-center rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-muted)] text-[var(--cp-text-soft)]">
             <ActiveIcon className="size-[18px]" strokeWidth={1.8} />
           </span>
           <h2 className="mb-0 mt-4 text-[23px] font-semibold leading-tight">{presentation.title}</h2>
+          <div className="mt-2 flex items-center justify-center gap-3 text-[10px] text-[var(--cp-text-faint)]" aria-label="商品决策交付保证">
+            <span className="inline-flex items-center gap-1"><ShieldCheck className="size-3.5" aria-hidden="true" />证据逐条可核对</span>
+            <span className="inline-flex items-center gap-1"><Scale className="size-3.5" aria-hidden="true" />评分维度可解释</span>
+          </div>
         </div>
 
         <div className="mt-6">

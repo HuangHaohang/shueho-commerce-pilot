@@ -156,6 +156,18 @@ describe("SelectedProductChips", () => {
     expect(html).toContain("+2");
     expect(html).toContain("max-w-[104px]");
   });
+
+  it("renders sent products as compact read-only message context", () => {
+    const html = renderToStaticMarkup(
+      <SelectedProductChips products={[products[0]]} compact readOnly inline />,
+    );
+
+    expect(html).toContain('data-product-chips-variant="inline"');
+    expect(html).toContain("本条消息包含 1 个产品");
+    expect(html).toContain("轻量通勤双肩包");
+    expect(html).not.toContain("移除产品");
+    expect(html).not.toContain("<button");
+  });
 });
 
 describe("product library responsive surface", () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildAgentTurnRequestBody,
   findRetrySourceMessage,
+  isPersistedQueuedTurnResponse,
   readUserMessageSkillName,
 } from "./use-agent-thread";
 
@@ -17,6 +18,16 @@ describe("agent Turn request body", () => {
         creativeMethod: "main_image",
         productIds: ["33333333-3333-4333-8333-333333333333"],
         productContextMode: "selected",
+        displayProducts: [{
+          id: "33333333-3333-4333-8333-333333333333",
+          title: "轻量通勤双肩包",
+          spu: "BAG-1001",
+          status: "active",
+          variantCount: 3,
+          sourceName: "Shopify 中国站",
+          updatedAt: "2026-08-30T08:00:00.000Z",
+          imageUrl: null,
+        }],
       },
       attachmentIds: ["44444444-4444-4444-8444-444444444444"],
       clientRequestId: "55555555-5555-4555-8555-555555555555",
@@ -36,6 +47,34 @@ describe("agent Turn request body", () => {
     });
   });
 
+  it("keeps display products out of the BFF Turn request contract", () => {
+    const body = buildAgentTurnRequestBody({
+      message: "基于这个产品生成主图",
+      model: "gpt-5.6-luna",
+      options: {
+        productIds: ["33333333-3333-4333-8333-333333333333"],
+        productContextMode: "selected",
+        displayProducts: [{
+          id: "33333333-3333-4333-8333-333333333333",
+          title: "轻量通勤双肩包",
+          spu: "BAG-1001",
+          status: "active",
+          variantCount: 3,
+          sourceName: "Shopify 中国站",
+          updatedAt: "2026-08-30T08:00:00.000Z",
+          imageUrl: null,
+        }],
+        onTurnAccepted: () => undefined,
+      },
+      attachmentIds: [],
+      clientRequestId: "55555555-5555-4555-8555-555555555555",
+    });
+
+    expect(body).not.toHaveProperty("displayProducts");
+    expect(body).not.toHaveProperty("onTurnAccepted");
+    expect(body.productIds).toEqual(["33333333-3333-4333-8333-333333333333"]);
+  });
+
   it("does not invent a specialist method for an ordinary Turn", () => {
     expect(buildAgentTurnRequestBody({
       message: "继续分析",
@@ -44,6 +83,13 @@ describe("agent Turn request body", () => {
       attachmentIds: [],
       clientRequestId: "66666666-6666-4666-8666-666666666666",
     }).creativeMethod).toBeUndefined();
+  });
+
+  it("treats only a durable 202 queue receipt as an accepted queued submission", () => {
+    expect(isPersistedQueuedTurnResponse(202, { queued: true })).toBe(true);
+    expect(isPersistedQueuedTurnResponse(202, { queued: false })).toBe(false);
+    expect(isPersistedQueuedTurnResponse(500, { queued: true })).toBe(false);
+    expect(isPersistedQueuedTurnResponse(202, null)).toBe(false);
   });
 
   it("forwards only the allowlisted product insight method instead of Skill instructions", () => {

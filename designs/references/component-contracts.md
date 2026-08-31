@@ -47,14 +47,15 @@
 - `More > Plugins` 必须在现有工作台壳内打开插件目录；桌面侧栏、最近任务与账号区保持稳定，只替换主内容区。`/plugins` 仅作为可直达入口，并复用同一工作台壳，不得另造独立页面框架。目录使用服务端实时状态，不得把 manifest 中的默认值冒充为已启用；列表项加号用于进入同壳详情视图，不代表安装成功。所有应用托管条目必须复用同一个 `PluginListItem` 和同一个详情骨架；条目容器按可用内容宽度自适应为一、二或三列，不能因奇数项留下半幅分割线，加载 skeleton 必须使用相同列规则。详情中的组件类型和动作名称使用中文主标题，例如“服务 / 搜索公开网页”；`commerce_web.search`、`image_gen` 和其他协议标识只能作为小号等宽副标题。第一阶段只读展示应用托管的 skills、MCP 和 application tools。任意包安装、宿主执行、运行时核心替换与插件 Hook 均不得从浏览器开放。
 - 产品库插件详情提供真实“通过对话接入”和“管理产品库”入口：前者返回现有公共 composer、预填普通用户可读的接入目标，并在首次及后续 Turn 使用固定 `commerce-product-onboarding` Harness workflow；后者进入同壳 `ProductLibraryWorkspace`。不得另建聊天状态或在插件详情里放置假上传表单。
 - `More > Skills` 与插件入口分离，技能目录必须来自 App Server `skills/list`，不得从插件 manifest 推导。`skill-creator` 作为 Codex 系统技能全局可见；浏览器不得获得技能宿主路径，也不得直接写入任意 Skill 目录。
-- `Product Insights` 使用现有工作台 shell、公共 `AgentComposer` 和 Harness 会话，不另造表单式研究流程。首屏以三个紧凑、扁平的业务 Skill 选项承载“市场调研 / 新品开发 / 产品复盘”，中文业务名是主标题，`commerce-market-research` 等调用名只作小号等宽副标题。选择仅更新方法、placeholder 和建议任务，不自动发送，也不得显示或拼接 Skill body、path、tool schema、output schema 或隐藏 Prompt。
+- `Product Insights` 使用现有工作台 shell、公共 `AgentComposer` 和 Harness 会话，不另造表单式研究流程。首屏以三个紧凑、扁平的业务 Skill 选项承载“市场调研 / 新品开发 / 产品复盘”；每项只显示图标、中文标题和一行短副标题，不显示 `commerce-*` 协议名、选择要求或额外状态行。选择仅更新方法、placeholder 和建议任务，不自动发送，也不得显示或拼接 Skill body、path、tool schema、output schema 或隐藏 Prompt。
+- 三个 Skill 下方显示与真实输出合同一致的四阶段只读轨道：市场调研为范围/事实/证据/Scorecard-Gate，新品开发为机会/概念/评分/验证，产品复盘为版本/证据/假设/行动 Gate。轨道不是前端自建工作流状态机，不允许点击跳过 Harness 步骤，也不表示数据已读取或动作已执行。
 - 浏览器只提交固定 workflow `commerce-product-insight` 与闭合 `insightMethod=market_research | new_product_development | product_retrospective`。BFF 将其一对一持久化为同名 Recipe；一个 thread 创建后不得切换方法。Gateway 自行解析总控 Skill 与专业 Skill 的 App Server 路径，并用原生 `skill` Items 启动同一个 Harness Turn。兼容历史 `market_research + commerce-market-research`，但新入口统一使用商品决策工作流。
 - 三个 Skill 都复用公共产品库 selector、附件、访问策略、模型、问题面板、审批、历史和证据 UI。市场调研与新品开发允许从品类 `auto` 开始，也可选择产品；产品复盘必须选择至少一个产品。复盘使用的 CSV/XLSX/报表附件只标记为待核验上下文，在受控经营数据源没有真实接入和回执时不得冒充企业指标、ROI、绩效或已证实根因。
-- 选中产品后，首屏标题、placeholder 和建议任务必须转为该产品的机会验证、新品延伸或复盘目标。历史商品决策任务根据持久 Recipe 恢复固定方法，并恢复最新成功绑定的产品摘要；浏览器不得保存第二份产品快照，也不得从消息正文猜测产品或方法。
-- 商品决策报告使用同一结构化投影：产品事实、市场证据、AI 对比推断和待验证假设使用不同标签；每条结论和建议动作提供可展开的产品事实/市场证据引用。当前没有受控企业经营数据工具，`company_metric` 不得进入 Harness Schema，保留的 `companyEvidenceRefs` 必须为空，UI 也不得显示假经营指标。建议动作显示优先级、依据、验证指标和时间范围。市场数据回执显示研究 id、观测时间、证据总数、评论证据数、证据类型、覆盖和限制；没有评论证据时必须显著说明“用户痛点只能作为待验证假设”。
+- 选中产品后，首屏标题、placeholder 和建议任务必须转为该产品的机会验证、新品延伸或复盘目标。历史商品决策任务根据持久 Recipe 恢复固定方法；已发送产品必须只恢复到其所属 Turn 的首条用户消息，不得重新填回 composer。浏览器不得保存第二份产品快照，也不得从消息正文猜测产品或方法。
+- 商品决策报告使用同一结构化投影：产品事实、市场证据、AI 对比推断和待验证假设使用不同标签；每条结论和建议动作提供可展开的产品事实/市场证据引用。每份新报告还必须呈现可解释 Scorecard 分项、建议态 `继续推进 / 小规模验证 / 暂停 / 证据不足` Gate，以及带成功信号和停止条件的待执行实验。总分不能替代分项证据，缺失经营、成本、供应链或利润证据的维度必须显示 unavailable。当前没有受控企业经营数据工具，`company_metric` 不得进入 Harness Schema，保留的 `companyEvidenceRefs` 必须为空，UI 也不得显示假经营指标。
 - 商品决策入口显示公开网页与外部数据连接状态；用户只描述业务目标，由 Harness 自主判断外部数据是否能实质改善结果，不要求用户点名 JustOneAPI、接口或工具，也不得因工具可用就无意义地产生费用。外部 API 权限菜单提供“每次询问 / 本任务内允许 / 按企业策略自动调用”：每次询问在实际收费调用前确认，本任务授权在企业最高自动化等级内直接执行且离开任务后自动失效，企业策略档按白名单、费率、预算和自动批准上限执行。任何档位都不得暗示电脑控制、本机文件或任意网络访问。
 - 免费计划和执行结果只显示安全业务投影。超宽桌面在右侧输出区展示研究证据，较窄桌面和移动端使用同一 `Sheet` 入口；两种布局必须提供等价回执，不得展示 provider endpoint、raw archive、作者、原始响应、内部 workflow id 或供应商成本。
-- 报告正文中的 receipt 是模型生成的引用摘要，不能覆盖同一 `researchRequestId` 的 Harness 工具回执。证据面板必须让实际工具回执优先；只有报告引用而没有任务工具回读时，明确标记为“尚未核对”，不得使用已验证视觉状态。
+- 报告正文中的 receipt 是模型生成的引用摘要，不能覆盖同一 `researchRequestId` 的 Harness 工具回执。报告正文和证据面板都必须让同 Turn 实际工具回执优先；只有报告引用而没有任务工具回读时，明确标记为“尚未核对”，数量不一致时显示 mismatch 并使用工具投影，不得使用已验证视觉状态。
 - 一级导航“商品决策”是新建入口，不是当前视图选中开关，因此不得显示持续选中背景；只保留 hover 与键盘焦点反馈。无论用户正在查看普通任务还是商品决策历史任务，单击都必须先显示干净的商品决策 Skill 选择界面，再以非阻塞 transition 清理旧 thread、未提交输入和任务级授权；历史任务只能通过“最近”列表重新打开。
 - 新 Harness 线程只看到业务级外部数据工具：`research_social_content`、`plan_marketplace_research`、`execute_marketplace_research`、`search_business_data` 和 `get_research_result`。市场选项及查询语言来自免费目录工具；供应商端点、Schema、排序值和原始参数只存在于内部控制面。计划成功时可展示市场、语言、代表样本数、预计调用次数和计费报价，但不得展示供应商端点；执行只提交 `plan_id`。能力缺口必须按 Harness 原生 `success:false + contentItems` 返回精确原因，禁止静默放宽、网页兜底或伪造成功。
 - 市场目录不得向模型暴露内部质量阈值、档案 UUID/修订或代表样本最大值。额度报价要求降低覆盖率时，必须使用 App Server 原生 `request_user_input` 卡片一次性确认；禁止先用普通 Agent 回复列 `1/2` 编号选项，再让用户发送数字形成第二个 Turn。
@@ -106,12 +107,12 @@
 Harness 契约：
 
 - 新项目首次提交使用固定 `commerce-creative-project` workflow，由 Gateway 解析应用托管 Skill 路径和固定 output schema。
-- 用户通过业务模板选择“商品标题与文案 / 推广文案 / 商品主图 / 副图与场景图 / 商品详情页 / 产品拍摄脚本 / 短视频分镜”；模板只提交闭合 `creativeMethod`，Gateway 将其映射到应用托管专业 Skill。前端不得拼接隐藏 Prompt、Skill 路径或 output schema。
+- 用户通过业务模板选择“Campaign 资产包 / 商品标题与文案 / 推广文案 / 商品主图 / 副图与场景图 / 商品详情页 / 产品拍摄脚本 / 短视频分镜 / 创作合规检查”；模板只提交闭合 `creativeMethod`，Gateway 将其映射到应用托管专业 Skill。前端不得拼接隐藏 Prompt、Skill 路径或 output schema。
 - 浏览器不得直接提交 `recipeId`；BFF 将固定 workflow 映射为 `recipe_id=creative_project` 与 `category=creative`。
 - 后续 Agent 修改在同一 thread 中进行：idle 时启动新 Turn，active 时通过原生 `turn/steer` 调整同一个 schema-constrained Turn；人工节点编辑只写入应用追加式 revision，不修改 Harness 历史。
-- 图片生成只使用 Harness 原生 `image_gen` 与 `imageGeneration` Item；画布读取 ownership-checked artifact URL。
+- 图片制品只认 Harness `imageGeneration` Item；它可以来自 `image_gen` extension，也可以来自应用自带补丁在 Harness 内投影的 Provider-hosted Responses `image_generation_call`，但不得由 Gateway/BFF 伪造或重复调用 Provider。画布只读取 ownership-checked artifact URL。
 - 商品主图、副图、详情图和分镜的“保持真实商品外观”必须存在租户/线程归属的参考图。产品库 `imageUrl` 只用于摘要展示，不能由浏览器或 Agent 直接抓取；无参考图时控件需说明只能生成创意方向或概念图。
-- 切换已有项目时，通过受认证的 no-store 产品上下文接口恢复最新已成功绑定 Turn 的 Product chips。接口必须重新检查 `product_catalog.read`、线程所有权和 RLS，仅返回最多 20 个摘要；不得恢复未绑定请求，也不得返回原始记录、mapping、attributes、连接器或凭据。
+- 切换已有项目时，历史接口按 Turn 恢复已成功绑定的 Product chips，并将其渲染在对应首条用户消息中；composer 始终以未选择产品的 `auto` 模式开始。接口必须重新检查 `product_catalog.read`、线程所有权和 RLS，每条消息仅返回最多 20 个安全摘要；不得恢复未绑定请求，也不得返回原始记录、mapping、attributes、连接器或凭据。
 - 普通问答、commentary、streaming fragment 和用户消息不得覆盖当前画布。
 - 最终 assistant Item 与节点使用真实 Item id 映射。点击回复中的节点引用必须居中画布节点；点击节点必须定位到原始回复，禁止按标题或正文模糊匹配。
 - 原生图片 artifact 永不可由浏览器替换；浏览器只能编辑应用自有文字图层。商品主体或像素级修改必须形成新的 Harness 图片编辑/生成 Item。
@@ -130,7 +131,9 @@ Harness 契约：
 ### CreativeMethodSelector
 
 - 放在右侧 Harness composer 附近，显示普通电商用户可理解的中文业务类型，不显示 Skill 文件名或协议 id。
-- 按“商品上架 / 营销推广 / 短视频”分组，使用紧凑扁平列表；列表项只显示标题和一行结果描述，使用前提在选中后结合当前产品上下文显示一次；选择后只更新方法标签和预填用户可编辑的 starter，不得自动发送。
+- 按“整套营销 / 商品上架 / 营销推广 / 短视频 / 审核交付”分组，使用紧凑扁平列表；列表项只显示标题和一行结果描述，使用前提在选中后结合当前产品上下文显示一次；选择后只更新方法标签和预填用户可编辑的 starter，不得自动发送。
+- Campaign 资产包必须物化 brief、主张矩阵、渠道衍生矩阵和四层 QA 门禁。创作合规检查分别展示商品忠实度、主张证据、品牌一致性、渠道规则，状态只允许 pass/hold/fail；不得把缺失权威依据判为通过或合成黑盒总分。
+- Campaign、主图、副图与创作 QA 必须先选择 Product revision；主图和副图还必须在本 Turn 附加真实图片 artifact。浏览器只做即时提示，BFF 与 Gateway 必须再次执行产品上下文、artifact ownership 和 detected image kind 门禁。
 - 无产品时允许标题、推广文案、脚本等方法继续使用 auto 产品上下文；主图、副图等依赖视觉一致性的类型必须引导选择产品并附加可信参考图。
 - 平台、受众、比例、时长等高影响缺失项由 Specialist Skill 通过原生 `request_user_input` 补问，前端不维护第二套固定表单。
 - 运行中的 Turn 不允许静默切换方法；变更必须作为同一 Harness `turn/steer` 的明确用户方向，或留给下一 Turn。
@@ -221,7 +224,7 @@ type WorkComposerProps = {
 - 登录后的首屏和会话 composer 使用自适应高度 textarea；内容未达到上限时随输入增长，达到上限后高度固定并只在 textarea 内部纵向滚动。
 - Composer 底部工具栏必须按实际容器宽度切换紧凑控件，而不是只依赖 viewport 断点；`390px` 页面中添加、访问、产品、模型、语音和提交按钮都必须完整位于 composer 边界内。
 - 首屏和会话 composer 只保留一个 `+` 作为添加入口，不得在 `+` 旁重复放置独立 Skill、附件或普通资料库按钮。`产品库` 是用户明确选择的例外：它必须作为当前任务的产品上下文选择器放在访问策略之后，而不是第二个添加入口。点击 `+` 后的同宽弹层按“添加 / 插件 / 技能”分区：插件必须来自真实应用插件目录并进入对应详情，技能必须来自 App Server `skills/list` 并沿用原生 Skill 选择；“文件和图片”必须调用真实多选文件选择器，并显示照片预览、文档名称、大小与单项移除。
-- 点击发送后，附件立即从 composer 移入右侧乐观用户消息；Turn 接受成功后只保留消息附件，上传或启动失败则撤销乐观消息并把原文字和附件恢复到 composer。不得同时在用户消息和输入框中重复显示同一附件。
+- 点击发送后，附件与已选产品立即进入右侧乐观用户消息；只有 Harness 确认接受 Turn 后才从 composer 清除产品选择。上传或明确启动失败时撤销乐观消息并保留原文字、附件和产品；状态不确定时等待 SSE 或历史中的同一 `clientId` 确认。不得同时在已确认用户消息和输入框中重复显示同一附件或产品。
 - 会话 composer 单行时保持紧凑横排；进入多行后切换为“上方完整输入区、下方工具栏”，不得把高 textarea 与所有按钮硬塞在同一横排。
 - 多行 composer 的上层 grid row 必须由 textarea 实际高度驱动，不得预先拉伸到最大高度；一到两行文字顶部保持正常内边距，只有内容增长到上限后才固定高度并内部滚动。
 - textarea 内部滚动条使用窄轨道并贴近 composer 右侧，不得在正文与操作区之间形成粗重分割。

@@ -128,6 +128,38 @@ describe("agent turn workflow contract", () => {
     );
   });
 
+  it("rejects strict creative methods before quota when Product or reference media is missing", async () => {
+    const campaignWithoutProduct = await POST(
+      jsonRequest({
+        message: "生成整套 Campaign",
+        model: "gpt-5.6-luna",
+        workflow: "commerce-creative-project",
+        creativeMethod: "campaign_pack",
+        productContextMode: "auto",
+      }),
+      { params: Promise.resolve({ threadId: "thread-creative-1" }) },
+    );
+    const mainImageWithoutAttachment = await POST(
+      jsonRequest({
+        message: "生成商品主图",
+        model: "gpt-5.6-luna",
+        workflow: "commerce-creative-project",
+        creativeMethod: "main_image",
+        productIds: ["33333333-3333-4333-8333-333333333333"],
+        productContextMode: "selected",
+      }),
+      { params: Promise.resolve({ threadId: "thread-creative-1" }) },
+    );
+
+    expect(campaignWithoutProduct.status).toBe(400);
+    expect(await campaignWithoutProduct.json()).toMatchObject({ code: "CREATIVE_PRODUCT_REQUIRED" });
+    expect(mainImageWithoutAttachment.status).toBe(400);
+    expect(await mainImageWithoutAttachment.json()).toMatchObject({
+      code: "CREATIVE_REFERENCE_IMAGE_REQUIRED",
+    });
+    expect(mocks.reserveAgentTurn).not.toHaveBeenCalled();
+  });
+
   it("rejects a browser-supplied product context set id before admission", async () => {
     const response = await POST(
       jsonRequest({

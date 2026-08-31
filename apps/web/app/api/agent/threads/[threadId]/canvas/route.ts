@@ -39,6 +39,7 @@ export async function GET(
   try {
     const pages: Array<{ messages: ConversationMessage[]; images: GeneratedImageItem[] }> = [];
     let cursor: string | null = null;
+    let sourceHistoryComplete = false;
     for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
       const path = `/api/threads/${encodeURIComponent(threadId)}?limit=100${
         cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""
@@ -57,15 +58,23 @@ export async function GET(
       }
       pages.unshift(readCanvasHistory(payload, threadId));
       cursor = typeof payload.nextCursor === "string" && payload.nextCursor ? payload.nextCursor : null;
-      if (!cursor) break;
+      if (!cursor) {
+        sourceHistoryComplete = true;
+        break;
+      }
     }
     const history = combineCanvasHistoryPages(pages);
     const sources = listCreativeCanvasSourceNodes(
       history.messages as ConversationMessage[],
       history.images as GeneratedImageItem[],
     );
-    const state = await reconcileCreativeCanvasState(access.context, threadId, sources);
-    return NextResponse.json(state, { headers: noStoreHeaders() });
+    const state = await reconcileCreativeCanvasState(access.context, threadId, sources, {
+      sourceHistoryComplete,
+    });
+    return NextResponse.json(
+      { ...state, sourceHistoryComplete },
+      { headers: noStoreHeaders() },
+    );
   } catch (error) {
     if (error instanceof CreativeCanvasRepositoryError) {
       return NextResponse.json(

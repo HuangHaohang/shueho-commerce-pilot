@@ -26,7 +26,13 @@ export function mergeAuthoritativeMessages(
                   : message.content,
               status: "streaming",
             }
-          : { ...candidate, ...message }
+          : {
+              ...candidate,
+              ...message,
+              ...((message.products ?? candidate.products)
+                ? { products: message.products ?? candidate.products }
+                : {}),
+            }
         : candidate,
     );
   }

@@ -1,0 +1,6 @@
+vendor/codex/*.json text eol=lf
+vendor/codex/*.md text eol=lf
+vendor/codex/LICENSE.upstream text eol=lf
+vendor/codex/NOTICE.upstream text eol=lf
+vendor/codex/patches/series text eol=lf
+vendor/codex/patches/*.patch text eol=lf whitespace=-blank-at-eol,-blank-at-eof

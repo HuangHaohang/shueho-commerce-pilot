@@ -82,6 +82,7 @@ describe("creative infinite canvas route", () => {
     const response = await GET(request, { params: Promise.resolve({ threadId }) });
 
     expect(response.status).toBe(200);
+    expect(await response.clone().json()).toMatchObject({ sourceHistoryComplete: true });
     expect(fetchMock).toHaveBeenCalledWith(
       `http://gateway.test/api/threads/${threadId}?limit=100`,
       expect.objectContaining({ cache: "no-store" }),
@@ -96,6 +97,40 @@ describe("creative infinite canvas route", () => {
         messageItemId: "message-creative-1",
         nodeType: "document",
       })],
+      { sourceHistoryComplete: true },
+    );
+  });
+
+  it("holds destructive reconciliation when Harness history still has an older cursor after the page cap", async () => {
+    let page = 0;
+    const fetchMock = vi.fn().mockImplementation(() => {
+      page += 1;
+      return Promise.resolve(new Response(JSON.stringify({
+        result: { thread: { turns: [] } },
+        generatedImages: [],
+        nextCursor: `cursor-${page}`,
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await GET(
+      new Request(`http://localhost/api/agent/threads/${threadId}/canvas`),
+      { params: Promise.resolve({ threadId }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.clone().json()).toMatchObject({ sourceHistoryComplete: false });
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      5,
+      `http://gateway.test/api/threads/${threadId}?limit=100&cursor=cursor-4`,
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(mocks.reconcileCreativeCanvasState).toHaveBeenCalledWith(
+      enterpriseContext,
+      threadId,
+      [],
+      { sourceHistoryComplete: false },
     );
   });
 

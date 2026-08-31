@@ -49,6 +49,11 @@ type ProductSummaryRow = QueryResultRow & {
   primary_image_url: string | null;
 };
 
+type TurnProductSummaryRow = ProductSummaryRow & {
+  turn_id: string;
+  ordinal: number;
+};
+
 type ImportRow = QueryResultRow & {
   id: string;
   source_id: string;
@@ -1076,6 +1081,88 @@ export async function getLatestBoundProductContext(
       products: products.rows.map(toProductSummary),
       resolvedAt: new Date().toISOString(),
     };
+  });
+}
+
+/**
+ * Reads the immutable Product revision summaries bound to a page of Harness
+ * Turns in one scoped query. This projection is intentionally limited to the
+ * public ProductSummary contract: attributes, raw source rows, connector
+ * configuration and credentials never cross the history boundary.
+ */
+export async function listBoundProductContextsByTurnIds(
+  scope: EnterpriseScope,
+  input: { threadId: string; turnIds: string[] },
+): Promise<Map<string, ProductSummary[]>> {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(input.threadId)) {
+    throw new ProductCatalogError("会话标识无效。", "PRODUCT_CONTEXT_THREAD_INVALID", 400);
+  }
+  const turnIds = [...new Set(input.turnIds)];
+  if (
+    turnIds.length > 500 ||
+    turnIds.some((turnId) => !/^[A-Za-z0-9_-]{8,128}$/.test(turnId))
+  ) {
+    throw new ProductCatalogError("Turn 标识无效。", "PRODUCT_CONTEXT_TURN_INVALID", 400);
+  }
+  if (turnIds.length === 0) return new Map();
+
+  return withEnterpriseDatabaseContext(scope, async (client) => {
+    const result = await client.query<TurnProductSummaryRow>(
+      `WITH requested_turn AS (
+         SELECT DISTINCT unnest($5::text[]) AS turn_id
+       ), latest_context AS (
+         SELECT DISTINCT ON (context_set.turn_id)
+                context_set.id, context_set.turn_id, context_set.created_at
+         FROM commerce_agent_product_context_set context_set
+         JOIN requested_turn requested ON requested.turn_id=context_set.turn_id
+         WHERE context_set.tenant_id=$1 AND context_set.workspace_id=$2
+           AND context_set.user_id=$3 AND context_set.thread_id=$4
+           AND context_set.turn_id IS NOT NULL
+         ORDER BY context_set.turn_id, context_set.created_at DESC, context_set.id DESC
+       )
+       SELECT context.turn_id,item.ordinal,product.id,revision.title,
+              product.internal_product_key,product.status,
+              (SELECT count(*)::text
+               FROM commerce_product_variant variant
+               WHERE variant.tenant_id=item.tenant_id
+                 AND variant.workspace_id=item.workspace_id
+                 AND variant.product_id=item.product_id
+                 AND variant.created_at<=context.created_at) AS variant_count,
+              source.name AS source_name,revision.created_at AS updated_at,
+              revision.primary_image_url
+       FROM latest_context context
+       JOIN commerce_agent_product_context_item item
+         ON item.tenant_id=$1 AND item.workspace_id=$2
+        AND item.context_set_id=context.id
+       JOIN commerce_product product
+         ON product.tenant_id=item.tenant_id
+        AND product.workspace_id=item.workspace_id
+        AND product.id=item.product_id
+       JOIN commerce_product_revision revision
+         ON revision.tenant_id=item.tenant_id
+        AND revision.workspace_id=item.workspace_id
+        AND revision.id=item.product_revision_id
+        AND revision.product_id=item.product_id
+       LEFT JOIN commerce_product_import_run import_run
+         ON import_run.tenant_id=revision.tenant_id
+        AND import_run.workspace_id=revision.workspace_id
+        AND import_run.id=revision.source_import_id
+       LEFT JOIN commerce_product_source source
+         ON source.tenant_id=import_run.tenant_id
+        AND source.workspace_id=import_run.workspace_id
+        AND source.id=import_run.source_id
+       ORDER BY array_position($5::text[],context.turn_id),item.ordinal
+       LIMIT ${500 * PRODUCT_CONTEXT_MAX_ITEMS}`,
+      [scope.tenantId, scope.workspaceId, scope.userId, input.threadId, turnIds],
+    );
+
+    const productsByTurn = new Map<string, ProductSummary[]>();
+    for (const row of result.rows) {
+      const products = productsByTurn.get(row.turn_id) ?? [];
+      products.push(toProductSummary(row));
+      productsByTurn.set(row.turn_id, products);
+    }
+    return productsByTurn;
   });
 }
 

@@ -39,6 +39,7 @@ The specialist method registry is application code, not browser-authored prompt 
 
 | Business method | Managed Skill |
 |---|---|
+| Campaign 资产包 | `commerce-campaign-pack` |
 | 商品标题与文案 | `commerce-listing-copy` |
 | 推广文案 | `commerce-promotion-copy` |
 | 商品主图 | `commerce-product-main-image` |
@@ -46,10 +47,13 @@ The specialist method registry is application code, not browser-authored prompt 
 | 商品详情页 | `commerce-product-detail-page` |
 | 产品拍摄脚本 | `commerce-product-shooting-script` |
 | 短视频脚本与分镜 | `commerce-short-video-storyboard` |
+| 创作合规检查 | `commerce-creative-qa` |
 
 The browser may send only the allowlisted `creativeMethod` value. Gateway rejects unknown values and resolves the application-owned Skill path. It never accepts a Skill path, Skill body, developer instruction, output schema, tool definition, or runtime root from the browser. The specialist Skill refines the commerce deliverable; it does not create another thread, Turn, prompt chain, or project store.
 
 The Skill treats later Turns as revisions of the current project unless the user clearly starts another deliverable. It asks high-impact missing questions only through native `item/tool/requestUserInput`. It does not run a prompt chain, hidden revision loop, or second Agent session.
+
+`commerce-campaign-pack` requires a current canonical Product revision and returns at least four canvas blocks: Campaign brief, product-claim matrix, channel-derivative matrix, and separate product-fidelity / claim-evidence / brand / channel QA gates. `commerce-creative-qa` reviews those four layers independently with `pass / hold / fail`; it never collapses them into an opaque total score. Missing reference media, claim proof, brand authority, or current channel rules is `hold / unavailable`, never an inferred pass.
 
 Creative direction changes submitted while a Turn is active use native `turn/steer`. They remain inside the same schema-constrained Turn and do not create an application-owned queue or a second Agent loop. Native `thread/queue/*` remains available for ordinary conversation input; managed workflows never enter it because App Server's queue contract has no per-submission `outputSchema`.
 
@@ -101,7 +105,11 @@ Exact duplicate final `agentMessage` Items inside one Turn are coalesced by phas
 
 ## Native Media Boundary
 
-Image requests use the Harness-native `image_gen` tool. The resulting `imageGeneration` Item is the artifact authority. Gateway may persist the completed tenant-owned file and expose an ownership-checked BFF URL, but it must not issue a duplicate Provider request, expose base64 or host paths, or create a browser image-generation endpoint.
+Image requests remain inside the Harness. A namespace `image_gen` extension call or a Provider-hosted Responses `image_generation_call` must first become a native `imageGeneration` Item; that Item is the sole artifact authority. The application-owned Codex patch performs the hosted-output projection in real time and during history replay without dispatching another Provider request. Gateway may persist the completed tenant-owned file and expose an ownership-checked BFF URL, but it must not parse rollout files, fabricate an Item, expose base64/host paths, or create a browser image-generation endpoint.
+
+Image-capable Responses requests use zero request retries, zero stream retries, and a 120-second SSE idle deadline. A disconnect or idle expiry is an uncertain paid result and requires authoritative readback plus explicit user retry; it is never replayed automatically.
+
+The BFF and Gateway enforce high-cost media prerequisites before `turn/start`. `campaign_pack`, `main_image`, `gallery_images`, and `creative_qa` require an explicitly selected canonical Product revision. `main_image` and `gallery_images` additionally require a tenant/thread/request-owned attachment whose detected artifact kind is `image`; a catalog URL, no attachment, or a document attachment cannot pass the gate. Browser validation is immediate feedback only; Gateway artifact ownership and detected-kind checks are authoritative.
 
 A catalog `image_url` is display metadata, not permission to fetch an arbitrary network resource or a native image input. Product-accurate main images, gallery images, detail visuals, and storyboard frames require a user attachment or a future immutable Product Media revision that the application has ingested, MIME/size/hash checked, authorized to this tenant/thread, and supplied to Harness as a tenant-scoped `localImage`. Without that reference, Skills may produce text, scripts, page structure, image briefs, or explicitly conceptual imagery, but must not claim faithful product appearance.
 
@@ -116,6 +124,7 @@ Rendered video remains unavailable and its control is disabled. The current Prov
 - Running projects retain their authoritative Harness status when the user switches projects.
 - Creating a blank project resets only the current client projection; the project is persisted when its first Turn creates the Codex thread.
 - Generated titles continue to use the server-owned title model and `thread/name/set` readback.
+- Canvas reconciliation reads bounded Harness history pages and records whether the source window is complete. An incomplete window may upsert every source it actually read, but it cannot delete any existing projection. The UI explicitly states that unloaded historical assets were retained. Complete history alone may delete an obsolete, unedited source projection, and any node with a user revision remains protected.
 
 ## Security And Ownership
 

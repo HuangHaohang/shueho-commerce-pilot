@@ -86,6 +86,45 @@ const receiptSchema = z.object({
   }
 });
 
+const scorecardDimensionSchema = z.object({
+  dimensionId: z.string().min(1).max(160),
+  label: z.string().min(1).max(240),
+  score: z.number().min(0).max(100),
+  weight: z.number().min(0).max(1),
+  evidenceState: z.enum(["supported", "mixed", "hypothesis", "unavailable"]),
+  rationale: z.string().min(1).max(4_000),
+  evidenceIds: z.array(z.string().max(500)).max(100),
+  productFactRefs: z.array(z.string().max(500)).max(100),
+  companyEvidenceRefs: z.array(z.string().max(500)).max(0).default([]),
+  limitations: z.array(z.string().max(1_000)).max(50),
+}).strict();
+
+const scorecardSchema = z.object({
+  weightedScore: z.number().min(0).max(100),
+  confidence: z.enum(["high", "medium", "low"]),
+  dimensions: z.array(scorecardDimensionSchema).max(20),
+}).strict();
+
+const decisionGateSchema = z.object({
+  status: z.enum(["proceed", "validate", "hold", "insufficient_evidence"]),
+  summary: z.string().max(4_000),
+  blockingGaps: z.array(z.string().max(1_000)).max(50),
+  requiredEvidence: z.array(z.string().max(1_000)).max(50),
+}).strict();
+
+const experimentSchema = z.object({
+  experimentId: z.string().min(1).max(160),
+  title: z.string().min(1).max(500),
+  hypothesis: z.string().min(1).max(4_000),
+  method: z.string().min(1).max(4_000),
+  successSignal: z.string().min(1).max(2_000),
+  stopCondition: z.string().min(1).max(2_000),
+  evidenceNeeded: z.array(z.string().max(1_000)).max(50),
+  evidenceIds: z.array(z.string().max(500)).max(100),
+  productFactRefs: z.array(z.string().max(500)).max(100),
+  status: z.literal("proposed"),
+}).strict();
+
 export const marketResearchResponseSchema = z.object({
   responseType: z.enum(["report", "answer"]),
   insightType: z.enum(["market_research", "new_product_development", "product_retrospective"])
@@ -97,6 +136,9 @@ export const marketResearchResponseSchema = z.object({
   claims: z.array(claimSchema).max(200),
   receipts: z.array(receiptSchema).max(100),
   recommendations: z.array(recommendationSchema).max(100).default([]),
+  scorecard: scorecardSchema.nullable().optional().default(null),
+  decisionGate: decisionGateSchema.nullable().optional().default(null),
+  experiments: z.array(experimentSchema).max(50).default([]),
   message: z.string().max(20_000),
 }).strict().superRefine((value, context) => {
   if (value.responseType === "report" && !value.reportMarkdown.trim()) {
@@ -115,11 +157,20 @@ export const marketResearchResponseSchema = z.object({
   }
   if (
     value.responseType === "answer" &&
-    (value.reportMarkdown.length > 0 || value.claims.length > 0 || value.receipts.length > 0 || value.recommendations.length > 0)
+    (value.reportMarkdown.length > 0 ||
+      value.claims.length > 0 ||
+      value.receipts.length > 0 ||
+      value.recommendations.length > 0 ||
+      (value.scorecard !== null &&
+        (value.scorecard.dimensions.length > 0 ||
+          value.scorecard.weightedScore !== 0 ||
+          value.scorecard.confidence !== "low")) ||
+      (value.decisionGate !== null && value.decisionGate.status !== "insufficient_evidence") ||
+      value.experiments.length > 0)
   ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "普通回答不能携带报告正文、结论或数据回执。",
+      message: "普通回答不能携带报告正文、结论、评分、决策 Gate、实验或数据回执。",
       path: ["responseType"],
     });
   }

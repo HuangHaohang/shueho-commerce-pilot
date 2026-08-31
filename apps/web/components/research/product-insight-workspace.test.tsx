@@ -47,11 +47,19 @@ describe("ProductInsightWorkspace", () => {
     expect(html).toContain("市场调研");
     expect(html).toContain("新品开发");
     expect(html).toContain("产品复盘");
-    expect(html).toContain("commerce-market-research");
-    expect(html).toContain("commerce-new-product-development");
-    expect(html).toContain("commerce-product-retrospective");
+    expect(html).not.toContain("commerce-market-research");
+    expect(html).not.toContain("commerce-new-product-development");
+    expect(html).not.toContain("commerce-product-retrospective");
+    expect(html).not.toContain("可从品类或产品开始");
+    expect(html).not.toContain("可参考现有产品");
+    expect(html).not.toContain("必须选择产品");
     expect(html).toContain("共享 AgentComposer");
-    expect(html).toContain("外部数据待配置");
+    expect(html).toContain("市场证据待配置");
+    expect(html).toContain("证据账本");
+    expect(html).toContain("Scorecard");
+    expect(html).toContain("决策 Gate");
+    expect(html).toContain("事实基线");
+    expect(html).toContain("证据逐条可核对");
     expect(html).not.toContain("SKILL.md");
   });
 

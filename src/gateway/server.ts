@@ -74,6 +74,10 @@ import { normalizeProviderUsage } from "../provider/provider-usage.js";
 import { RuntimeProviderProxy } from "../provider/runtime-provider-proxy.js";
 import { readGatewayConfig } from "./config.js";
 import {
+  validateCreativeProductContext,
+  validateCreativeReferenceMedia,
+} from "./creative-turn-admission.js";
+import {
   readThreadContextUsage,
   shouldAutoCompact,
   type ThreadContextUsage,
@@ -549,8 +553,7 @@ const server = createServer(async (req, res) => {
           legacyDynamicWebSearchHandler: true,
           multiAgent: true,
           localPathImageReader: false,
-          nativeImageGeneration:
-            modelProviderCapabilities.imageGeneration && modelProviderCapabilities.namespaceTools,
+          nativeImageGeneration: modelProviderCapabilities.imageGeneration,
           hooks: process.env.NODE_ENV === "production" ? "managed-only" : "app-owned-development",
           maxTurnDurationMs: config.maxTurnDurationMs,
           maxAgentThreadsPerSession: config.maxAgentThreadsPerSession,
@@ -1413,6 +1416,17 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "A creative method requires the commerce-creative-project workflow." });
         return;
       }
+      const creativeProductFailure = validateCreativeProductContext(
+        creativeMethod,
+        productContextRequest.mode,
+      );
+      if (creativeProductFailure) {
+        sendJson(res, 400, {
+          error: creativeProductFailure.message,
+          code: creativeProductFailure.code,
+        });
+        return;
+      }
       if (body.insightMethod !== undefined && !insightMethod) {
         sendJson(res, 400, { error: "Unknown product insight method." });
         return;
@@ -1544,10 +1558,21 @@ const server = createServer(async (req, res) => {
           workflow === "commerce-product-insight" || workflow === "commerce-market-research"
             ? buildProductInsightSubjectConstraint(productContextRequest, firstPartySubject)
             : null;
-        pendingTurnModels.set(threadId, requestedModel);
         const attachments = attachmentIds.length
           ? await readBoundTurnAttachments(threadId, attachmentIds, scope as RuntimeScope, clientUserMessageId)
           : [];
+        const creativeMediaFailure = validateCreativeReferenceMedia(
+          creativeMethod,
+          attachments.map((attachment) => attachment.kind),
+        );
+        if (creativeMediaFailure) {
+          sendJson(res, 400, {
+            error: creativeMediaFailure.message,
+            code: creativeMediaFailure.code,
+          });
+          return;
+        }
+        pendingTurnModels.set(threadId, requestedModel);
         const turnMessage = formatTurnMessageWithAttachments(message, attachments);
         const managedWorkflowTurn = workflow
           ? buildManagedWorkflowTurn(
@@ -6438,10 +6463,10 @@ function createRuntimeDeveloperInstructions(): string {
     "Commerce Pilot is a hosted e-commerce agent, not a local coding agent.",
     "Use only application-registered dynamic tools and application-managed MCP tools. Never run shell commands, inspect or modify host files, spawn processes, use local developer tools, or request additional filesystem or network permissions.",
     "If a requested capability has no registered tool, explain that it is unavailable instead of attempting a local workaround.",
-    "Codex Harness provides its native `image_gen` tool for bitmap image generation and owns the imageGeneration Item lifecycle.",
+    "Codex Harness owns bitmap image generation and the native imageGeneration Item lifecycle. Depending on the configured Provider, generation may run as Provider-hosted Responses image generation or through the namespace `image_gen` extension.",
     `It uses the configured application provider and image model ${config.provider.imageModel}.`,
     "The current native tool catalog is authoritative over earlier conversation messages that claimed image generation was unavailable.",
-    "Use the native image_gen tool for image requests. Never look for or call an application dynamic tool named commerce_image.generate, and never retry a completed native imageGeneration Item.",
+    "For image requests, use exactly one available Harness-owned image path and treat its completed native imageGeneration Item as the sole success signal. Never require both paths, look for an application dynamic tool named commerce_image.generate, call a Provider endpoint directly, or retry a completed native imageGeneration Item.",
     "Commerce Pilot provides the host tool `commerce_skill.publish` for creating or updating instruction-only Skills through an application-owned validator and explicit user approval.",
     "When the user asks to create or update a Skill, use the bundled `skill-creator` Skill, gather the required purpose and trigger boundaries with request_user_input when needed, then call commerce_skill.publish with the complete draft.",
     "Never claim that this environment can only produce a SKILL.md draft while commerce_skill.publish is present. Never request a host path, shell access, scripts, secrets, or filesystem permission for Skill creation.",

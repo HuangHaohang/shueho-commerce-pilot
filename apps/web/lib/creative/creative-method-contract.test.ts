@@ -20,6 +20,8 @@ describe("creative method contract", () => {
 
   it("rejects arbitrary names and path-like values", () => {
     expect(isCreativeMethod("main_image")).toBe(true);
+    expect(isCreativeMethod("campaign_pack")).toBe(true);
+    expect(isCreativeMethod("creative_qa")).toBe(true);
     expect(isCreativeMethod("custom_method")).toBe(false);
     expect(isCreativeMethod("../../skill")).toBe(false);
   });
@@ -27,7 +29,16 @@ describe("creative method contract", () => {
   it("classifies workflow and specialist Skills as internal-only", () => {
     expect(isAppOwnedManagedSkillName("commerce-creative-project")).toBe(true);
     expect(isAppOwnedManagedSkillName("commerce-product-main-image")).toBe(true);
+    expect(isAppOwnedManagedSkillName("commerce-campaign-pack")).toBe(true);
+    expect(isAppOwnedManagedSkillName("commerce-creative-qa")).toBe(true);
     expect(isAppOwnedManagedSkillName("commerce-custom-review")).toBe(false);
     expect(isAppOwnedManagedSkillName("skill-creator")).toBe(false);
+  });
+
+  it("exposes the two commercial methods with their fixed labels and Skills", () => {
+    expect(creativeMethodLabel("campaign_pack")).toBe("Campaign 资产包");
+    expect(creativeMethodSkillName("campaign_pack")).toBe("commerce-campaign-pack");
+    expect(creativeMethodLabel("creative_qa")).toBe("创作合规检查");
+    expect(creativeMethodSkillName("creative_qa")).toBe("commerce-creative-qa");
   });
 });

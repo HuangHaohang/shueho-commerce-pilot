@@ -46,12 +46,13 @@ describe("CreativeSpaceWorkbench", () => {
     expect(html).toContain("Harness conversation");
   });
 
-  it("shows seven commerce methods and an honestly disabled rendered-video state", () => {
+  it("shows nine grouped commerce methods and an honestly disabled rendered-video state", () => {
     const html = renderToStaticMarkup(
       <CreativeMethodPickerPanel value="main_image" onSelect={vi.fn()} />,
     );
 
     for (const label of [
+      "Campaign 资产包",
       "商品标题与文案",
       "推广文案",
       "商品主图",
@@ -59,10 +60,15 @@ describe("CreativeSpaceWorkbench", () => {
       "商品详情页",
       "产品拍摄脚本",
       "短视频分镜",
+      "创作合规检查",
     ]) {
       expect(html).toContain(label);
     }
     expect(html).toContain("生成标题、卖点和商品页文案");
+    expect(html).toContain("整套营销");
+    expect(html).toContain("审核交付");
+    expect(html).toContain("lucide-package-open");
+    expect(html).toContain("lucide-shield-check");
     expect(html).not.toContain("提供可识别商品外观的参考图");
     expect(html).not.toContain("选择后只会预填对话");
     expect(html).toContain("视频成片");

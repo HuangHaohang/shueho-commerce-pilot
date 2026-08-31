@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { MarketResearchResponse } from "@/lib/research/market-report";
+import type { AgentActivity } from "@/lib/agent/use-agent-thread";
 
 import { MarketResearchReportView } from "./market-research-report";
 
@@ -59,6 +60,9 @@ function report(overrides: Partial<MarketResearchResponse> = {}): MarketResearch
       limitations: ["本次工作流未提供评论步骤。"],
     }],
     recommendations: [],
+    scorecard: null,
+    decisionGate: null,
+    experiments: [],
     message: "报告已完成。",
     ...overrides,
   };
@@ -88,6 +92,81 @@ describe("MarketResearchReportView", () => {
     expect(html).toContain("研究回执：research-request-1");
     expect(html).toContain("依据 · 产品事实 1 · 市场证据 0");
     expect(html).toContain("product.attributes.material");
+    expect(html).toContain("报告引用待核对");
+  });
+
+  it("renders an explainable scorecard, decision gate, experiments, and authoritative receipt status", () => {
+    const activities: AgentActivity[] = [{
+      id: "activity-1",
+      sequence: 3,
+      turnId: "turn-1",
+      kind: "tool",
+      label: "获取市场证据",
+      status: "completed",
+      research: {
+        kind: "evidence",
+        researchRequestId: "research-request-1",
+        platform: "淘宝",
+        observedAt: "2026-08-31T00:00:00.000Z",
+        evidenceCount: 8,
+        reviewEvidenceCount: 0,
+        coverage: {
+          acceptedProducts: 8,
+          acceptedEvidence: 8,
+          reviewStepsCompleted: 0,
+          reviewStepAvailable: false,
+          requestedMetrics: ["price"],
+          missingRequestedMetrics: ["review"],
+        },
+        limitations: ["没有评论步骤"],
+      },
+    }];
+    const html = renderToStaticMarkup(<MarketResearchReportView
+      activities={activities}
+      response={report({
+        scorecard: {
+          weightedScore: 68,
+          confidence: "medium",
+          dimensions: [{
+            dimensionId: "demand",
+            label: "需求信号",
+            score: 72,
+            weight: 0.3,
+            evidenceState: "supported",
+            rationale: "已获得价格和商品覆盖证据。",
+            evidenceIds: ["research-request-1:evidence-1"],
+            productFactRefs: [],
+            companyEvidenceRefs: [],
+            limitations: [],
+          }],
+        },
+        decisionGate: {
+          status: "validate",
+          summary: "先做小规模验证。",
+          blockingGaps: ["缺少评论证据"],
+          requiredEvidence: ["真实买家评论"],
+        },
+        experiments: [{
+          experimentId: "experiment-1",
+          title: "验证清洗便利性",
+          hypothesis: "易清洁是高价值差异点。",
+          method: "小样盲测",
+          successSignal: "目标用户能明确感知差异",
+          stopCondition: "差异不可感知则停止",
+          evidenceNeeded: ["盲测记录"],
+          evidenceIds: [],
+          productFactRefs: ["product.title"],
+          status: "proposed",
+        }],
+      })}
+    />);
+    expect(html).toContain("决策 Gate · 小规模验证");
+    expect(html).toContain("可解释机会 Scorecard");
+    expect(html).toContain("需求信号");
+    expect(html).toContain("权重 30%");
+    expect(html).toContain("验证实验");
+    expect(html).toContain("已核验 1 / 1 份市场回执");
+    expect(html).toContain("已与本任务 Harness 工具回执核对");
   });
 
   it("renders product-development recommendations with verification metrics", () => {

@@ -103,6 +103,7 @@ export type CreativeCanvasState = {
   messageRefs: CreativeCanvasMessageReference[];
   viewport: CreativeCanvasViewport | null;
   resolvedAt: string;
+  sourceHistoryComplete?: boolean;
 };
 
 export type CreativeCanvasSourceNode = {

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://shueho.com/schemas/codex-runtime-manifest.schema.json",
+  "title": "SHUEHO Commerce Pilot Codex Runtime Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "upstream", "patchSet", "build", "artifact"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "tag", "commit", "version", "rustToolchain", "licenseSha256", "noticeSha256"],
+      "properties": {
+        "repository": { "type": "string", "format": "uri" },
+        "tag": { "type": "string", "minLength": 1 },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$" },
+        "rustToolchain": { "type": "string", "minLength": 1 },
+        "licenseSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "noticeSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "patchSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "seriesSha256", "patches"],
+      "properties": {
+        "revision": { "type": "string", "minLength": 1 },
+        "seriesSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "patches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "sha256"],
+            "properties": {
+              "file": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*\\.patch$" },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cargoPackage", "cargoBinary", "profile", "locked", "target"],
+      "properties": {
+        "cargoPackage": { "type": "string", "minLength": 1 },
+        "cargoBinary": { "type": "string", "minLength": 1 },
+        "profile": { "const": "release" },
+        "locked": { "const": true },
+        "target": { "type": "string", "minLength": 1 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "file", "sha256", "size", "versionOutput"],
+      "properties": {
+        "platform": { "type": "string", "pattern": "^(win32|linux|darwin)-(x64|arm64)$" },
+        "file": { "enum": ["codex", "codex.exe"] },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size": { "type": "integer", "minimum": 1 },
+        "versionOutput": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

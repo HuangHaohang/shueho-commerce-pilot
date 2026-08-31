@@ -62,11 +62,20 @@ const requiredLines = [
   'inherit = "none"',
   `base_url = ${JSON.stringify(runtimeProviderProxy.baseUrl)}`,
   JSON.stringify(runtimeProviderActorAuthorizationHeader),
+  "request_max_retries = 0",
+  "stream_max_retries = 0",
+  "stream_idle_timeout_ms = 120000",
 ];
 
 const missingLines = requiredLines.filter((line) => !generatedConfig.includes(line));
 if (missingLines.length > 0) {
   throw new Error(`Generated Codex config is missing security controls: ${missingLines.join(", ")}`);
+}
+if (
+  /^request_max_retries = [1-9][0-9]*$/m.test(generatedConfig) ||
+  /^stream_max_retries = [1-9][0-9]*$/m.test(generatedConfig)
+) {
+  throw new Error("Generated Codex config must not replay an uncertain paid image-generation request.");
 }
 if (process.platform === "win32" && !generatedConfig.includes("commerce-runtime-hook.cmd")) {
   throw new Error("Generated Windows Codex config is missing the managed Hook command wrapper.");
@@ -124,6 +133,12 @@ if (!gatewaySource.includes("externalDataService.configured && externalDataContr
 }
 if (gatewaySource.includes('name: "commerce_image"')) {
   throw new Error("Gateway must not register a duplicate application image-generation tool.");
+}
+if (gatewaySource.includes("modelProviderCapabilities.imageGeneration && modelProviderCapabilities.namespaceTools")) {
+  throw new Error("Provider-hosted Responses image generation must not be gated on namespace-tool support.");
+}
+if (!gatewaySource.includes("Provider-hosted Responses image generation")) {
+  throw new Error("Runtime instructions must admit the Provider-hosted Harness image path.");
 }
 if (!gatewaySource.includes('item.type !== "imageGeneration"')) {
   throw new Error("Gateway does not persist native Harness imageGeneration artifacts.");

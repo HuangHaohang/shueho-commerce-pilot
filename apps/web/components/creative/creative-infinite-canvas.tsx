@@ -284,6 +284,7 @@ function CreativeCanvasFlow({
           loading={loading}
           running={running}
           error={error}
+          sourceHistoryComplete={state?.sourceHistoryComplete ?? true}
           onRefresh={onRefresh}
         />
       </ReactFlow>
@@ -296,12 +297,14 @@ function CanvasToolbar({
   loading,
   running,
   error,
+  sourceHistoryComplete,
   onRefresh,
 }: {
   disabled: boolean;
   loading: boolean;
   running: boolean;
   error: string | null;
+  sourceHistoryComplete: boolean;
   onRefresh: () => Promise<void>;
 }) {
   const { zoomIn, zoomOut, fitView } = useReactFlow();
@@ -334,6 +337,12 @@ function CanvasToolbar({
         </CanvasToolButton>
         {running ? (
           <span className="cp-running-shimmer px-2 text-[11px] text-[var(--cp-text-muted)]">Agent 正在创作</span>
+        ) : null}
+        {!sourceHistoryComplete ? (
+          <span className="flex min-w-0 items-center gap-1 px-2 text-[11px] text-[var(--cp-warning)]" role="status">
+            <CircleAlert className="size-3.5 shrink-0" />
+            <span className="truncate">历史较长，未加载资产已安全保留</span>
+          </span>
         ) : null}
         {error ? (
           <span className="flex min-w-0 items-center gap-1 px-2 text-[11px] text-[var(--cp-danger)]" role="status">

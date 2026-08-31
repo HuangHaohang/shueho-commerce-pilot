@@ -275,6 +275,10 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260831_047_creative_canvas_reconciliation_delete",
       path: resolve(process.cwd(), "migrations/047_creative_canvas_reconciliation_delete.sql"),
     },
+    {
+      version: "20260901_048_creative_campaign_review_methods",
+      path: resolve(process.cwd(), "migrations/048_creative_campaign_review_methods.sql"),
+    },
   ];
 
   for (const migration of migrations) {

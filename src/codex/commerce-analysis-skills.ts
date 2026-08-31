@@ -57,6 +57,9 @@ Turn a category opportunity into an evidence-backed, testable product concept fo
 ## Decision Logic
 
 - Evaluate an opportunity using distinct evidence dimensions when available: buyer problem, category demand signal, competitive concentration, price band, accepted review themes, specification/property distribution, content or assortment gap, and company portfolio fit.
+- Build scorecard.dimensions as explicit, independently explained dimensions. Each dimension must show its 0-100 score, 0-1 weight, evidenceState, rationale, evidence ids, Product fact references, and limitations. Never output a weightedScore without the complete contributing dimensions; an unexplained aggregate is a prohibited black-box score.
+- evidenceState=supported requires direct governed support; mixed requires material supporting and limiting or contrary evidence; hypothesis means the score is a testable proposition rather than a finding; unavailable means the authoritative evidence is not connected. Any dimension that depends on company sales, traffic, conversion, advertising, returns, inventory movement, cost, margin, or profit MUST use evidenceState=unavailable, score=0, empty companyEvidenceRefs, and name the missing evidence in limitations.
+- Compute weightedScore transparently from non-unavailable dimensions as sum(score * weight) / sum(included weights). Exclude unavailable dimensions. If no dimension is eligible, set weightedScore=0, confidence=low, and decisionGate.status=insufficient_evidence. The score summarizes current evidentiary support, not predicted commercial success.
 - Only accepted quality-checked review evidence may establish a buyer pain point. A product detail, title, price, sales bucket, review count, social post, or model summary is not buyer-review evidence. If reviewEvidenceCount=0, keep every pain point as a hypothesis and state that no buyer-feedback conclusion is available.
 - Treat marketplace sales displays and rankings as external market signals with their returned qualifier and time/coverage limitation. They are not the company's demand, revenue, conversion, or forecast.
 - A frequent competitor specification is not automatically an unmet need; a rare specification is not automatically an opportunity. Label both as observations until review evidence or a planned experiment supports the causal interpretation.
@@ -67,16 +70,17 @@ Turn a category opportunity into an evidence-backed, testable product concept fo
 - Convert evidence into a small set of prioritized opportunities. Each opportunity must cite external evidence ids and, when relevant, selected-product fact references. Keep unsupported possibilities as hypotheses.
 - A concept must state its target customer, primary use case, value proposition, proposed requirements, price hypothesis, proof gaps, and risks. State in reportMarkdown that its validation status is hypothesis only; never imply that a concept has been engineered, sourced, sampled, certified, user-tested, or approved.
 - Requirements must distinguish evidence-backed targets, company constraints, and hypotheses. Do not invent exact dimensions, material performance, certification, safety, durability, efficacy, warranty, MOQ, lead time, cost, or supplier capability.
-- Every validation experiment needs a hypothesis, bounded method, success signal, evidence needed, and stop condition. State in reportMarkdown that experiments are recommendations and have not been executed. The Skill must not recruit users, place orders, create products, publish listings, spend budget, or contact suppliers.
+- Every validation experiment must appear in experiments with status=proposed, a hypothesis, bounded method, successSignal, stopCondition, evidenceNeeded, and existing lineage references. State in reportMarkdown that experiments are recommendations and have not been executed. The Skill must not recruit users, place orders, create products, publish listings, spend budget, or contact suppliers.
 
 ## Output Contract
 
 - Use responseType=report only when a genuine evidence-backed opportunity decision can be delivered. Use insightType=new_product_development.
 - Put the complete readable decision in reportMarkdown with: decision and scope; Product/portfolio facts when selected; evidence coverage; opportunity ranking; concept options; recommended concept and trade-offs; validation experiments and kill criteria; risks, data gaps, freshness, and receipts.
+- decisionGate is a decision recommendation only. proceed, validate, or hold never means the company approved, scheduled, funded, sourced, launched, or executed anything. Use insufficient_evidence when blocking evidence prevents an honest decision, and enumerate blockingGaps and requiredEvidence.
 - Classify every material Claim as product_fact, market_signal, derived_comparison, or hypothesis. product_fact requires productFactRefs; market_signal requires evidenceIds. A derived_comparison requires the references for every evidence lineage it actually uses: a category-only comparison between external competitors may use evidenceIds with empty productFactRefs, while a selected-Product-to-market comparison requires both. No governed company-performance tool is currently registered, so the current schema rejects company_metric; keep companyEvidenceRefs empty and do not output a company-metric comparison. A future contract version may add company_metric only together with an authoritative operating-data tool. Confidence describes evidentiary support, not predicted product success.
-- Put each prioritized concept or validation experiment in recommendations. A recommendation must cite the external evidence it uses; it requires Product fact references only when it uses or constrains a selected company Product. State a validationMetric and include the stop/kill condition in its rationale or validation metric. It remains a proposal, never an executed action.
+- Put prioritized concept decisions and next actions in recommendations. A recommendation must cite the external evidence it uses and requires Product fact references only when it uses or constrains a selected company Product. Put validation experiments in experiments rather than hiding them only in prose or recommendations. Every recommendation remains a proposal, never an executed action.
 - The current tool set does not provide company sales, revenue, traffic, conversion, advertising, return, support, inventory-movement, cost, or profitability evidence. State this limitation in reportMarkdown and subject.factLimitations whenever it affects the decision.
-- Use responseType=answer when explaining the method, when required scope is missing, or when evidence is unavailable and no genuine decision can be formed. Put the complete answer in message and keep reportMarkdown, claims, receipts, and recommendations empty rather than manufacturing a report.
+- Use responseType=answer when explaining the method, when required scope is missing, or when evidence is unavailable and no genuine decision can be formed. Put the complete answer in message and keep reportMarkdown, claims, receipts, and recommendations empty rather than manufacturing a report. An answer MUST return scorecard={weightedScore:0,confidence:"low",dimensions:[]}, decisionGate.status=insufficient_evidence with honest blockingGaps and requiredEvidence, and experiments=[].
 `;
 
 const PRODUCT_RETROSPECTIVE_INSTRUCTIONS = `# Commerce Product Retrospective
@@ -114,6 +118,9 @@ Diagnose one selected company's product using exact catalog facts and governed e
 ## Diagnosis Logic
 
 - Build the review in this order: confirmed Product facts; accepted external market/review signals; Product-versus-market comparisons; explicit root-cause hypotheses; proposed actions and validation needs. Never skip from a public signal directly to a causal conclusion.
+- Build scorecard.dimensions as explicit, independently explained dimensions. Each dimension must show its 0-100 score, 0-1 weight, evidenceState, rationale, evidence ids, Product fact references, and limitations. Never output a weightedScore without the complete contributing dimensions; an unexplained aggregate is a prohibited black-box score.
+- evidenceState=supported requires direct governed support; mixed requires material supporting and limiting or contrary evidence; hypothesis means the score is a testable proposition rather than a finding; unavailable means the authoritative evidence is not connected. Every operating-performance dimension that depends on company sales, traffic, conversion, advertising, returns, inventory movement, cost, margin, or profit MUST use evidenceState=unavailable, score=0, empty companyEvidenceRefs, and identify the missing evidence in limitations.
+- Compute weightedScore transparently from non-unavailable dimensions as sum(score * weight) / sum(included weights). Exclude unavailable dimensions. If no dimension is eligible, set weightedScore=0, confidence=low, and decisionGate.status=insufficient_evidence. The score summarizes evidence for the scoped Product-fact and market-fit review, not overall business performance.
 - An own-price comparison is allowed only when the exact selected Product revision contains an applicable price fact. External competitor prices alone cannot establish that the company's current listing is overpriced or underpriced.
 - A title, description, image, attribute, or specification gap can be identified as a Product/catalog fact. Its effect on conversion, traffic, or sales remains a hypothesis without connected first-party performance evidence.
 - External sales displays and rankings describe sampled marketplace records, not this company's Product performance. Preserve their exact/exceeds/range/unknown qualifier and never aggregate incompatible periods or platforms as one precise number.
@@ -123,16 +130,18 @@ Diagnose one selected company's product using exact catalog facts and governed e
 
 - Prioritize a short action list by decision value and reversibility. Each action must cite its rationale Claim ids, specify an owner role, horizon, success measure, and data required.
 - Use a success measure as a future measurement definition, not a fabricated baseline or target. Do not invent percentage lifts, revenue forecasts, deadlines, budgets, or ROI.
+- Put every proposed root-cause validation in experiments with status=proposed, bounded method, successSignal, stopCondition, evidenceNeeded, and existing lineage references. Experiments are recommendations only and have not been run.
 - State in reportMarkdown that every recommended action is not executed. This Skill does not change catalog data, price, content, ads, inventory, marketplace listings, suppliers, orders, or customer records. Any future write requires its own application tool, authorization, approval, idempotency, audit, and downstream readback.
 
 ## Output Contract
 
 - Use responseType=report only for an exact selected Product subject and set insightType=product_retrospective.
 - Put the complete readable review in reportMarkdown with: Product/revision scope; what is and is not connected; executive findings; Product/content/price observations; accepted buyer feedback; comparison gaps; root-cause hypotheses; prioritized actions and validation; data freshness, coverage, limitations, and receipts.
+- decisionGate is a decision recommendation only. proceed, validate, or hold never means an action was approved, scheduled, funded, published, or executed. Use insufficient_evidence for an unsupported operating review and enumerate blockingGaps and requiredEvidence.
 - Classify every material Claim as product_fact, market_signal, derived_comparison, or hypothesis. product_fact requires productFactRefs; market_signal requires evidenceIds. No governed company-performance tool is currently registered, so the current schema rejects company_metric; keep companyEvidenceRefs empty and do not output company-performance comparisons, ROI conclusions, or operating root-cause conclusions. A future contract version may add company_metric only together with an authoritative operating-data tool. Never relabel a public signal or user assertion as a Product fact to bypass that boundary.
 - Put each prioritized next action in recommendations. Its rationale must reference Claims, its validationMetric is a future measurement definition rather than an invented baseline, and its timeHorizon must not imply that work was scheduled or executed.
 - Never state that a business-performance review is complete. This is a Product-fact and market-fit retrospective until a separately governed first-party operating-data tool exists.
-- Use responseType=answer when no Product is selected, the user asks how the method works, or required evidence is unavailable and no genuine review can be formed. Put the complete answer in message and keep reportMarkdown, claims, receipts, and recommendations empty rather than manufacturing findings.
+- Use responseType=answer when no Product is selected, the user asks how the method works, or required evidence is unavailable and no genuine review can be formed. Put the complete answer in message and keep reportMarkdown, claims, receipts, and recommendations empty rather than manufacturing findings. An answer MUST return scorecard={weightedScore:0,confidence:"low",dimensions:[]}, decisionGate.status=insufficient_evidence with honest blockingGaps and requiredEvidence, and experiments=[].
 `;
 
 const COMMERCE_INSIGHT_METHOD_DEFINITIONS = {
@@ -207,6 +216,94 @@ export function buildCommerceProductInsightOutputSchema(
     items: { type: "string" },
     maxItems: 0,
   };
+  const scorecard = {
+    type: "object",
+    properties: {
+      weightedScore: { type: "number", minimum: 0, maximum: 100 },
+      confidence,
+      dimensions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            dimensionId: { type: "string" },
+            label: { type: "string" },
+            score: { type: "number", minimum: 0, maximum: 100 },
+            weight: { type: "number", minimum: 0, maximum: 1 },
+            evidenceState: {
+              type: "string",
+              enum: ["supported", "mixed", "hypothesis", "unavailable"],
+            },
+            rationale: { type: "string" },
+            evidenceIds: stringArray,
+            productFactRefs: stringArray,
+            companyEvidenceRefs: emptyCompanyEvidenceRefs,
+            limitations: stringArray,
+          },
+          required: [
+            "dimensionId",
+            "label",
+            "score",
+            "weight",
+            "evidenceState",
+            "rationale",
+            "evidenceIds",
+            "productFactRefs",
+            "companyEvidenceRefs",
+            "limitations",
+          ],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["weightedScore", "confidence", "dimensions"],
+    additionalProperties: false,
+  };
+  const decisionGate = {
+    type: "object",
+    properties: {
+      status: {
+        type: "string",
+        enum: ["proceed", "validate", "hold", "insufficient_evidence"],
+      },
+      summary: { type: "string" },
+      blockingGaps: stringArray,
+      requiredEvidence: stringArray,
+    },
+    required: ["status", "summary", "blockingGaps", "requiredEvidence"],
+    additionalProperties: false,
+  };
+  const experiments = {
+    type: "array",
+    items: {
+      type: "object",
+      properties: {
+        experimentId: { type: "string" },
+        title: { type: "string" },
+        hypothesis: { type: "string" },
+        method: { type: "string" },
+        successSignal: { type: "string" },
+        stopCondition: { type: "string" },
+        evidenceNeeded: stringArray,
+        evidenceIds: stringArray,
+        productFactRefs: stringArray,
+        status: { type: "string", enum: ["proposed"] },
+      },
+      required: [
+        "experimentId",
+        "title",
+        "hypothesis",
+        "method",
+        "successSignal",
+        "stopCondition",
+        "evidenceNeeded",
+        "evidenceIds",
+        "productFactRefs",
+        "status",
+      ],
+      additionalProperties: false,
+    },
+  };
   const selectedSubject = subjectConstraint?.mode === "selected"
     ? subjectConstraint
     : null;
@@ -262,6 +359,9 @@ export function buildCommerceProductInsightOutputSchema(
         ],
         additionalProperties: false,
       },
+      scorecard,
+      decisionGate,
+      experiments,
       executiveSummary: { type: "string" },
       reportMarkdown: { type: "string" },
       claims: {
@@ -362,6 +462,9 @@ export function buildCommerceProductInsightOutputSchema(
       "insightType",
       "subject",
       "scope",
+      "scorecard",
+      "decisionGate",
+      "experiments",
       "executiveSummary",
       "reportMarkdown",
       "claims",

@@ -8,7 +8,7 @@ Deployment must be self-contained at the application layer. A target server may 
 
 ## Source Conformance Baseline
 
-The runtime dependency is pinned to `@openai/codex` `0.150.1`. The matching upstream source baseline is `openai/codex` tag `rust-v0.150.1`, commit `90854393966b21e9ebfd21b122334eb09a20c93d`. Runtime changes must be checked against `codex-rs/app-server`, `codex-rs/app-server-protocol`, and their tests before local abstractions are introduced.
+The protocol/development fallback dependency is pinned to `@openai/codex` `0.150.1`. The production runtime is the application-owned `shueho.1` patch set built from `openai/codex` tag `rust-v0.150.1`, commit `90854393966b21e9ebfd21b122334eb09a20c93d`. `vendor/codex/upstream.json`, the hash-checked patch series, upstream license/notice, binary manifest and resolver form one fail-closed runtime identity. Runtime changes must be checked against `codex-rs/app-server`, `codex-rs/app-server-protocol`, and their tests before local abstractions are introduced.
 
 | Concern | Required Codex-owned path | Commerce Pilot responsibility |
 |---|---|---|
@@ -64,13 +64,13 @@ Use `stdio://` for the first integration because it avoids exposing the experime
 
 ## Runtime Packaging
 
-The web application declares `@openai/codex` as a production dependency. In deployment, install dependencies with the same lockfile used in development and run the gateway from the application root so it resolves:
+The web application keeps `@openai/codex` as a protocol-generation and local-development fallback. Production builds the reviewed open-source patch into a root-owned binary and sets `CODEX_BIN` to it. The adjacent manifest fixes upstream commit, patch revision and SHA-256, platform target, binary hash, version, and license/notice hashes. Production refuses to start or generate protocol bindings when that identity is absent or altered; it never falls back to npm or a global executable.
 
 ```text
 ./node_modules/.bin/codex
 ```
 
-`CODEX_BIN` is an explicit override for controlled deployments that provide a separately built App Server binary. It is not the default production assumption.
+The managed artifact is installed at `.runtime/bin/<platform>` for development or `/opt/shueho-codex/bin` in the production image. `npm run codex:runtime:build`, `codex:runtime:install`, and `codex:runtime:verify` share the same manifest/patch verifier used by Gateway and protocol generation.
 
 `CODEX_HOME` should point to app-owned, tenant-dedicated persistent storage, for example:
 
@@ -80,7 +80,7 @@ The web application declares `@openai/codex` as a production dependency. In depl
 
 Provider config, auth state, durable Codex runtime state, generated images, event outbox, and per-image artifact metadata belong there or in tenant-specific mounted secret/config files. Each generated image artifact is bound to its originating `threadId` and `turnId`; BFF image reads must re-check the authenticated tenant, workspace, and thread creator before proxying bytes.
 
-Codex App Server intentionally exposes native `image_gen` only for Codex-backend or actor-authorized Providers. Commerce Pilot therefore renders the custom Provider base URL as an actor-authenticated loopback route on the private Gateway. The Gateway verifies a tenant/provider-scoped HMAC-derived actor credential, accepts only `models`, `responses`, `responses/compact`, `images/generations`, and `images/edits`, strips the actor header, injects `COMMERCE_PROVIDER_API_KEY`, and streams the one upstream response. This relay does not choose tools, call a second model, generate images itself, or fabricate protocol Items; Codex still owns the native tool and `imageGeneration` lifecycle.
+Codex App Server intentionally gates image capabilities to Codex-backed or actor-authorized Providers. Commerce Pilot therefore renders the custom Provider base URL as an actor-authenticated loopback route on the private Gateway. The Gateway verifies a tenant/provider-scoped HMAC-derived actor credential, accepts only `models`, `responses`, `responses/compact`, `images/generations`, and `images/edits`, strips the actor header, injects `COMMERCE_PROVIDER_API_KEY`, and streams the one upstream response. The `shueho.1` Harness patch also projects a completed Provider-hosted Responses `image_generation_call` into `ItemStarted`/`ItemCompleted` `imageGeneration` events and replay history. It does not execute another tool or Provider request. Gateway still persists only the native Item and never parses rollout files or fabricates protocol Items.
 
 Threads run from `$CODEX_HOME/workspaces/default`, not `/app`, the source repository, or a browser-provided path. The generated config disables host-development tools. The capability allowlist contains the managed `commerce_web.search` MCP tool, native `image_gen`, approval-gated `commerce_skill.publish`, configured governed `commerce_data` tools, native provider Web Search when available, and bounded multi-agent collaboration; future commerce tools must be added to the application registry explicitly. `agents.max_concurrent_threads_per_session` is fixed from `COMMERCE_AGENT_MAX_THREADS_PER_SESSION` (default `4`, range `1-16`) and must not exceed the tenant contract.
 
@@ -96,7 +96,7 @@ Hooks use an application-owned development mode and a managed-only production mo
 
 Browser input, tenant files, project-local `.codex`, plugins, and user uploads may not define Hook commands. Production installs `/etc/codex/requirements.toml` with `allow_managed_hooks_only = true` and a fixed managed directory. Local development has no writable system requirements layer, so Gateway adds `config.bypass_hook_trust = true` only to the server-created `thread/start` request; the browser cannot supply or override thread config, and project/plugin Hook sources remain unavailable.
 
-Interactive turns have a server-enforced deadline (`COMMERCE_AGENT_MAX_TURN_DURATION_MS`, default 10 minutes). Long-running commerce work must use an application tool that creates a background job and returns a tenant-scoped job id; it must not keep an interactive App Server turn open indefinitely.
+Interactive turns have a server-enforced deadline (`COMMERCE_AGENT_MAX_TURN_DURATION_MS`, default 10 minutes). Provider request and stream retries are both fixed to zero because a disconnected Responses request may already have executed a paid image side effect. A stream with no SSE progress for 120 seconds fails as uncertain and requires explicit user retry after authoritative readback. Long-running commerce work must use an application tool that creates a background job and returns a tenant-scoped job id; it must not keep an interactive App Server turn open indefinitely.
 
 Managed MCP readiness has two levels. Global `mcpServerStatus/list` proves that App Server discovered the required server, while a resumed persisted thread must be verified separately with `mcpServerStatus/list.threadId` before model execution. Read-only history/status requests use `thread/read` and `thread/turns/list` directly and never call `thread/resume` or per-thread MCP reload. `turn/start` and an execution-producing direction change perform the deduplicated resume, check the existing thread MCP status first, and reload only if the thread does not naturally expose `commerce_web.search`. App Server process exit and per-thread startup failures invalidate both caches.
 
@@ -154,7 +154,7 @@ Outbox maintenance is single-writer. Gateway holds an exclusive process lock in 
 
 The actor-only loopback Provider surface is separate internal infrastructure: `GET /api/internal/provider/v1/models` plus `POST` for `/responses`, `/responses/compact`, `/images/generations`, and `/images/edits`. It rejects the normal BFF token, unsupported paths, missing actor authorization, and bodies above 64 MiB.
 
-There is intentionally no generic RPC, process, shell, filesystem, config-import, server-request response, or direct image-generation endpoint. Production clients use authenticated BFF routes, which add the service token and server-resolved Enterprise scope; images are created only through the native Harness `image_gen` tool. Gateway strips native base64 results and host paths before browser fan-out, stores the completed artifact, and returns only an ownership-checked URL.
+There is intentionally no generic RPC, process, shell, filesystem, config-import, server-request response, or direct image-generation endpoint. Production clients use authenticated BFF routes, which add the service token and server-resolved Enterprise scope; images are created only inside the Harness through the namespace extension or the patched Provider-hosted Responses path. Gateway strips native base64 results and host paths before browser fan-out, stores the completed artifact, and returns only an ownership-checked URL.
 
 The authenticated BFF keeps only a tenant/workspace/creator-owned thread index in PostgreSQL. `GET /api/threads/:threadId` reads metadata and the latest `thread/turns/list` page concurrently without resuming execution, overlaps BFF feedback/question-index reads, and returns an opaque older-history cursor. Running-task reconciliation uses `GET /api/threads/:threadId/status` with metadata plus one summary Turn. After the sidebar loads, the browser sequentially prewarms that lightweight persisted read for the twelve most recent tasks; clicking immediately switches selection and renders an explicit loading state, while stale rapid-click requests are aborted and ignored.
 

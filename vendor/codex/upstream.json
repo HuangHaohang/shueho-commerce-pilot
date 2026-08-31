@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/openai/codex.git",
+  "tag": "rust-v0.150.1",
+  "commit": "90854393966b21e9ebfd21b122334eb09a20c93d",
+  "version": "0.150.1",
+  "rustToolchain": "1.95.0",
+  "licenseSha256": "d17f227e4df5da1600391338865ce0f3055211760a36688f816941d58232d8dc",
+  "noticeSha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915",
+  "cargoPackage": "codex-cli",
+  "cargoBinary": "codex",
+  "patchRevision": "shueho.1"
+}

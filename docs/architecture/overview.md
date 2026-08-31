@@ -29,7 +29,7 @@ Commerce Pilot must not replace these concerns with a custom agent loop, prompt 
 | Creative canvas | `@xyflow/react` custom React nodes | Infinite viewport, node selection, resize, MiniMap and accessible spatial navigation; content remains application React UI |
 | Client server-state | TanStack Query | Models, threads, plugins, Skills, Enterprise state, cache invalidation |
 | Agent gateway | Node.js 20.16+, TypeScript, native HTTP/SSE | App Server ownership, policy, scope binding, event sanitization, host tools |
-| Agent runtime | `@openai/codex` App Server | Threads, Turns, streaming, tools, Skills, approvals, queue, compaction, multi-agent |
+| Agent runtime | Application-owned patched Codex 0.150.1 App Server, built from pinned open-source input | Threads, Turns, streaming, tools, Skills, approvals, queue, compaction, multi-agent, hosted-image Item projection |
 | Agent protocol | Generated Codex 0.150.1 TypeScript schema + JSON-RPC over application-owned stdio | Typed Gateway-to-App Server communication only |
 | Authentication | Better Auth | Browser sessions and invitation-only identity |
 | Business database | PostgreSQL 16 | Enterprise identity, RBAC, RLS, thread index, quotas, usage, deletion jobs |
@@ -76,9 +76,9 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 |---|---|
 | Conversation messages and Turn state | Codex App Server paginated Turn/Item history; `turn/completed` is terminal authority |
 | Creative project and its conversation | One persisted Codex thread indexed as `recipe_id=creative_project`; no parallel project chat store |
-| Creative method catalog | Closed application registry that maps one business method id to one versioned specialist Skill; the browser never supplies a Skill path or body |
+| Creative method catalog | Closed application registry that maps one business method id—including Campaign pack and four-layer creative QA—to one versioned specialist Skill; the browser never supplies a Skill path or body |
 | Thread product selection | Newest product context set successfully bound to a Turn for the authenticated tenant/workspace/user/thread; only bounded canonical summaries are restored |
-| Creative canvas source | Completed Codex `agentMessage` and native `imageGeneration` Items, bound by real thread, Turn and Item ids |
+| Creative canvas source | Completed Codex `agentMessage` and Harness `imageGeneration` Items, including Provider-hosted `image_generation_call` output projected inside the patched Harness, bound by real thread, Turn and Item ids |
 | Creative canvas editing state | Application-owned RLS tables for nodes, append-only revisions, layout, viewport and message references; native image bytes remain immutable Harness artifacts |
 | Active Turn and queue | App Server read/queue APIs |
 | Browser identity and Enterprise access | Better Auth + PostgreSQL RLS context |
@@ -96,7 +96,7 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 | Marketplace paid execution identity | Tenant/thread/Turn-bound `marketplace_research_plan` plus target-specific workflow step instances |
 | Product-grounded research subject | Server-created context-set UUID plus the exact Product revision references and immutable snapshot SHA-256 fixed before `turn/start` |
 | Product-insight method | Persisted Recipe id: `market_research`, `new_product_development`, or `product_retrospective`; the BFF and Gateway reject a mismatched method |
-| Product-insight claims and receipts | One method-fixed Harness structured output backed by Product fact refs and safe `research_request_id` / `evidence_id` projections; raw provider records remain in the independent warehouse |
+| Product-insight claims and receipts | One method-fixed Harness structured output with evidence-linked Claims, explainable Scorecard dimensions, proposed decision Gate and experiments, reconciled against safe same-Turn `research_request_id` / `evidence_id` tool projections; raw provider records remain in the independent warehouse |
 | Runtime operational logs | Redacted structured JSON, exportable through OpenTelemetry to Elastic or another log backend; never the business source of truth |
 | Uploaded/generated media | Tenant artifact metadata + ownership-checked BFF URL |
 | External write completion | Downstream write receipt followed by readback evidence |
@@ -110,7 +110,7 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 3. Files upload first and bind to the same `clientRequestId` as the Turn.
 4. Gateway reconciles active Harness state, resolves the Skill path through `skills/list`, and validates artifact ownership.
 5. Gateway calls native `turn/start` with text, Skill, `localImage`, and bounded document-context inputs.
-6. App Server streams item lifecycle events; Gateway sanitizes and fans out allowlisted events through SSE.
+6. App Server streams item lifecycle events; the patched Harness converts completed Provider-hosted image output into the same native `imageGeneration` lifecycle before Gateway sanitization and SSE fan-out.
 7. BFF records completion/usage and the browser reconciles optimistic messages with authoritative item ids.
 
 History selection loads the most recent 30 Turns through `thread/turns/list` and uses an opaque cursor for earlier pages. While work is active, the browser polls only thread metadata and one summary Turn; it never converts a local timeout or transport error into a Harness terminal state.
@@ -137,7 +137,7 @@ No external write is complete merely because the model said it succeeded.
 7. Selecting an existing project reads its newest successfully bound product context through an authenticated `product_catalog.read` route. PostgreSQL RLS and explicit tenant/workspace/user/thread predicates restrict the response to at most twenty product summaries; raw imports, mappings, attributes, credentials, and connector configuration are not returned.
 8. Later feedback starts another Turn in the same project thread. New completed Items add new nodes; manual edits create application revisions, and reply-to-node references preserve bidirectional navigation without rewriting Harness history.
 
-Product visual identity is not inferred from a catalog URL. A main-image, gallery, or storyboard request needs a tenant-owned reference image or user attachment before the native `image_gen` flow may claim visual fidelity. Text-only product facts can still produce copy, scripts, page structure, or a clearly labelled conceptual image direction. Rendered video is unavailable: future video generation must be an application-owned asynchronous commerce tool with quote/approval, live RBAC, idempotency, audit, tenant artifact storage, and authoritative status/content readback rather than a fabricated Harness Item.
+Product visual identity is not inferred from a catalog URL. A main-image, gallery, or storyboard request needs a tenant-owned reference image or user attachment before any Harness image path may claim visual fidelity. Text-only product facts can still produce copy, scripts, page structure, or clearly labelled conceptual imagery. Rendered video is unavailable: future video generation must be an application-owned asynchronous commerce tool with quote/approval, live RBAC, idempotency, audit, tenant artifact storage, and authoritative status/content readback rather than a fabricated Harness Item.
 
 See [Creative Space Workbench](./creative-space-workbench.md).
 

@@ -62,8 +62,11 @@ test("maps market research to Harness tools with one Harness-owned report schema
   assert.ok(turn.outputSchema);
   const outputSchema = turn.outputSchema as { required: string[]; properties: Record<string, unknown> };
   assert.deepEqual(outputSchema.required, [
-    "responseType", "insightType", "subject", "scope", "executiveSummary", "reportMarkdown", "claims", "receipts", "recommendations", "message",
+    "responseType", "insightType", "subject", "scope", "scorecard", "decisionGate", "experiments", "executiveSummary", "reportMarkdown", "claims", "receipts", "recommendations", "message",
   ]);
+  assert.ok(outputSchema.properties.scorecard);
+  assert.ok(outputSchema.properties.decisionGate);
+  assert.ok(outputSchema.properties.experiments);
   assert.ok(outputSchema.properties.claims);
   assert.ok(outputSchema.properties.receipts);
   const receiptSchema = outputSchema.properties.receipts as {
@@ -79,6 +82,8 @@ test("maps market research to Harness tools with one Harness-owned report schema
   assert.match(skill, /interaction_ranked/);
   assert.match(skill, /commerce_data\.plan_marketplace_research/);
   assert.match(skill, /commerce_data\.execute_marketplace_research/);
+  assert.match(skill, /scorecard with separate, evidence-linked dimensions/);
+  assert.match(skill, /decisionGate is a review recommendation only/);
   assert.match(skill, /detail_sample_size=null/);
   assert.match(skill, /immediate next action MUST be native request_user_input/);
   assert.match(skill, /Never render those choices in an assistant message or numbered list/);

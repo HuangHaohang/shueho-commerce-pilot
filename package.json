@@ -12,12 +12,16 @@
     "node": ">=20.16"
   },
   "scripts": {
+    "codex:runtime:build": "node scripts/codex-runtime/build.mjs",
+    "codex:runtime:install": "node scripts/codex-runtime/install.mjs",
+    "codex:runtime:verify": "node scripts/codex-runtime/verify.mjs",
+    "codex:runtime:test": "node --test scripts/codex-runtime/*.test.mjs",
     "codex:protocol:generate": "tsx scripts/generate-codex-app-server-bindings.ts",
     "precheck": "npm run codex:protocol:generate",
     "prebuild": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && npm run codex:protocol:generate",
     "build": "node node_modules/typescript/bin/tsc -p tsconfig.json",
     "check": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
-    "test:gateway": "npm run build && node --test dist/src/gateway/*.test.js dist/src/integrations/*.test.js dist/src/provider/*.test.js",
+    "test:gateway": "npm run build && npm run codex:runtime:test && node --test dist/src/codex/*.test.js dist/src/gateway/*.test.js dist/src/integrations/*.test.js dist/src/provider/*.test.js",
     "dev": "npm run build && node dist/src/gateway/server.js",
     "smoke:codex": "npm run build && node dist/scripts/smoke-codex-app-server.js",
     "smoke:image-tool": "npm run build && node dist/scripts/smoke-native-image-tool.js",

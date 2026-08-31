@@ -1,0 +1,4 @@
+# One patch per line: <lowercase SHA-256><two spaces><basename.patch>
+# Patch files are applied in this exact order to upstream.json.commit.
+28a6ea7ab44c23696039a9aabe9b596890ee6e533cb5613c2b2a193be8e255fc  0001-project-provider-hosted-images-as-turn-items.patch
+31b688cb61bb4129c00b94d7f7bf7990c9f08837978da3779b11cc429430b0af  0002-normalize-cargo-lock-workspace-version.patch

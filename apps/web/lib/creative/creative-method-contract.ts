@@ -1,6 +1,7 @@
 import { agentWorkflowValues } from "@/lib/agent/task-category";
 
 export const creativeMethodValues = [
+  "campaign_pack",
   "listing_copy",
   "promotion_copy",
   "main_image",
@@ -8,11 +9,13 @@ export const creativeMethodValues = [
   "detail_page",
   "shooting_script",
   "video_storyboard",
+  "creative_qa",
 ] as const;
 
 export type CreativeMethod = (typeof creativeMethodValues)[number];
 
 export const creativeMethodSkillNames = {
+  campaign_pack: "commerce-campaign-pack",
   listing_copy: "commerce-listing-copy",
   promotion_copy: "commerce-promotion-copy",
   main_image: "commerce-product-main-image",
@@ -20,6 +23,7 @@ export const creativeMethodSkillNames = {
   detail_page: "commerce-product-detail-page",
   shooting_script: "commerce-product-shooting-script",
   video_storyboard: "commerce-short-video-storyboard",
+  creative_qa: "commerce-creative-qa",
 } as const satisfies Record<CreativeMethod, `commerce-${string}`>;
 
 const appOwnedManagedSkillNames = new Set<string>([
@@ -32,6 +36,12 @@ export function isAppOwnedManagedSkillName(value: unknown): value is string {
 }
 
 export const creativeMethodOptions = [
+  {
+    value: "campaign_pack",
+    label: "Campaign 资产包",
+    shortDescription: "生成整套 brief、主张矩阵、渠道衍生与 QA 门禁",
+    skillName: creativeMethodSkillNames.campaign_pack,
+  },
   {
     value: "listing_copy",
     label: "商品标题与文案",
@@ -73,6 +83,12 @@ export const creativeMethodOptions = [
     label: "短视频分镜",
     shortDescription: "生成短视频脚本、分镜与字幕规划",
     skillName: creativeMethodSkillNames.video_storyboard,
+  },
+  {
+    value: "creative_qa",
+    label: "创作合规检查",
+    shortDescription: "分层检查商品、主张、品牌与渠道规则",
+    skillName: creativeMethodSkillNames.creative_qa,
   },
 ] as const satisfies ReadonlyArray<{
   value: CreativeMethod;

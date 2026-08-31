@@ -54,6 +54,52 @@ describe("parseMarketResearchResponse", () => {
     expect(response?.insightType).toBe("market_research");
     expect(response?.recommendations).toEqual([]);
     expect(response?.claims[0]?.companyEvidenceRefs).toEqual([]);
+    expect(response?.scorecard).toBeNull();
+  });
+
+  it("accepts the commercial scorecard, decision gate, and proposed experiment contract", () => {
+    const response = parseMarketResearchResponse(JSON.stringify({
+      responseType: "report",
+      insightType: "new_product_development",
+      ...base,
+      scorecard: {
+        weightedScore: 66,
+        confidence: "medium",
+        dimensions: [{
+          dimensionId: "competition",
+          label: "竞争强度",
+          score: 58,
+          weight: 0.25,
+          evidenceState: "mixed",
+          rationale: "竞品数量高，但细分规格仍有空白。",
+          evidenceIds: ["research-request-1:evidence-1"],
+          productFactRefs: [],
+          companyEvidenceRefs: [],
+          limitations: ["只覆盖一个平台"],
+        }],
+      },
+      decisionGate: {
+        status: "validate",
+        summary: "进入小规模验证。",
+        blockingGaps: ["供应链成本未接入"],
+        requiredEvidence: ["样品成本", "真实评论"],
+      },
+      experiments: [{
+        experimentId: "experiment-1",
+        title: "价格带概念测试",
+        hypothesis: "目标用户接受中高价定位。",
+        method: "两版落地页意向测试",
+        successSignal: "高价版有效意向不低于基准版",
+        stopCondition: "连续两轮低于基准版则停止",
+        evidenceNeeded: ["落地页点击与留资"],
+        evidenceIds: ["research-request-1:evidence-1"],
+        productFactRefs: [],
+        status: "proposed",
+      }],
+    }));
+    expect(response?.scorecard?.dimensions[0]?.weight).toBe(0.25);
+    expect(response?.decisionGate?.status).toBe("validate");
+    expect(response?.experiments[0]?.status).toBe("proposed");
   });
 
   it("fails closed on company metrics until a governed operating-data tool exists", () => {
@@ -112,6 +158,27 @@ describe("parseMarketResearchResponse", () => {
       message: "请先选择要研究的平台。",
     }));
     expect(response).toMatchObject({ responseType: "answer", message: "请先选择要研究的平台。" });
+    expect(parseMarketResearchResponse(JSON.stringify({
+      responseType: "answer",
+      ...base,
+      executiveSummary: "",
+      reportMarkdown: "",
+      claims: [],
+      receipts: [],
+      recommendations: [],
+      scorecard: { weightedScore: 0, confidence: "low", dimensions: [] },
+      decisionGate: {
+        status: "insufficient_evidence",
+        summary: "范围不足",
+        blockingGaps: ["缺少市场"],
+        requiredEvidence: ["目标市场"],
+      },
+      experiments: [],
+      message: "请先选择要研究的平台。",
+    }))).toMatchObject({
+      responseType: "answer",
+      decisionGate: { status: "insufficient_evidence" },
+    });
   });
 
   it("fails closed on extra fields, missing report Markdown, or malformed receipt counts", () => {

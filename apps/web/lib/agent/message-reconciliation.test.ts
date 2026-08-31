@@ -32,6 +32,76 @@ describe("conversation message reconciliation", () => {
     expect(mergeAuthoritativeMessages([optimistic], [authoritative])).toEqual([authoritative]);
   });
 
+  it("preserves optimistic display products when the Harness SSE item commits the user message", () => {
+    const optimistic: ConversationMessage = {
+      id: "user-local-product",
+      sequence: 10,
+      turnId: null,
+      role: "user",
+      content: "基于这个产品生成主图",
+      clientId: "client-product-1",
+      delivery: "pending",
+      products: [{
+        id: "33333333-3333-4333-8333-333333333333",
+        title: "轻量通勤双肩包",
+        spu: "BAG-1001",
+        status: "active",
+        variantCount: 3,
+        sourceName: "Shopify 中国站",
+        updatedAt: "2026-08-30T08:00:00.000Z",
+        imageUrl: null,
+      }],
+      status: "completed",
+    };
+    const authoritative: ConversationMessage = {
+      id: "message-harness-product",
+      sequence: 11,
+      turnId: "turn-product-1",
+      role: "user",
+      content: "基于这个产品生成主图",
+      clientId: "client-product-1",
+      delivery: "committed",
+      status: "completed",
+    };
+
+    expect(mergeAuthoritativeMessages([optimistic], [authoritative])).toEqual([{
+      ...authoritative,
+      products: optimistic.products,
+    }]);
+  });
+
+  it("honors an authoritative empty product projection after permission or binding checks", () => {
+    const optimistic: ConversationMessage = {
+      id: "user-local-product",
+      sequence: 10,
+      turnId: null,
+      role: "user",
+      content: "基于这个产品生成主图",
+      clientId: "client-product-1",
+      delivery: "pending",
+      products: [{
+        id: "33333333-3333-4333-8333-333333333333",
+        title: "轻量通勤双肩包",
+        spu: "BAG-1001",
+        status: "active",
+        variantCount: 3,
+        sourceName: "Shopify 中国站",
+        updatedAt: "2026-08-30T08:00:00.000Z",
+        imageUrl: null,
+      }],
+      status: "completed",
+    };
+    const authoritative: ConversationMessage = {
+      ...optimistic,
+      id: "message-harness-product",
+      turnId: "turn-product-1",
+      delivery: "committed",
+      products: [],
+    };
+
+    expect(mergeAuthoritativeMessages([optimistic], [authoritative])).toEqual([authoritative]);
+  });
+
   it("does not collapse distinct repeated prompts without a matching client id", () => {
     const first: ConversationMessage = {
       id: "message-1",

@@ -54,8 +54,8 @@ npm run jobs:thread-deletion
 - `turn/completed` is authoritative for an accepted Turn's terminal state. Browser timeouts, health changes, stale approval responses and generic `error` notifications may trigger reconciliation but may not fabricate completion or failure.
 - Ordinary running-task direction changes keep input in `thread/queue/*`, interrupt the old Turn and start that same queue id after `turn/completed`; do not persist a second pending-steer registry or combine `turn/steer` with immediate interruption. A schema-constrained managed workflow must instead use native `turn/steer` on its active Turn, because the App Server queue contract cannot preserve `outputSchema`; confirm it by the same `clientUserMessageId` before allowing a retry.
 - App Server fixes dynamic tools at `thread/start`. Register configured business tools deterministically, validate connectivity at call time, and increment the persisted task tool-contract version when the schema changes; never pretend `thread/resume` updated tools.
-- Image generation uses native `image_gen` and `imageGeneration` Items. Gateway may persist and project an ownership-checked artifact, but may not make a duplicate provider image call or expose native base64/host paths to the browser.
-- Custom Providers reach native `image_gen` only through the actor-authorized loopback Provider relay. The relay must validate its derived runtime credential, strip it before forwarding, inject the upstream secret server-side, allowlist Provider routes, and preserve the single Harness-owned request/Item lifecycle.
+- Image generation uses Harness `imageGeneration` Items. The application-owned Codex patch may project a Provider-hosted Responses `image_generation_call` into that native Item inside Harness, but Gateway may only persist the resulting Item; it may not parse rollouts, fabricate an Item, make a duplicate Provider call, or expose base64/host paths to the browser.
+- Custom Providers reach image generation only through the actor-authorized loopback Provider relay. The relay must validate its derived runtime credential, strip it before forwarding, inject the upstream secret server-side, allowlist Provider routes, and preserve one Harness-owned request/Item lifecycle. A disconnected or idle image-capable Responses stream is uncertain and must not be retried automatically.
 - Conversation history uses `thread/turns/list` and `thread/items/list` pagination. Poll metadata/latest status for running tasks rather than re-reading all Turns.
 - Reply retry and historical message editing use the Harness-native history operation supported by the thread: `thread/revert(beforeTurnId)` for paginated history or compatibility `thread/rollback(numTurns)` for legacy history, followed by `turn/start` from the authoritative Harness `userMessage`. Do not append a browser-reconstructed duplicate Turn, fabricate history with `thread/inject_items`, or accept retry text, Skill paths, attachment paths, output schemas, or history boundaries from the browser.
 - Read-only task opening must use persisted `thread/read`/`thread/turns/list` without `thread/resume` or per-thread MCP readiness. Resume and enforce tools synchronously only before a model-executing Turn.
@@ -85,6 +85,7 @@ Run the checks relevant to every code pull request:
 
 ```bash
 npm run check
+npm run codex:runtime:test
 npm run external-data:check
 npm run external-data:test
 npm run external-data:evaluate
@@ -110,7 +111,7 @@ npm run external-data:verify:catalog
 npm run external-data:verify
 ```
 
-Web Search changes require `npm run smoke:web-search`. Provider changes require `npm run smoke:provider` and `npm run smoke:image-tool`. App Server lifecycle changes require `npm run smoke:codex`, `npm run smoke:steer-pivot`, and focused restart/resume verification.
+Web Search changes require `npm run smoke:web-search`. Provider changes require `npm run smoke:provider` and `npm run smoke:image-tool`. Patched-runtime changes additionally require exact upstream Rust tests, `npm run codex:runtime:test`, manifest verification, and an application-owned binary build. App Server lifecycle changes require `npm run smoke:codex`, `npm run smoke:steer-pivot`, and focused restart/resume verification.
 
 For frontend changes, inspect the running UI with browser automation or Playwright at desktop and mobile widths. Verify no overlap, clipping, blank canvas, horizontal overflow, unexpected native scrollbar, or inaccessible control.
 

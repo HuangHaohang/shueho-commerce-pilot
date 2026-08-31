@@ -31,6 +31,16 @@ The current Harness schema deliberately does not admit `company_metric`. There i
 
 Recommendations are proposed decisions, concepts, experiments or actions. They are not proof of an external write, scheduled work or a completed experiment.
 
+Every new report also carries three decision artifacts:
+
+- `scorecard` contains a bounded weighted reference score plus separate dimensions. Each dimension includes its 0–100 score, 0–1 weight, `supported / mixed / hypothesis / unavailable` evidence state, rationale, exact evidence/Product references and limitations. The aggregate is never sufficient by itself; unavailable operating, margin, supply-chain or company evidence remains unavailable instead of becoming a confident estimate.
+- `decisionGate` is one of `proceed`, `validate`, `hold`, or `insufficient_evidence`. It names the blocking gaps and evidence required before the next review. It is a recommendation, not approval, launch, budget commitment, publication, or proof of execution.
+- `experiments` defines proposed validation work through a hypothesis, bounded method, success signal, stop condition and evidence needed. Every status is fixed to `proposed`.
+
+For `responseType=answer`, the Harness returns an empty scorecard dimension list, no experiments, and `decisionGate.status=insufficient_evidence`. The read-side parser keeps old report history compatible by treating these new fields as absent only for historical messages.
+
+The browser reconciles every model-authored report receipt with same-Turn authoritative `commerce_data` activity. Exact matches are marked verified; absent receipts stay unverified; count mismatches display the authoritative tool projection and a mismatch warning. Evidence-linked Claims, Scorecard dimensions and experiments do not receive a verified presentation while any referenced report receipt remains unverified.
+
 Method-specific detail remains in `reportMarkdown` while material facts and decisions are separately indexed by `claims` and `recommendations`. This is intentional for the current human-review workflow: it avoids three incompatible report protocols and does not over-constrain open-ended product concepts or diagnosis narratives. If a future downstream API needs machine-executable concepts, experiments, root-cause graphs or owner assignments, it must introduce a versioned discriminated artifact contract plus deterministic reference validation; it must not infer those structures from Markdown or treat recommendations as executed actions.
 
 ## Product And External-Data Boundary

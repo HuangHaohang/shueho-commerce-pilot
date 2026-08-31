@@ -1,0 +1,449 @@
+From 43ecd61449c20108a2b9b13890a59e7aede5326d Mon Sep 17 00:00:00 2001
+From: Commerce Pilot <codex@localhost>
+Date: Mon, 31 Aug 2026 23:01:03 +0800
+Subject: [PATCH] project provider-hosted images as turn items
+
+---
+ .../src/protocol/thread_history.rs            | 153 +++++++++++++++++
+ codex-rs/core/src/stream_events_utils.rs      |   5 +-
+ .../core/src/stream_events_utils_tests.rs     | 156 ++++++++++++++++++
+ codex-rs/core/tests/suite/model_switching.rs  |  39 +++++
+ 4 files changed, 352 insertions(+), 1 deletion(-)
+
+diff --git a/codex-rs/app-server-protocol/src/protocol/thread_history.rs b/codex-rs/app-server-protocol/src/protocol/thread_history.rs
+index 5e007e0..c415cd5 100644
+--- a/codex-rs/app-server-protocol/src/protocol/thread_history.rs
++++ b/codex-rs/app-server-protocol/src/protocol/thread_history.rs
+@@ -444,6 +444,37 @@ impl ThreadHistoryBuilder {
+     }
+ 
+     fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
++        if let codex_protocol::models::ResponseItem::ImageGenerationCall {
++            id: Some(id),
++            status,
++            revised_prompt,
++            result,
++            ..
++        } = item
++        {
++            let id = id.to_string();
++            // Item lifecycle events are persisted before the raw response item. Keep their richer
++            // projection when replay sees both representations of the same hosted image.
++            let already_materialized = self
++                .current_turn
++                .as_ref()
++                .is_some_and(|turn| turn.items.iter().any(|item| item.id() == id.as_str()));
++            if !already_materialized {
++                self.upsert_item_in_current_turn(ThreadItem::ImageGeneration(
++                    ImageGenerationItem {
++                        id,
++                        status: status.clone(),
++                        revised_prompt: revised_prompt.clone(),
++                        result: result.clone(),
++                        transparent_background: None,
++                        failure: None,
++                        saved_path: None,
++                    },
++                ));
++            }
++            return;
++        }
++
+         let codex_protocol::models::ResponseItem::Message {
+             role, content, id, ..
+         } = item
+@@ -2119,6 +2150,128 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn rebuilds_hosted_image_generation_from_raw_response_item() {
++        let turn_id = "turn-hosted-image";
++        let items = vec![
++            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
++                turn_id: turn_id.to_string(),
++                trace_id: None,
++                started_at: None,
++                model_context_window: None,
++                collaboration_mode_kind: Default::default(),
++            })),
++            RolloutItem::ResponseItem(
++                codex_protocol::models::ResponseItem::ImageGenerationCall {
++                    id: Some(codex_protocol::ResponseItemId::with_suffix("ig", "hosted-1")),
++                    status: "completed".to_string(),
++                    revised_prompt: Some("A hosted product image".to_string()),
++                    result: "cG5n".to_string(),
++                    internal_chat_message_metadata_passthrough: None,
++                }
++                .into(),
++            ),
++            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
++                turn_id: turn_id.to_string(),
++                started_at: None,
++                last_agent_message: None,
++                error: None,
++                completed_at: None,
++                duration_ms: None,
++                time_to_first_token_ms: None,
++            })),
++        ];
++
++        let turns = build_turns_from_rollout_items(&items);
++
++        assert_eq!(
++            turns[0].items,
++            vec![ThreadItem::ImageGeneration(ImageGenerationItem {
++                id: "ig_hosted-1".to_string(),
++                status: "completed".to_string(),
++                revised_prompt: Some("A hosted product image".to_string()),
++                result: "cG5n".to_string(),
++                transparent_background: None,
++                failure: None,
++                saved_path: None,
++            })]
++        );
++    }
++
++    #[test]
++    fn raw_hosted_image_does_not_replace_an_existing_materialized_item() {
++        let turn_id = "turn-hosted-image";
++        let thread_id = ThreadId::new();
++        let saved_path = test_path_buf("/tmp/hosted-image.png").abs();
++        let items = vec![
++            RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {
++                turn_id: turn_id.to_string(),
++                trace_id: None,
++                started_at: None,
++                model_context_window: None,
++                collaboration_mode_kind: Default::default(),
++            })),
++            RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
++                thread_id,
++                turn_id: turn_id.to_string(),
++                item: CoreTurnItem::ImageGeneration(
++                    codex_protocol::items::ImageGenerationItem {
++                        id: "ig_hosted-1".to_string(),
++                        status: "completed".to_string(),
++                        revised_prompt: Some("Materialized prompt".to_string()),
++                        result: "bWF0ZXJpYWxpemVk".to_string(),
++                        saved_path: Some(saved_path.clone()),
++                    },
++                ),
++                started_at_ms: Some(0),
++                completed_at_ms: 1_000,
++            })),
++            RolloutItem::EventMsg(EventMsg::ImageGenerationEnd(ImageGenerationEndEvent {
++                call_id: "ig_hosted-1".to_string(),
++                status: "completed".to_string(),
++                revised_prompt: Some("Materialized prompt".to_string()),
++                result: "bWF0ZXJpYWxpemVk".to_string(),
++                transparent_background: Some(true),
++                failure: None,
++                saved_path: Some(saved_path.clone()),
++            })),
++            RolloutItem::ResponseItem(
++                codex_protocol::models::ResponseItem::ImageGenerationCall {
++                    id: Some(codex_protocol::ResponseItemId::with_suffix("ig", "hosted-1")),
++                    status: "completed".to_string(),
++                    revised_prompt: Some("Raw prompt".to_string()),
++                    result: "cmF3".to_string(),
++                    internal_chat_message_metadata_passthrough: None,
++                }
++                .into(),
++            ),
++            RolloutItem::EventMsg(EventMsg::TurnComplete(TurnCompleteEvent {
++                turn_id: turn_id.to_string(),
++                started_at: None,
++                last_agent_message: None,
++                error: None,
++                completed_at: None,
++                duration_ms: None,
++                time_to_first_token_ms: None,
++            })),
++        ];
++
++        let turns = build_turns_from_rollout_items(&items);
++
++        assert_eq!(
++            turns[0].items,
++            vec![ThreadItem::ImageGeneration(ImageGenerationItem {
++                id: "ig_hosted-1".to_string(),
++                status: "completed".to_string(),
++                revised_prompt: Some("Materialized prompt".to_string()),
++                result: "bWF0ZXJpYWxpemVk".to_string(),
++                transparent_background: Some(true),
++                failure: None,
++                saved_path: Some(saved_path),
++            })]
++        );
++    }
++
+     #[test]
+     fn preserves_command_plugin_id_and_redacts_secrets_across_legacy_upsert() {
+         let turn_id = "turn-1";
+diff --git a/codex-rs/core/src/stream_events_utils.rs b/codex-rs/core/src/stream_events_utils.rs
+index 53afbf1..2458dab 100644
+--- a/codex-rs/core/src/stream_events_utils.rs
++++ b/codex-rs/core/src/stream_events_utils.rs
+@@ -422,9 +422,12 @@ pub(crate) async fn handle_non_tool_response_item(
+     );
+ 
+     match item {
++        // Provider-hosted image generation is already complete. Project it as a turn item rather
++        // than routing it through the client-side image generation tool a second time.
+         ResponseItem::Message { .. }
+         | ResponseItem::Reasoning { .. }
+-        | ResponseItem::WebSearchCall { .. } => {
++        | ResponseItem::WebSearchCall { .. }
++        | ResponseItem::ImageGenerationCall { .. } => {
+             let mut turn_item = parse_turn_item(item)?;
+             finalize_turn_item(sess, contributor_policy, &mut turn_item, plan_mode).await;
+             Some(turn_item)
+diff --git a/codex-rs/core/src/stream_events_utils_tests.rs b/codex-rs/core/src/stream_events_utils_tests.rs
+index 20893b7..8302882 100644
+--- a/codex-rs/core/src/stream_events_utils_tests.rs
++++ b/codex-rs/core/src/stream_events_utils_tests.rs
+@@ -8,6 +8,7 @@ use super::last_assistant_message_from_item;
+ use super::response_item_may_include_external_context;
+ use crate::session::step_context::StepContext;
+ use crate::session::tests::make_session_and_context;
++use crate::session::tests::make_session_and_context_with_rx;
+ use crate::session::tests::tool_registry_for_test_step;
+ use crate::tools::ToolRouter;
+ use crate::tools::parallel::ToolCallRuntime;
+@@ -16,6 +17,7 @@ use codex_extension_api::ExtensionData;
+ use codex_extension_api::TurnItemContributor;
+ use codex_protocol::ResponseItemId;
+ use codex_protocol::items::AgentMessageContent;
++use codex_protocol::items::ImageGenerationItem;
+ use codex_protocol::items::TurnItem;
+ use codex_protocol::memory_citation::MemoryCitation;
+ use codex_protocol::models::ContentItem;
+@@ -25,7 +27,9 @@ use codex_protocol::models::LocalShellExecAction;
+ use codex_protocol::models::LocalShellStatus;
+ use codex_protocol::models::MessagePhase;
+ use codex_protocol::models::ResponseItem;
++use codex_protocol::protocol::EventMsg;
+ use pretty_assertions::assert_eq;
++use serde_json::json;
+ use std::sync::Arc;
+ use tokio_util::sync::CancellationToken;
+ 
+@@ -45,6 +49,158 @@ fn assistant_output_text_with_phase(text: &str, phase: Option<MessagePhase>) ->
+     }
+ }
+ 
++fn hosted_image_generation_output() -> ResponseItem {
++    ResponseItem::ImageGenerationCall {
++        id: Some(ResponseItemId::with_suffix("ig", "hosted-1")),
++        status: "completed".to_string(),
++        revised_prompt: Some("A product image on a neutral background".to_string()),
++        result: "cG5n".to_string(),
++        internal_chat_message_metadata_passthrough: None,
++    }
++}
++
++fn expected_hosted_image_generation_item() -> ImageGenerationItem {
++    ImageGenerationItem {
++        id: "ig_hosted-1".to_string(),
++        status: "completed".to_string(),
++        revised_prompt: Some("A product image on a neutral background".to_string()),
++        result: "cG5n".to_string(),
++        saved_path: None,
++    }
++}
++
++#[tokio::test]
++async fn hosted_image_generation_is_projected_without_dispatching_a_tool() {
++    let (session, turn_context, rx) = make_session_and_context_with_rx().await;
++    let provisional = handle_non_tool_response_item(
++        session.as_ref(),
++        TurnItemContributorPolicy::Skip,
++        &hosted_image_generation_output(),
++        /*plan_mode*/ false,
++    )
++    .await
++    .expect("hosted image generation should parse");
++
++    let TurnItem::ImageGeneration(image) = provisional else {
++        panic!("expected image generation item");
++    };
++    assert_eq!(image, expected_hosted_image_generation_item());
++
++    let step_context = StepContext::for_test(Arc::clone(&turn_context));
++    let (registry, hosted_specs) = tool_registry_for_test_step(step_context.as_ref());
++    let router = Arc::new(ToolRouter::from_registry(
++        step_context.turn.as_ref(),
++        registry,
++        hosted_specs,
++        &Default::default(),
++    ));
++    let step_context = step_context.with_tool_router_for_test(router);
++    let tracker = Arc::new(tokio::sync::Mutex::new(TurnDiffTracker::new()));
++    let tool_runtime = ToolCallRuntime::new(Arc::clone(&session), step_context, tracker);
++    let mut ctx = HandleOutputCtx {
++        sess: session,
++        turn_context: Arc::clone(&turn_context),
++        turn_store: Arc::new(ExtensionData::new(turn_context.sub_id.clone())),
++        tool_runtime,
++        cancellation_token: CancellationToken::new(),
++    };
++
++    let output = handle_output_item_done(
++        &mut ctx,
++        hosted_image_generation_output(),
++        /*previously_active_item*/ None,
++    )
++    .await
++    .expect("hosted image generation should complete");
++
++    assert_eq!(
++        (
++            output.tool_future.is_some(),
++            output.needs_follow_up,
++            output.last_agent_message,
++        ),
++        (false, false, None),
++    );
++
++    let started = rx.recv().await.expect("image item should start");
++    let EventMsg::ItemStarted(started) = started.msg else {
++        panic!("expected item started event");
++    };
++    let TurnItem::ImageGeneration(started_image) = started.item else {
++        panic!("expected started image generation item");
++    };
++    assert_eq!(started_image, expected_hosted_image_generation_item());
++
++    let begin = rx.recv().await.expect("legacy image lifecycle should begin");
++    let EventMsg::ImageGenerationBegin(begin) = begin.msg else {
++        panic!("expected legacy image generation begin event");
++    };
++    assert_eq!(
++        serde_json::to_value(begin).expect("serialize image generation begin"),
++        json!({"call_id": "ig_hosted-1"}),
++    );
++
++    let completed = rx.recv().await.expect("image item should complete");
++    let EventMsg::ItemCompleted(completed) = completed.msg else {
++        panic!("expected item completed event");
++    };
++    let TurnItem::ImageGeneration(completed_image) = completed.item else {
++        panic!("expected completed image generation item");
++    };
++    assert_eq!(completed_image, expected_hosted_image_generation_item());
++
++    let end = rx.recv().await.expect("legacy image lifecycle should end");
++    let EventMsg::ImageGenerationEnd(end) = end.msg else {
++        panic!("expected legacy image generation end event");
++    };
++    assert_eq!(
++        serde_json::to_value(end).expect("serialize image generation end"),
++        json!({
++            "call_id": "ig_hosted-1",
++            "status": "completed",
++            "revised_prompt": "A product image on a neutral background",
++            "result": "cG5n",
++        }),
++    );
++    let raw = rx
++        .recv()
++        .await
++        .expect("raw image response item should persist");
++    let EventMsg::RawResponseItem(raw) = raw.msg else {
++        panic!("expected raw response item event");
++    };
++    let ResponseItem::ImageGenerationCall {
++        id,
++        status,
++        revised_prompt,
++        result,
++        internal_chat_message_metadata_passthrough,
++    } = raw.item
++    else {
++        panic!("expected raw hosted image generation response item");
++    };
++    assert_eq!(
++        (
++            id.map(|id| id.to_string()),
++            status,
++            revised_prompt,
++            result,
++            internal_chat_message_metadata_passthrough.and_then(|metadata| metadata.turn_id),
++        ),
++        (
++            Some("ig_hosted-1".to_string()),
++            "completed".to_string(),
++            Some("A product image on a neutral background".to_string()),
++            "cG5n".to_string(),
++            Some(turn_context.sub_id.clone()),
++        ),
++    );
++    assert!(
++        rx.try_recv().is_err(),
++        "no tool execution or follow-up events expected"
++    );
++}
++
+ #[test]
+ fn external_context_pollution_items_include_web_search_and_tool_search() {
+     let polluting_items = [
+diff --git a/codex-rs/core/tests/suite/model_switching.rs b/codex-rs/core/tests/suite/model_switching.rs
+index e5232fe..98bf2af 100644
+--- a/codex-rs/core/tests/suite/model_switching.rs
++++ b/codex-rs/core/tests/suite/model_switching.rs
+@@ -17,6 +17,8 @@ use codex_protocol::config_types::ReasoningSummary;
+ use codex_protocol::config_types::SERVICE_TIER_DEFAULT_REQUEST_VALUE;
+ use codex_protocol::config_types::ServiceTier;
+ use codex_protocol::config_types::Settings;
++use codex_protocol::items::ImageGenerationItem;
++use codex_protocol::items::TurnItem;
+ use codex_protocol::models::BaseInstructionsProvenance;
+ use codex_protocol::models::PermissionProfile;
+ use codex_protocol::openai_models::ConfigShellToolType;
+@@ -1089,6 +1091,43 @@ async fn generated_image_is_replayed_for_image_capable_models() -> Result<()> {
+             image_model_slug.to_string(),
+         ))
+         .await?;
++    let expected_image = ImageGenerationItem {
++        id: "ig_123".to_string(),
++        status: "completed".to_string(),
++        revised_prompt: Some("lobster".to_string()),
++        result: "Zm9v".to_string(),
++        saved_path: None,
++    };
++    let EventMsg::ItemStarted(started) = wait_for_event(&test.codex, |event| {
++        matches!(
++            event,
++            EventMsg::ItemStarted(started)
++                if matches!(&started.item, TurnItem::ImageGeneration(_))
++        )
++    })
++    .await
++    else {
++        unreachable!("event predicate only accepts item started");
++    };
++    let TurnItem::ImageGeneration(started_image) = started.item else {
++        unreachable!("event predicate only accepts started image generation items");
++    };
++    assert_eq!(started_image, expected_image.clone());
++    let EventMsg::ItemCompleted(completed) = wait_for_event(&test.codex, |event| {
++        matches!(
++            event,
++            EventMsg::ItemCompleted(completed)
++                if matches!(&completed.item, TurnItem::ImageGeneration(_))
++        )
++    })
++    .await
++    else {
++        unreachable!("event predicate only accepts item completed");
++    };
++    let TurnItem::ImageGeneration(completed_image) = completed.item else {
++        unreachable!("event predicate only accepts completed image generation items");
++    };
++    assert_eq!(completed_image, expected_image);
+     wait_for_event(&test.codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+ 
+     test.codex
+-- 
+2.45.2.windows.1

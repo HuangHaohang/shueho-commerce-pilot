@@ -11,9 +11,11 @@ import {
   LoaderCircle,
   Megaphone,
   MessageSquareText,
+  PackageOpen,
   PanelsTopLeft,
   Plus,
   ShoppingBag,
+  ShieldCheck,
   Video,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -230,9 +232,11 @@ export function CreativeMethodPickerPanel({
   onSelect: (method: CreativeMethod) => void;
 }) {
   const groupIcons: Record<CreativeMethodGroupId, typeof ShoppingBag> = {
+    campaign: PackageOpen,
     listing: ShoppingBag,
     promotion: Megaphone,
     video: Clapperboard,
+    review: ShieldCheck,
   };
   const groups = Object.keys(creativeMethodGroupLabels) as CreativeMethodGroupId[];
 

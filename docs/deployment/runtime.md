@@ -4,17 +4,18 @@ This is a web application. Deployment machines do not need a preinstalled global
 
 ## Runtime Ownership
 
-The application declares `@openai/codex` in `package.json`. During deployment, install dependencies from `package-lock.json`; the Codex App Server runtime is then resolved from the application dependency tree.
+The application declares `@openai/codex` in `package.json` for protocol compatibility and development fallback. Production uses the reviewed application-owned binary built from the pinned open-source commit and hash-checked patch set under `vendor/codex`.
 
-Resolution order:
+Development resolution order:
 
 1. `CODEX_BIN`, only when explicitly set.
-2. `./node_modules/.bin/codex`.
-3. `./node_modules/@openai/codex/bin/codex.js`.
-4. `./node_modules/@openai/codex-<platform>/vendor/<target>/bin/codex`.
-5. global `codex`, only outside `NODE_ENV=production` for local development fallback.
+2. `.runtime/bin/<platform>/codex[.exe]` when its adjacent manifest, binary hash, patch series, license/notice, platform and version all verify.
+3. the platform-native `@openai/codex-<platform>` binary.
+4. npm wrapper/global Codex only as an unpatched local-development fallback.
 
-Production fails fast if no application-owned Codex runtime is runnable.
+Production requires an absolute `CODEX_BIN` pointing at the root-owned image artifact plus its adjacent manifest. A missing, symlinked, untrusted, wrong-platform, wrong-version or hash-mismatched artifact fails fast; production never falls back to npm/global Codex. Protocol generation uses the same resolver, preventing build/runtime schema drift.
+
+Windows runtime builds deterministically normalize upstream state-store SQL migrations to CRLF before Rust compilation. This matches the official Windows Codex migration-byte contract used by SQLx checksums and lets the patched runtime open state previously created by `@openai/codex` without mutating the database migration ledger. Linux and macOS builds retain LF migrations.
 
 ## Enterprise Deployment Unit
 
@@ -33,7 +34,7 @@ The current Next.js BFF has one static `COMMERCE_GATEWAY_URL`; a general tenant-
 
 ## Container Deployment
 
-Build:
+Build (the Dockerfile first compiles and tests the exact `rust-v0.150.1` + `shueho.1` Harness patch in a pinned Rust stage, then verifies the artifact again in Node build and runtime stages):
 
 ```bash
 docker build -t shueho-commerce-pilot .
@@ -168,7 +169,7 @@ The generated Codex config disables shell, unified exec, raw local-path view-ima
 
 Provider-backed Web Search uses the application-owned `commerce_web.search` stdio MCP tool, and multi-agent collaboration is enabled. The generated MCP config exposes only that read-only tool, forwards provider configuration by environment-variable name, and runs the bundled MCP server artifact from the application image. The MCP process executes `/v1/responses` Web Search calls; it does not expose generic process or host-network tools to users. Gateway also keeps native `web_search = "live"` enabled, and the managed Hook allowlist includes both MCP and native search names. Subagents inherit the same restricted runtime. Raw local-path image reading remains disabled until App Server is isolated with a tenant-only artifact mount; use an application-owned artifact id boundary instead.
 
-There is no direct Gateway or public BFF image-generation endpoint. Image creation uses the native Harness `image_gen` tool inside an admitted Turn. The internal Provider relay accepts only `models`, `responses`, `responses/compact`, `images/generations`, and `images/edits`, requires the derived actor header, strips it before forwarding, and never accepts the BFF service token as a substitute. Gateway persists completed `imageGeneration` Items, strips image bytes and host paths from browser events/history, and keeps artifact reads ownership-checked and non-cacheable.
+There is no direct Gateway or public BFF image-generation endpoint. Image creation stays inside an admitted Harness Turn. The patched Harness converts completed Provider-hosted Responses `image_generation_call` output into native `imageGeneration` Items, while the namespace extension path remains available for Image API providers. The internal relay accepts only `models`, `responses`, `responses/compact`, `images/generations`, and `images/edits`, requires the derived actor header, strips it before forwarding, and never accepts the BFF service token as a substitute. Gateway persists completed native Items, strips image bytes and host paths from browser events/history, and keeps artifact reads ownership-checked and non-cacheable. Provider request/stream retries are zero and the SSE idle timeout is 120 seconds so an uncertain paid call is never replayed invisibly.
 
 Gateway startup is successful only after the current App Server process reloads MCP config and reports `commerce_web.search` in `mcpServerStatus/list`. Production health checks must require HTTP 200 and `managedMcp.state=ready`; a configured-only flag is not acceptance. Set `COMMERCE_WEB_SEARCH_TIMEOUT_MS` and `COMMERCE_WEB_SEARCH_MAX_ATTEMPTS` so the generated MCP tool timeout exceeds the provider retry budget.
 

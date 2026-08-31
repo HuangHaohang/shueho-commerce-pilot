@@ -211,6 +211,9 @@ function renderConfig(scenario: ProviderScenario, baseUrl: string): string {
     ...(actorAuthorization
       ? ['http_headers = { "x-openai-actor-authorization" = "smoke-actor-token" }']
       : []),
+    "request_max_retries = 0",
+    "stream_max_retries = 0",
+    "stream_idle_timeout_ms = 120000",
     "supports_websockets = false",
     "",
   );

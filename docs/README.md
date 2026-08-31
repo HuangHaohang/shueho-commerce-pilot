@@ -36,4 +36,8 @@ Read documents in this order when joining the project or starting an AI-assisted
 - [`config/custom-model-provider.md`](config/custom-model-provider.md) - custom Responses-compatible provider configuration.
 - [`../designs/DESIGN.md`](../designs/DESIGN.md) - frontend visual system and UX rules.
 
+## Product Research
+
+- [`research/competitive-commerce-workbench-2026-09-01.md`](research/competitive-commerce-workbench-2026-09-01.md) - official-source competitor review and the evidence-to-decision-to-campaign product direction implemented on 2026-09-01.
+
 When implementation changes one of these contracts, update the corresponding document in the same pull request.

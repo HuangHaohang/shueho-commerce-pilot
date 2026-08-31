@@ -117,7 +117,7 @@ test("maps creative projects to the orchestrator plus an allowlisted specialist 
   });
 });
 
-test("keeps creative revisions in Harness history and uses native image generation", () => {
+test("keeps creative revisions in Harness history and accepts both Harness image paths", () => {
   assert.equal(isManagedWorkflowId("commerce-creative-project"), true);
 
   const skill = renderManagedWorkflowSkill("commerce-creative-project");
@@ -125,8 +125,9 @@ test("keeps creative revisions in Harness history and uses native image generati
   assert.match(skill, /every later user message in this thread as feedback/);
   assert.match(skill, /return the complete current canvas deliverable, not a patch/);
   assert.match(skill, /native request_user_input/);
-  assert.match(skill, /use the Harness-native image_gen tool/);
-  assert.match(skill, /native imageGeneration Item is the authority/);
+  assert.match(skill, /Provider-hosted Responses image generation/);
+  assert.match(skill, /namespace image_gen extension/);
+  assert.match(skill, /completed native imageGeneration Item is the sole artifact authority and success gate/);
   assert.match(skill, /commerce_product\.get_selected_product_context/);
   assert.match(skill, /commerce_web\.search/);
   assert.match(skill, /current official documentation/);
@@ -135,11 +136,14 @@ test("keeps creative revisions in Harness history and uses native image generati
   assert.match(skill, /Without one, never claim that a generated concept is visually identical/);
   assert.match(skill, /Do not hard-code marketplace image dimensions/);
   assert.match(skill, /Rendered video is unavailable/);
-  assert.match(skill, /Never call an image provider directly/);
+  assert.match(skill, /Never call an image provider or image endpoint directly/);
+  assert.match(skill, /ask Gateway to issue a duplicate Provider request/);
   assert.match(skill, /Do not call shell, filesystem, process/);
   assert.match(skill, /one or more canvasBlocks/);
   assert.match(skill, /Do not return canvas coordinates/);
-  assert.match(skill, /no completed image artifact/);
+  assert.match(skill, /no native imageGeneration Item completed/);
+  assert.doesNotMatch(skill, /use (?:only )?(?:the )?Harness-native image_gen tool/);
+  assert.doesNotMatch(skill, /If image_gen was not called/);
   assert.doesNotMatch(skill, /thread\/inject_items/);
 });
 
@@ -173,14 +177,74 @@ test("renders every specialist as an explicit-only application Skill", () => {
   }
 });
 
-test("detail-page generation requires tenant-owned media for actual native images", () => {
+test("image specialists accept both Harness paths and require native Item completion", () => {
   const mainImageSkill = renderCreativeMethodSkill("main_image");
-  assert.match(mainImageSkill, /task is not complete until image_gen returns a completed native imageGeneration Item/);
-  const skill = renderCreativeMethodSkill("detail_page");
-  assert.match(skill, /tenant-owned product reference media/);
-  assert.match(skill, /native image_gen/);
-  assert.match(skill, /one by one/);
-  assert.match(skill, /deliver only the page structure, copy, image-slot briefs/);
+  const gallerySkill = renderCreativeMethodSkill("gallery_images");
+  const detailPageSkill = renderCreativeMethodSkill("detail_page");
+
+  for (const skill of [mainImageSkill, gallerySkill, detailPageSkill]) {
+    assert.match(skill, /Provider-hosted Responses image generation/);
+    assert.match(skill, /namespace image_gen extension/);
+    assert.match(skill, /completed native imageGeneration Item|native imageGeneration Items complete/);
+    assert.doesNotMatch(skill, /Use only the Harness-native image_gen tool/);
+    assert.doesNotMatch(skill, /task is not complete until image_gen returns/);
+  }
+
+  assert.match(mainImageSkill, /sufficient tenant-owned reference media/);
+  assert.match(detailPageSkill, /tenant-owned product reference media/);
+  assert.match(detailPageSkill, /one by one/);
+  assert.match(detailPageSkill, /deliver only the page structure, copy, image-slot briefs/);
+});
+
+test("campaign packs require a current Product revision and four reviewable canvas contracts", () => {
+  const runtimeRoot = "/srv/commerce-runtime";
+  const turn = buildManagedWorkflowTurn(
+    runtimeRoot,
+    "commerce-creative-project",
+    "为新品创建整套 Campaign 资产包",
+    "campaign_pack",
+  );
+  const skill = renderCreativeMethodSkill("campaign_pack");
+
+  assert.deepEqual(turn.input[2], {
+    type: "skill",
+    name: "commerce-campaign-pack",
+    path: creativeMethodSkillPath(runtimeRoot, "campaign_pack"),
+  });
+  assert.match(skill, /read the current Product revision through commerce_product/);
+  assert.match(skill, /commerce_product\.get_selected_product_context/);
+  assert.match(skill, /Do not produce a campaign pack until at least one current canonical Product revision/);
+  assert.match(skill, /key campaign-brief/);
+  assert.match(skill, /key claim-matrix/);
+  assert.match(skill, /key channel-derivative-matrix/);
+  assert.match(skill, /key qa-gate/);
+  assert.match(skill, /product fidelity, claim evidence, brand consistency, and channel rules/);
+  assert.match(skill, /must be hold with unavailable recorded/);
+  assert.match(skill, /Provider-hosted Responses image generation/);
+  assert.match(skill, /namespace image_gen extension/);
+  assert.match(skill, /actual image succeeds only when a completed native imageGeneration Item exists/);
+  assert.match(skill, /omit the type=image block/);
+  assert.match(skill, /never publishes, schedules, spends media budget/);
+  assert.match(skill, /never.*claims that a video was rendered/i);
+  assert.doesNotMatch(skill, /call (?:the )?Provider directly/i);
+});
+
+test("creative QA keeps four evidence gates separate and holds unavailable authority", () => {
+  const skill = renderCreativeMethodSkill("creative_qa");
+
+  assert.match(skill, /current canonical Product revision through commerce_product/);
+  assert.match(skill, /key=qa-product-fidelity/);
+  assert.match(skill, /key=qa-claim-evidence/);
+  assert.match(skill, /key=qa-brand-consistency/);
+  assert.match(skill, /key=qa-channel-rules/);
+  assert.match(skill, /Every status cell must contain only pass, hold, or fail/);
+  assert.match(skill, /use status=hold and write unavailable/);
+  assert.match(skill, /Missing brand rules are hold\/unavailable, not pass/);
+  assert.match(skill, /Missing or ambiguous current rules are hold\/unavailable, not pass/);
+  assert.match(skill, /Do not produce an aggregate score/);
+  assert.match(skill, /does not silently rewrite, regenerate, approve, or publish/);
+  assert.match(skill, /never publishes, schedules, changes a commerce system/);
+  assert.match(skill, /never.*fabricates a native image or rendered video/i);
 });
 
 test("rejects specialist methods outside the creative project workflow", () => {

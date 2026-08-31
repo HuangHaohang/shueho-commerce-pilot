@@ -20,6 +20,9 @@ import { readWebSourcesFromToolItem } from "@/lib/agent/web-sources";
 import { reconcileActivityStatus } from "@/lib/agent/request-user-input-lifecycle";
 import { readDynamicToolActivity, readMcpToolActivity } from "@/lib/agent/tool-activity";
 import { releaseAgentTurnLeaseForTurn } from "@/lib/enterprise/quota";
+import { authorizeProductCatalogAction } from "@/lib/product-catalog/authorization";
+import { listBoundProductContextsByTurnIds } from "@/lib/product-catalog/repository";
+import type { ProductSummary } from "@/lib/product-catalog/types";
 
 export async function GET(request: Request, routeContext: { params: Promise<{ threadId: string }> }) {
   const { threadId } = await routeContext.params;
@@ -66,7 +69,18 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
         { status },
       );
     }
-    const normalized = normalizeThreadHistory(payload, record, userInputAnswers, messageFeedback);
+    const productsByTurn = await readHistoryProductContexts(
+      enterpriseContext,
+      threadId,
+      payload,
+    );
+    const normalized = normalizeThreadHistory(
+      payload,
+      record,
+      userInputAnswers,
+      messageFeedback,
+      productsByTurn,
+    );
     if (!cursor) {
       await updateAgentThreadStatus(
         threadId,
@@ -95,6 +109,7 @@ function normalizeThreadHistory(
   record: Awaited<ReturnType<typeof getAgentThreadForUser>>,
   userInputAnswers: AgentUserInputAnswer[],
   messageFeedback: AgentMessageFeedback[],
+  productsByTurn: ReadonlyMap<string, ProductSummary[]>,
 ) {
   const result = isRecord(payload.result) ? payload.result : null;
   const thread = result && isRecord(result.thread) ? result.thread : null;
@@ -177,6 +192,9 @@ function normalizeThreadHistory(
             content: text,
             skillName,
             attachments: variant === "default" ? turnAttachments.map(({ turnId: _turnId, ...attachment }) => attachment) : [],
+            ...(variant === "default"
+              ? projectMessageProducts(turnId ? productsByTurn.get(turnId) : undefined)
+              : {}),
             clientId,
             delivery: "committed",
             variant,
@@ -263,6 +281,54 @@ function normalizeThreadHistory(
     activities,
     images,
     nextCursor: typeof payload.nextCursor === "string" && payload.nextCursor ? payload.nextCursor : null,
+  };
+}
+
+async function readHistoryProductContexts(
+  enterpriseContext: Parameters<typeof authorizeProductCatalogAction>[0],
+  threadId: string,
+  payload: Record<string, unknown>,
+): Promise<ReadonlyMap<string, ProductSummary[]>> {
+  const turnIds = readThreadTurnIds(payload);
+  if (turnIds.length === 0) return new Map();
+  try {
+    const authorized = await authorizeProductCatalogAction(
+      { ...enterpriseContext, rootThreadId: threadId },
+      "product_catalog.read",
+    );
+    if (!authorized) return new Map();
+    return await listBoundProductContextsByTurnIds(enterpriseContext, { threadId, turnIds });
+  } catch {
+    // Product history is an optional, fail-closed projection. A catalog read or
+    // authorization outage must not expose context and must not hide the owned
+    // Harness conversation itself.
+    return new Map();
+  }
+}
+
+function readThreadTurnIds(payload: Record<string, unknown>): string[] {
+  const result = isRecord(payload.result) ? payload.result : null;
+  const thread = result && isRecord(result.thread) ? result.thread : null;
+  const turns = thread && Array.isArray(thread.turns) ? thread.turns.filter(isRecord) : [];
+  return [...new Set(
+    turns
+      .map((turn) => typeof turn.id === "string" ? turn.id : "")
+      .filter((turnId) => AGENT_ID_PATTERN.test(turnId)),
+  )];
+}
+
+function projectMessageProducts(products: ProductSummary[] | undefined) {
+  return {
+    products: (products ?? []).slice(0, 20).map((product) => ({
+      id: product.id,
+      title: product.title,
+      spu: product.spu,
+      status: product.status,
+      variantCount: product.variantCount,
+      sourceName: product.sourceName,
+      updatedAt: product.updatedAt,
+      imageUrl: product.imageUrl,
+    })),
   };
 }
 

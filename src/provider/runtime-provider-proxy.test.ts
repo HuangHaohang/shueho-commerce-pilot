@@ -97,7 +97,7 @@ test("runtime provider identity is stable for one configured gateway and scoped 
   );
 });
 
-test("generated Codex config uses the actor-authorized loopback provider without the upstream key env", async () => {
+test("generated Codex config uses the actor-authorized relay and disables uncertain stream replays", async () => {
   const directory = await mkdtemp(join(tmpdir(), "commerce-provider-config-"));
   const config = {
     ...createConfig("https://provider.example/v1"),
@@ -110,6 +110,11 @@ test("generated Codex config uses the actor-authorized loopback provider without
     const identity = createRuntimeProviderProxyIdentity(config);
     assert.match(content, new RegExp(`base_url = ${escapeRegExp(JSON.stringify(identity.baseUrl))}`));
     assert.ok(content.includes(`"${runtimeProviderActorAuthorizationHeader}" = ${JSON.stringify(identity.actorAuthorization)}`));
+    assert.match(content, /^request_max_retries = 0$/m);
+    assert.match(content, /^stream_max_retries = 0$/m);
+    assert.match(content, /^stream_idle_timeout_ms = 120000$/m);
+    assert.doesNotMatch(content, /^request_max_retries = [1-9][0-9]*$/m);
+    assert.doesNotMatch(content, /^stream_max_retries = [1-9][0-9]*$/m);
     assert.ok(!content.includes(`env_key = ${JSON.stringify(config.provider.apiKeyEnvName)}`));
     assert.ok(!content.includes(config.provider.apiKey ?? "upstream-provider-key"));
   } finally {

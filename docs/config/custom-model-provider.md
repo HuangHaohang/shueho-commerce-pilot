@@ -45,9 +45,9 @@ base_url = "http://127.0.0.1:8787/api/internal/provider/v1"
 wire_api = "responses"
 requires_openai_auth = false
 http_headers = { "x-openai-actor-authorization" = "<gateway-derived-runtime-actor>" }
-request_max_retries = 4
-stream_max_retries = 5
-stream_idle_timeout_ms = 300000
+request_max_retries = 0
+stream_max_retries = 0
+stream_idle_timeout_ms = 120000
 ```
 
 Then provide the secret to that tenant's service process:
@@ -104,15 +104,17 @@ The model id is not added to the end-user model selector. Gateway verifies the e
 
 ## Image Generation
 
-The app-owned Codex runtime synchronizes the built-in `imagegen` system Skill and enables `features.image_generation`. Codex 0.150.1 exposes that extension only to Codex-backend or actor-authorized Providers, so the generated custom Provider points at the Gateway's actor-authenticated loopback relay. Gateway verifies both `modelProvider/capabilities/read.imageGeneration` and namespace-tool support before reporting native image generation available. Image requests use the native Harness tool and Item lifecycle:
+The app-owned Codex runtime enables `features.image_generation` and points the custom Provider at the Gateway's actor-authenticated loopback relay. Gateway treats `modelProvider/capabilities/read.imageGeneration` as the capability authority; namespace-tool support is required only when the selected Provider uses the `image_gen` extension path. Two Provider wire paths converge on one Harness Item contract:
 
 ```text
-image_gen -> native imageGeneration Item -> tenant artifact storage
+image_gen namespace extension -> Provider Image API -> Harness imageGeneration Item
+Provider-hosted /responses image_generation_call -> patched Harness imageGeneration Item
+Harness imageGeneration Item -> tenant artifact storage
 ```
 
-The relay accepts only model listing, Responses, Responses compaction, image generation, and image edit routes. It validates the runtime actor, strips that header, injects the upstream CPA key, and streams the one upstream response. It does not run a second model call or create an application-owned image tool.
+The relay accepts only model listing, Responses, Responses compaction, image generation, and image edit routes. It validates the runtime actor, strips that header, injects the upstream CPA key, and streams the one upstream response. The application-owned `shueho.1` Harness patch projects completed hosted `image_generation_call` output in real time and during history replay; it never dispatches a second image call. The relay and Gateway do not create an application-owned image tool or synthesize an Item.
 
-Codex owns image intent detection, Skill instructions, provider execution, item lifecycle, usage and Turn continuation. Gateway consumes the completed native Item, saves the base64 result under `$CODEX_HOME/generated_images`, and stores non-PII metadata under `$CODEX_HOME/generated_image_metadata`. Before SSE or history reaches the BFF, Gateway removes image bytes and `savedPath`; the browser receives only an ownership-checked artifact URL.
+Codex owns image intent detection, Skill instructions, provider execution, item lifecycle, usage and Turn continuation. Gateway consumes the completed native Item, saves the base64 result under `$CODEX_HOME/generated_images`, and stores non-PII metadata under `$CODEX_HOME/generated_image_metadata`. Before SSE or history reaches the BFF, Gateway removes image bytes and `savedPath`; the browser receives only an ownership-checked artifact URL. A Provider request or stream failure is treated as uncertain: retries are disabled and 120 seconds without SSE progress terminates the attempt for explicit reconciliation/retry.
 
 The image model is fixed by `COMMERCE_IMAGE_MODEL=gpt-image-2`. Other image models returned from `/models` are not silently selected.
 

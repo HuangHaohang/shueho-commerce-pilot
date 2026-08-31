@@ -10,6 +10,7 @@ import { isAgentWorkflowId, isWorkflowAllowedForRecipeId } from "@/lib/agent/tas
 import {
   isAppOwnedManagedSkillName,
   isCreativeMethod,
+  type CreativeMethod,
 } from "@/lib/creative/creative-method-contract";
 import {
   activateAgentTurnLease,
@@ -33,6 +34,13 @@ const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const attachmentIdPattern = /^[0-9a-f-]{36}$/i;
 const productIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const productContextModes = new Set(["auto", "selected", "none"]);
+const selectedProductCreativeMethods = new Set<CreativeMethod>([
+  "campaign_pack",
+  "main_image",
+  "gallery_images",
+  "creative_qa",
+]);
+const referenceImageCreativeMethods = new Set<CreativeMethod>(["main_image", "gallery_images"]);
 
 export async function POST(request: Request, context: { params: Promise<{ threadId: string }> }) {
   const { threadId } = await context.params;
@@ -142,6 +150,26 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   }
   if ((productContextMode === "selected") !== (productIds.length > 0)) {
     return NextResponse.json({ error: "仅选中产品模式可以携带产品，并且至少需要选择一个产品。" }, { status: 400 });
+  }
+  if (
+    creativeMethod &&
+    selectedProductCreativeMethods.has(creativeMethod) &&
+    productContextMode !== "selected"
+  ) {
+    return NextResponse.json(
+      { error: "该创作方式必须先选择至少一个产品版本。", code: "CREATIVE_PRODUCT_REQUIRED" },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
+  }
+  if (
+    creativeMethod &&
+    referenceImageCreativeMethods.has(creativeMethod) &&
+    attachmentIds.length === 0
+  ) {
+    return NextResponse.json(
+      { error: "商品主图和副图生成必须在本轮上传商品参考图。", code: "CREATIVE_REFERENCE_IMAGE_REQUIRED" },
+      { status: 400, headers: { "Cache-Control": "no-store" } },
+    );
   }
   if (insightMethod === "product_retrospective" && productContextMode !== "selected") {
     return NextResponse.json({ error: "产品复盘必须选择至少一个产品。" }, { status: 400 });

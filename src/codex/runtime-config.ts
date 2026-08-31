@@ -262,9 +262,14 @@ function renderConfig(
     'wire_api = "responses"',
     "requires_openai_auth = false",
     `http_headers = { ${tomlString(runtimeProviderActorAuthorizationHeader)} = ${tomlString(runtimeProviderProxy.actorAuthorization)} }`,
-    "request_max_retries = 4",
-    "stream_max_retries = 5",
-    "stream_idle_timeout_ms = 300000",
+    // A Responses request can already have executed a paid built-in image call
+    // before either the response status or stream completion becomes uncertain.
+    // Never replay it implicitly; recovery is an explicit Harness retry after
+    // reconciliation. A provider must emit progress before the bounded idle
+    // deadline instead of relying on a long, silent paid request.
+    "request_max_retries = 0",
+    "stream_max_retries = 0",
+    "stream_idle_timeout_ms = 120000",
     "supports_websockets = false",
     "",
   );

@@ -34,6 +34,7 @@ import {
   isEndedRequestUserInputResponse,
   terminalTurnMessage,
 } from "./request-user-input-lifecycle";
+import type { ProductSummary } from "@/lib/products/catalog";
 
 export type { AgentMessageFeedbackRating } from "./message-feedback-contract";
 
@@ -59,6 +60,7 @@ export type ConversationMessage = {
   phase?: "commentary" | "final_answer" | null;
   skillName?: string | null;
   attachments?: ConversationAttachment[];
+  products?: ProductSummary[];
   feedback?: AgentMessageFeedbackRating | null;
   artifactStatus?: "missing_image" | null;
   status: "streaming" | "completed";
@@ -138,6 +140,10 @@ export type AgentSubmitOptions = {
   externalDataApprovalMode?: "always_ask" | "task" | "policy";
   productIds?: string[];
   productContextMode?: "auto" | "selected" | "none";
+  /** Browser-only product summaries used to render the optimistic user message. */
+  displayProducts?: ProductSummary[];
+  /** Browser-only acknowledgement hook; it runs only after the Turn is confirmed accepted. */
+  onTurnAccepted?: () => void;
 };
 
 export type AgentRetryOptions = Pick<AgentSubmitOptions, "externalDataApprovalMode">;
@@ -164,6 +170,13 @@ export function buildAgentTurnRequestBody(input: {
     productContextMode: input.options?.productContextMode ?? "none",
     clientRequestId: input.clientRequestId,
   };
+}
+
+export function isPersistedQueuedTurnResponse(
+  status: number,
+  payload: Record<string, unknown> | null,
+): boolean {
+  return status === 202 && payload?.queued === true;
 }
 
 export type AgentThreadSummary = {
@@ -261,6 +274,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const retryingMessageIdRef = useRef<string | null>(null);
   const pendingSubmitClientIdRef = useRef<string | null>(null);
   const pendingSubmitStartedAtRef = useRef<number | null>(null);
+  const pendingSubmitAcceptanceRef = useRef<{
+    clientId: string;
+    onAccepted: (() => void) | null;
+  } | null>(null);
   const pendingSteerClientIdRef = useRef<string | null>(null);
   const confirmedSteerClientIdRef = useRef<string | null>(null);
   const unconfirmedSteerRef = useRef<{
@@ -336,6 +353,13 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setActiveTurnId(nextClock.turnId);
     setLastTurnId(nextClock.turnId);
     setStartedAt(nextClock.startedAt);
+  }, []);
+
+  const confirmPendingSubmit = useCallback((clientId: string) => {
+    const pending = pendingSubmitAcceptanceRef.current;
+    if (!pending || pending.clientId !== clientId) return;
+    pendingSubmitAcceptanceRef.current = null;
+    pending.onAccepted?.();
   }, []);
 
   const handleGatewayEvent = useCallback((event: MessageEvent<string>) => {
@@ -490,6 +514,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const clientId = typeof item.clientId === "string" ? item.clientId : null;
         if (clientId) {
           if (pendingSubmitClientIdRef.current === clientId) {
+            confirmPendingSubmit(clientId);
             pendingSubmitClientIdRef.current = null;
             pendingSubmitStartedAtRef.current = null;
           }
@@ -593,8 +618,16 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       if (typeof turn.id === "string") {
         setLastTurnId(turn.id);
       }
+      if (
+        pendingSubmitClientIdRef.current &&
+        completedTurnId &&
+        activeTurnIdRef.current === completedTurnId
+      ) {
+        confirmPendingSubmit(pendingSubmitClientIdRef.current);
+      }
       pendingSubmitClientIdRef.current = null;
       pendingSubmitStartedAtRef.current = null;
+      pendingSubmitAcceptanceRef.current = null;
       activeTurnIdRef.current = null;
       runtimeInstanceIdRef.current = null;
       compactingRef.current = false;
@@ -628,7 +661,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       const itemError = isRecord(params.error) ? params.error : {};
       setError(typeof itemError.message === "string" ? itemError.message : "Agent 执行出现错误，正在等待任务终态。");
     }
-  }, [activateTurn, refreshQueue, threadId]);
+  }, [activateTurn, confirmPendingSubmit, refreshQueue, threadId]);
 
   const connectEventStream = useCallback(
     async (id: string) => {
@@ -710,7 +743,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         const pendingSubmitAccepted = Boolean(
           pendingSubmitClientId && authoritativeByClientId.has(pendingSubmitClientId),
         );
-        if (pendingSubmitAccepted) {
+        if (pendingSubmitAccepted && pendingSubmitClientId) {
+          confirmPendingSubmit(pendingSubmitClientId);
           pendingSubmitClientIdRef.current = null;
           pendingSubmitStartedAtRef.current = null;
         }
@@ -730,6 +764,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         }
 
         if (status === "connecting" && pendingSubmitClientId && !pendingSubmitAccepted) {
+          if (pendingSubmitAcceptanceRef.current?.clientId === pendingSubmitClientId) {
+            pendingSubmitAcceptanceRef.current = null;
+          }
           pendingSubmitClientIdRef.current = null;
           pendingSubmitStartedAtRef.current = null;
           setMessages((current) => current.filter((message) => message.clientId !== pendingSubmitClientId));
@@ -796,7 +833,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [activateTurn, connectEventStream, refreshPendingUserInput, refreshQueue, runtimeHealth?.available, runtimeHealth?.instanceId, status, threadId]);
+  }, [activateTurn, confirmPendingSubmit, connectEventStream, refreshPendingUserInput, refreshQueue, runtimeHealth?.available, runtimeHealth?.instanceId, status, threadId]);
 
   const setMessageFeedback = useCallback(
     async (
@@ -911,6 +948,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setRetryingMessageId(null);
     pendingSubmitClientIdRef.current = null;
     pendingSubmitStartedAtRef.current = null;
+    pendingSubmitAcceptanceRef.current = null;
     pendingSteerClientIdRef.current = null;
     confirmedSteerClientIdRef.current = null;
     unconfirmedSteerRef.current = null;
@@ -1093,6 +1131,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       const clientRequestId = crypto.randomUUID();
       pendingSubmitClientIdRef.current = clientRequestId;
       pendingSubmitStartedAtRef.current = Date.now();
+      pendingSubmitAcceptanceRef.current = {
+        clientId: clientRequestId,
+        onAccepted: options?.onTurnAccepted ?? null,
+      };
       const requestedTitle = "新任务";
       setMessages((current) => [
         ...current,
@@ -1105,6 +1147,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           clientId: clientRequestId,
           skillName: options?.displaySkillName ?? options?.skillName ?? null,
           attachments: pendingAttachments.map(({ file: _file, local: _local, ...attachment }) => attachment),
+          products: options?.displayProducts?.map((product) => ({ ...product })),
           delivery: "pending",
           status: "completed",
         },
@@ -1213,17 +1256,21 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
               activateTurn(retryTurnId);
               setMessages((current) => bindLatestUserMessageToTurn(current, retryTurnId));
             }
+            confirmPendingSubmit(clientRequestId);
             setStatus("running");
             return true;
           }
           throw new Error(responseError);
         }
-        if (response.status === 202 && payload?.queued === true) {
+        if (isPersistedQueuedTurnResponse(response.status, payload)) {
+          // The BFF has durably accepted this message into its owned queue, so
+          // the composer can cross the same acknowledgement boundary as a Turn.
+          confirmPendingSubmit(clientRequestId);
           pendingSubmitClientIdRef.current = null;
           pendingSubmitStartedAtRef.current = null;
           setMessages((current) => current.filter((item) => item.id !== optimisticMessageId));
           const queuedActiveTurnId =
-            typeof payload.activeTurnId === "string" ? payload.activeTurnId : null;
+            typeof payload?.activeTurnId === "string" ? payload.activeTurnId : null;
           if (!activeTurnIdRef.current && queuedActiveTurnId) {
             activateTurn(queuedActiveTurnId);
           }
@@ -1236,6 +1283,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           activateTurn(turnId);
           setMessages((current) => bindLatestUserMessageToTurn(current, turnId));
         }
+        confirmPendingSubmit(clientRequestId);
         setStatus("running");
         return true;
       } catch (submitError) {
@@ -1243,6 +1291,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setError("连接中断，正在向 Harness 核对任务是否已被接收。");
           setStatus("connecting");
           return true;
+        }
+        if (pendingSubmitAcceptanceRef.current?.clientId === clientRequestId) {
+          pendingSubmitAcceptanceRef.current = null;
         }
         pendingSubmitClientIdRef.current = null;
         pendingSubmitStartedAtRef.current = null;
@@ -1252,7 +1303,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         return false;
       }
     },
-    [activateTurn, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
+    [activateTurn, confirmPendingSubmit, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
   );
 
   const retryMessage = useCallback(
