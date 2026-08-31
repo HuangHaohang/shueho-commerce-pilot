@@ -51,6 +51,22 @@ test("stores tenant-bound text and image attachments and creates native turn inp
     assert.match(String(inputs[1]?.path), /thread_artifacts/);
     await store.bindToTurn(threadId, [document.id, image.id], "turn-attachment-1234");
     assert.equal((await store.get(threadId, image.id))?.turnId, "turn-attachment-1234");
+    const retryInputs = await store.buildRetryTurnInputs(
+      threadId,
+      "turn-attachment-1234",
+      scope,
+    );
+    assert.deepEqual(retryInputs.artifactIds, [document.id, image.id]);
+    assert.equal(retryInputs.inputs[0]?.type, "text");
+    assert.equal(retryInputs.inputs[1]?.type, "localImage");
+    await assert.rejects(
+      store.buildRetryTurnInputs(
+        threadId,
+        "turn-attachment-1234",
+        { ...scope, workspaceId: "workspace-2" },
+      ),
+      /own/i,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

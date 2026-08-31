@@ -7,6 +7,8 @@ import type {
 
 import {
   listCreativeCanvasDeliveries,
+  listCreativeCanvasSourceNodes,
+  parseCreativeCanvasBlocks,
   selectLatestCreativeCanvasDelivery,
 } from "./creative-canvas";
 
@@ -154,5 +156,94 @@ describe("creative canvas projection", () => {
       [assistantMessage({ id: "script", sequence: 8, turnId: "turn-script", content: structuredDraft({ deliverableType: "shooting_script" }) })],
       [generatedImage({ sequence: 6, turnId: "turn-image" })],
     )).toMatchObject({ kind: "document", deliverableType: "shooting_script", ordinal: 2 });
+  });
+
+  it("materializes structured document, image-layer and script-table nodes", () => {
+    const content = structuredDraft({
+      deliverableType: "gallery_images",
+      canvasBlocks: [
+        {
+          key: "hero-copy",
+          type: "document",
+          title: "主图卖点",
+          body: "轻量通勤，一包装下全天。",
+          columns: [],
+          rows: [],
+          textLayers: [],
+        },
+        {
+          key: "hero-image",
+          type: "image",
+          title: "商品主图",
+          body: "保持商品主体准确。",
+          columns: [],
+          rows: [],
+          textLayers: [{ id: "headline", text: "轻量通勤", x: 8, y: 10, width: 45, fontSize: 28, align: "left" }],
+        },
+      ],
+    });
+    const sources = listCreativeCanvasSourceNodes(
+      [assistantMessage({ id: "message-canvas", sequence: 3, turnId: "turn-canvas", content })],
+      [generatedImage({ id: "image-canvas", sequence: 2, turnId: "turn-canvas" })],
+    );
+    expect(parseCreativeCanvasBlocks(content)).toHaveLength(2);
+    expect(sources).toHaveLength(2);
+    expect(sources).toEqual(expect.arrayContaining([
+      expect.objectContaining({ nodeType: "document", sourceBlockKey: "hero-copy", messageItemId: "message-canvas" }),
+      expect.objectContaining({
+        nodeType: "image",
+        sourceBlockKey: "hero-image",
+        messageItemId: "message-canvas",
+        content: expect.objectContaining({ textLayers: [expect.objectContaining({ text: "轻量通勤" })] }),
+      }),
+    ]));
+  });
+
+  it("turns a Markdown shooting script into an editable table", () => {
+    const sources = listCreativeCanvasSourceNodes([
+      assistantMessage({
+        content: structuredDraft({
+          deliverableType: "shooting_script",
+          title: "15 秒脚本",
+          body: "| 时间 | 画面 | 口播 |\n|---|---|---|\n| 0-3s | 开场 | 一包装下全天 |",
+        }),
+      }),
+    ], []);
+    expect(sources[0]).toMatchObject({
+      nodeType: "table",
+      content: {
+        kind: "table",
+        columns: ["时间", "画面", "口播"],
+        rows: [{ cells: ["0-3s", "开场", "一包装下全天"] }],
+      },
+    });
+  });
+
+  it("deduplicates identical final Agent Items within one Harness Turn", () => {
+    const content = structuredDraft();
+    const deliveries = listCreativeCanvasDeliveries([
+      assistantMessage({ id: "item-7", turnId: "turn-duplicate", sequence: 7, content }),
+      assistantMessage({ id: "item-8", turnId: "turn-duplicate", sequence: 8, content }),
+    ], []);
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]).toMatchObject({ id: "item-7", turnId: "turn-duplicate" });
+  });
+
+  it("never materializes an image claim without a native imageGeneration artifact", () => {
+    const content = structuredDraft({
+      deliverableType: "main_image",
+      canvasBlocks: [{
+        key: "main-image",
+        type: "image",
+        title: "商品主图",
+        body: "已生成商品主图",
+        columns: [],
+        rows: [],
+        textLayers: [],
+      }],
+    });
+    expect(listCreativeCanvasSourceNodes([
+      assistantMessage({ id: "item-image-claim", turnId: "turn-no-image", content }),
+    ], [])).toEqual([]);
   });
 });

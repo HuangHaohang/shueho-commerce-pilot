@@ -263,6 +263,18 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260831_044_product_insight_recipes",
       path: resolve(process.cwd(), "migrations/044_product_insight_recipes.sql"),
     },
+    {
+      version: "20260831_045_creative_infinite_canvas",
+      path: resolve(process.cwd(), "migrations/045_creative_infinite_canvas.sql"),
+    },
+    {
+      version: "20260831_046_creative_canvas_revision_history",
+      path: resolve(process.cwd(), "migrations/046_creative_canvas_revision_history.sql"),
+    },
+    {
+      version: "20260831_047_creative_canvas_reconciliation_delete",
+      path: resolve(process.cwd(), "migrations/047_creative_canvas_reconciliation_delete.sql"),
+    },
   ];
 
   for (const migration of migrations) {

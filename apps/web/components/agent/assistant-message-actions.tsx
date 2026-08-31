@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Copy, ThumbsDown, ThumbsUp } from "lucide-react";
+import { Check, Copy, RefreshCw, ThumbsDown, ThumbsUp } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -16,10 +16,13 @@ type AssistantMessageActionsProps = {
   copyText: string;
   feedback: AgentMessageFeedbackRating | null;
   feedbackSubmitting: boolean;
+  retrying: boolean;
+  retryDisabled: boolean;
   onFeedback(
     messageId: string,
     rating: AgentMessageFeedbackRating | null,
   ): Promise<boolean>;
+  onRetry(messageId: string): Promise<boolean>;
 };
 
 export function AssistantMessageActions({
@@ -27,7 +30,10 @@ export function AssistantMessageActions({
   copyText,
   feedback,
   feedbackSubmitting,
+  retrying,
+  retryDisabled,
   onFeedback,
+  onRetry,
 }: AssistantMessageActionsProps) {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
   const [feedbackAcknowledgementId, setFeedbackAcknowledgementId] = useState(0);
@@ -100,6 +106,19 @@ export function AssistantMessageActions({
           onClick={() => void submitFeedback("negative")}
         >
           <ThumbsDown className={feedback === "negative" ? "fill-current" : undefined} />
+        </Button>
+      </ActionTooltip>
+      <ActionTooltip label={retrying ? "正在重新尝试" : "重新尝试"}>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className={actionClass}
+          aria-label={retrying ? "正在重新尝试" : "重新尝试"}
+          disabled={retryDisabled || retrying}
+          onClick={() => void onRetry(messageId)}
+        >
+          <RefreshCw className={retrying ? "animate-spin" : undefined} aria-hidden="true" />
         </Button>
       </ActionTooltip>
       {feedbackAcknowledgementId > 0 ? (

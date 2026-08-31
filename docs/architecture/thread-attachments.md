@@ -17,6 +17,8 @@ Commerce Pilot accepts tenant-owned photos and bounded document attachments with
 5. `turn/start` accepts only artifact ids. Gateway reloads metadata, rechecks ownership and request binding, and builds native `localImage` or bounded document-context inputs.
 6. Once App Server returns a Turn id, Gateway binds the artifacts to that Turn. History restoration returns only sanitized metadata and ownership-checked BFF URLs.
 
+Native reply retry does not download an attachment through the browser and upload it under browser-reconstructed history. Gateway first verifies the selected assistant Item and source Turn through App Server, then reloads only artifacts already bound to that owned Turn, rebuilds their native `localImage` or bounded document inputs, performs the history-mode-compatible native `thread/revert` or `thread/rollback`, and rebinds the same application artifacts to the replacement `turn/start` result. Browser-supplied artifact ids and host paths are not accepted by the retry endpoint.
+
 Upload failure removes any artifacts already written for that unbound request. Turn failure removes the optimistic user message and restores the original composer files. Successful submission revokes local preview URLs and leaves attachments only in the user message.
 
 ## Storage And Deletion

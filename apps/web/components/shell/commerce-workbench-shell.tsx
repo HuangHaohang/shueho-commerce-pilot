@@ -27,6 +27,7 @@ import {
   ListRestart,
   ListX,
   Loader2,
+  LocateFixed,
   LockKeyhole,
   LogOut,
   Mail,
@@ -98,6 +99,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
+  findRetrySourceMessage,
   useAgentThread,
   type AgentActivity,
   type AgentMessageFeedbackRating,
@@ -137,12 +139,19 @@ import { shouldCompactComposerControls } from "@/lib/agent/composer-layout";
 import { getPluginInventory, type CommercePluginInventoryItem } from "@/lib/plugins/catalog";
 import {
   creativeMethodSkillName,
+  isCreativeMethod,
   type CreativeMethod,
 } from "@/lib/creative/creative-method-contract";
 import {
   creativeMethodActiveRequirement,
   creativeMethodStarterPrompt,
 } from "@/lib/creative/creative-method-presentation";
+import {
+  CreativeCanvasComposerBridge,
+  type CanvasRevisionRequest,
+  useCreativeCanvasNavigation,
+} from "@/lib/creative/creative-canvas-navigation";
+import type { CreativeCanvasMessageReference } from "@/lib/creative/creative-canvas-types";
 import { getThreadProductContext } from "@/lib/products/thread-product-context";
 import type { ProductContextMode, ProductSummary } from "@/lib/products/catalog";
 import {
@@ -480,7 +489,9 @@ export function CommerceWorkbenchShell({
   });
   const hasActiveThread = Boolean(agentThread.threadId || agentThread.messages.length);
   const navigationLocked =
-    (agentThread.status === "connecting" && !agentThread.loadingHistory) || agentThread.queueSubmitting;
+    (agentThread.status === "connecting" && !agentThread.loadingHistory) ||
+    agentThread.queueSubmitting ||
+    Boolean(agentThread.retryingMessageId);
   const deletingThreadIds = useMemo(
     () =>
       new Set(
@@ -909,6 +920,20 @@ export function CommerceWorkbenchShell({
     });
   }
 
+  function reviseCreativeCanvasNode(request: NonNullable<CanvasRevisionRequest>) {
+    if (navigationLocked) return;
+    if (isCreativeMethod(request.deliverableType)) setCreativeMethod(request.deliverableType);
+    const nextDraft = `请修改画布节点《${request.title}》：`;
+    setDraft(nextDraft);
+    requestAnimationFrame(() => {
+      const input = document.querySelector<HTMLTextAreaElement>(
+        "[data-creative-conversation] [data-conversation-input]",
+      );
+      input?.focus();
+      input?.setSelectionRange(nextDraft.length, nextDraft.length);
+    });
+  }
+
   function openProductInsights() {
     if (!isAuthenticated) {
       openAuthDialog("login");
@@ -1157,6 +1182,20 @@ export function CommerceWorkbenchShell({
     }
   }
 
+  async function retryAssistantMessage(assistantMessageId: string): Promise<boolean> {
+    const assistantMessage = agentThread.messages.find((message) => message.id === assistantMessageId);
+    if (!assistantMessage) return false;
+    const sourceMessage = findRetrySourceMessage(agentThread.messages, assistantMessage);
+    if (!sourceMessage) return false;
+    return agentThread.retryMessage(
+      assistantMessageId,
+      sourceMessage,
+      {
+        externalDataApprovalMode,
+      },
+    );
+  }
+
   function renderConversationWorkspace(layout: "default" | "creative-panel" = "default") {
     return (
       <ConversationWorkspace
@@ -1174,6 +1213,7 @@ export function CommerceWorkbenchShell({
         runningSubmitMode={activeView === "creative" || activeView === "research" ? "steer" : "queue"}
         queueOperationId={agentThread.queueOperationId}
         feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
+        retryingMessageId={agentThread.retryingMessageId}
         loadingHistory={agentThread.loadingHistory}
         hasOlderHistory={agentThread.hasOlderHistory}
         loadingOlderHistory={agentThread.loadingOlderHistory}
@@ -1204,6 +1244,7 @@ export function CommerceWorkbenchShell({
         onInterrupt={agentThread.interrupt}
         onAnswerUserInput={agentThread.respondToUserInput}
         onMessageFeedback={agentThread.setMessageFeedback}
+        onMessageRetry={retryAssistantMessage}
         onLoadOlderHistory={agentThread.loadOlderHistory}
         onQueueDelete={agentThread.deleteQueuedMessage}
         onQueueSteer={agentThread.steerQueuedMessage}
@@ -1309,6 +1350,7 @@ export function CommerceWorkbenchShell({
                     {creativeMethodActiveRequirement(creativeMethod, selectedProducts.length)}
                   </div>
                 ) : null}
+                <CreativeCanvasComposerBridge onRequest={reviseCreativeCanvasNode} />
                 {renderConversationWorkspace("creative-panel")}
               </div>
             )}
@@ -1573,6 +1615,7 @@ function ConversationWorkspace({
   runningSubmitMode,
   queueOperationId,
   feedbackSubmittingIds,
+  retryingMessageId,
   loadingHistory,
   hasOlderHistory,
   loadingOlderHistory,
@@ -1603,6 +1646,7 @@ function ConversationWorkspace({
   onInterrupt,
   onAnswerUserInput,
   onMessageFeedback,
+  onMessageRetry,
   onLoadOlderHistory,
   onQueueDelete,
   onQueueSteer,
@@ -1635,6 +1679,7 @@ function ConversationWorkspace({
   runningSubmitMode: "queue" | "steer";
   queueOperationId: string | null;
   feedbackSubmittingIds: ReadonlySet<string>;
+  retryingMessageId: string | null;
   loadingHistory: boolean;
   hasOlderHistory: boolean;
   loadingOlderHistory: boolean;
@@ -1668,6 +1713,7 @@ function ConversationWorkspace({
     messageId: string,
     rating: AgentMessageFeedbackRating | null,
   ) => Promise<boolean>;
+  onMessageRetry: (messageId: string) => Promise<boolean>;
   onLoadOlderHistory: () => Promise<boolean>;
   onQueueDelete: (queuedSubmissionId: string) => Promise<boolean>;
   onQueueSteer: (queuedSubmissionId: string) => Promise<boolean>;
@@ -1959,7 +2005,11 @@ function ConversationWorkspace({
                     message={entry.message}
                     skills={skills}
                     feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
+                    retryAvailable={Boolean(findRetrySourceMessage(messages, entry.message))}
+                    retrying={retryingMessageId === entry.message.id}
+                    retryDisabled={running || compacting || Boolean(retryingMessageId)}
                     onMessageFeedback={onMessageFeedback}
+                    onMessageRetry={onMessageRetry}
                   />
                 ) : (
                   <GeneratedImageCard key={entry.image.id} image={entry.image} />
@@ -1984,7 +2034,11 @@ function ConversationWorkspace({
                         message={entry.message}
                         skills={skills}
                         feedbackSubmitting={feedbackSubmittingIds.has(entry.message.id)}
+                        retryAvailable={Boolean(findRetrySourceMessage(messages, entry.message))}
+                        retrying={retryingMessageId === entry.message.id}
+                        retryDisabled={running || compacting || Boolean(retryingMessageId)}
                         onMessageFeedback={onMessageFeedback}
+                        onMessageRetry={onMessageRetry}
                       />
                     ) : entry.type === "image" ? (
                       <GeneratedImageCard key={entry.image.id} image={entry.image} />
@@ -2745,19 +2799,33 @@ function ConversationTimelineMessage({
   message,
   skills,
   feedbackSubmitting,
+  retryAvailable,
+  retrying,
+  retryDisabled,
   onMessageFeedback,
+  onMessageRetry,
 }: {
   message: ConversationMessage;
   skills: SkillInventoryItem[];
   feedbackSubmitting: boolean;
+  retryAvailable: boolean;
+  retrying: boolean;
+  retryDisabled: boolean;
   onMessageFeedback: (
     messageId: string,
     rating: AgentMessageFeedbackRating | null,
   ) => Promise<boolean>;
+  onMessageRetry: (messageId: string) => Promise<boolean>;
 }) {
+  const canvasNavigation = useCreativeCanvasNavigation();
+  const canvasRefs = canvasNavigation?.refsForMessage(message.id) ?? [];
+  const registerMessage = useCallback((element: HTMLDivElement | null) => {
+    canvasNavigation?.registerConversationMessage(message.id, element);
+  }, [canvasNavigation, message.id]);
   const preview = readConversationMessagePreview(message);
   return (
     <div
+      ref={registerMessage}
       data-conversation-minimap-anchor
       data-minimap-prompt={message.role === "user" ? "" : undefined}
       data-minimap-id={`message-${message.id}`}
@@ -2765,6 +2833,12 @@ function ConversationTimelineMessage({
       data-minimap-preview={preview}
     >
       <ConversationMessageView message={message} skills={skills} />
+      {message.role === "assistant" && message.phase !== "commentary" && canvasRefs.length > 0 ? (
+        <CreativeCanvasMessageLinks
+          refs={canvasRefs}
+          onFocus={(nodeId) => canvasNavigation?.requestCanvasFocus(nodeId)}
+        />
+      ) : null}
       {message.role === "assistant" &&
       message.phase !== "commentary" &&
       message.status === "completed" &&
@@ -2774,9 +2848,43 @@ function ConversationTimelineMessage({
           copyText={readAssistantResponseText(message)}
           feedback={message.feedback ?? null}
           feedbackSubmitting={feedbackSubmitting}
+          retrying={retrying}
+          retryDisabled={!retryAvailable || retryDisabled}
           onFeedback={onMessageFeedback}
+          onRetry={onMessageRetry}
         />
       ) : null}
+    </div>
+  );
+}
+
+function CreativeCanvasMessageLinks({
+  refs,
+  onFocus,
+}: {
+  refs: CreativeCanvasMessageReference[];
+  onFocus: (nodeId: string) => void;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-1.5" aria-label="本回复的画布内容">
+      {refs.map((ref) => (
+        <button
+          key={ref.nodeId}
+          type="button"
+          className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2.5 text-[11px] text-[var(--cp-text-muted)] hover:bg-[var(--cp-surface-hover)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+          onClick={() => onFocus(ref.nodeId)}
+        >
+          {ref.nodeType === "image" ? (
+            <ImageIcon className="size-3.5 shrink-0" />
+          ) : ref.nodeType === "table" ? (
+            <ListRestart className="size-3.5 shrink-0" />
+          ) : (
+            <FileText className="size-3.5 shrink-0" />
+          )}
+          <span className="truncate">{ref.title}</span>
+          <LocateFixed className="size-3.5 shrink-0" aria-hidden="true" />
+        </button>
+      ))}
     </div>
   );
 }
@@ -2903,6 +3011,10 @@ function ConversationMessageView({
     return null;
   }
 
+  if (message.artifactStatus === "missing_image") {
+    return <MissingImageArtifactNotice />;
+  }
+
   const marketResearchResponse = parseMarketResearchResponse(message.content);
   if (marketResearchResponse) return <MarketResearchReportView response={marketResearchResponse} />;
   const copywritingDraft = tryParseStructuredCopywritingDraft(message.content);
@@ -2917,6 +3029,20 @@ function ConversationMessageView({
       )}
     >
       <AssistantMarkdown content={content} />
+    </div>
+  );
+}
+
+function MissingImageArtifactNotice() {
+  return (
+    <div className="flex items-start gap-2 text-[13px] leading-5 text-[var(--cp-warning)]" role="alert">
+      <CircleAlert className="mt-0.5 size-4 shrink-0" />
+      <div>
+        <div className="font-medium">图片未生成</div>
+        <p className="mb-0 mt-1 text-[var(--cp-text-muted)]">
+          本轮只有图片说明，没有完成原生图片制品。请重新生成后再使用。
+        </p>
+      </div>
     </div>
   );
 }
@@ -2982,6 +3108,7 @@ function CopywritingDraftResponse({ draft }: { draft: CopywritingDraft }) {
 
 function readConversationMessagePreview(message: ConversationMessage): string {
   if (message.role === "user") return readConversationUserContent(message.content);
+  if (message.artifactStatus === "missing_image") return "图片未生成：本轮没有完成原生图片制品。";
   const marketResearchResponse = parseMarketResearchResponse(message.content);
   if (marketResearchResponse) {
     return marketResearchResponse.responseType === "report"
@@ -2994,6 +3121,9 @@ function readConversationMessagePreview(message: ConversationMessage): string {
 }
 
 function readAssistantResponseText(message: ConversationMessage): string {
+  if (message.artifactStatus === "missing_image") {
+    return "图片未生成\n本轮只有图片说明，没有完成原生图片制品。请重新生成后再使用。";
+  }
   const marketResearchResponse = parseMarketResearchResponse(message.content);
   if (marketResearchResponse) {
     if (marketResearchResponse.responseType === "answer") return marketResearchResponse.message;

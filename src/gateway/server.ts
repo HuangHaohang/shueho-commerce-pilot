@@ -95,6 +95,11 @@ import { marketplacePlanFailureInstruction } from "./marketplace-plan-guidance.j
 import { dispatchManagedWorkflowSteer } from "./managed-workflow-steer.js";
 import { ThreadOperationQueue } from "./thread-operation-queue.js";
 import {
+  buildNativeHarnessRetryHistoryRequest,
+  isHarnessMessageItemId,
+  readHarnessRetryContract,
+} from "./harness-turn-retry.js";
+import {
   CODEX_REQUEST_USER_INPUT_METHOD,
   COMMERCE_APPROVAL_REQUESTED_METHOD,
   COMMERCE_APPROVAL_RESOLVED_METHOD,
@@ -1119,6 +1124,235 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const messageRetryMatch = matchPath(
+      url.pathname,
+      /^\/api\/threads\/([^/]+)\/messages\/([^/]+)\/retry$/,
+    );
+    if (req.method === "POST" && messageRetryMatch) {
+      if (!isEventPipelineWritable()) {
+        sendJson(res, 503, { error: "Enterprise usage event pipeline requires operator attention." });
+        return;
+      }
+      const threadId = decodeURIComponent(messageRetryMatch[1] ?? "");
+      const messageItemId = decodeURIComponent(messageRetryMatch[2] ?? "");
+      if (!isSafeAgentId(threadId) || !isHarnessMessageItemId(messageItemId)) {
+        sendJson(res, 400, { error: "Invalid thread or message id." });
+        return;
+      }
+      const body = await readJsonBody<{
+        expectedTurnId?: unknown;
+        model?: unknown;
+        effort?: unknown;
+        externalDataApprovalMode?: unknown;
+        productIds?: unknown;
+        productContextMode?: unknown;
+        productContextSetId?: unknown;
+        clientRequestId?: unknown;
+      }>(req);
+      const expectedTurnId = typeof body.expectedTurnId === "string" && isSafeAgentId(body.expectedTurnId)
+        ? body.expectedTurnId
+        : "";
+      const clientUserMessageId = typeof body.clientRequestId === "string" && isUuid(body.clientRequestId)
+        ? body.clientRequestId
+        : "";
+      if (!expectedTurnId || !clientUserMessageId) {
+        sendJson(res, 400, { error: "Retry requires a valid source Turn and client request id." });
+        return;
+      }
+      const externalDataApprovalMode = readExternalDataApprovalMode(body.externalDataApprovalMode);
+      if (body.externalDataApprovalMode !== undefined && !externalDataApprovalMode) {
+        sendJson(res, 400, { error: "Invalid external-data approval mode." });
+        return;
+      }
+      const productContextSetId = body.productContextSetId === undefined
+        ? null
+        : typeof body.productContextSetId === "string" && isUuid(body.productContextSetId)
+          ? body.productContextSetId
+          : "";
+      if (productContextSetId === "") {
+        sendJson(res, 400, { error: "Invalid server product-context snapshot id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId, typeof body.model === "string" ? body.model : null);
+      if (compactionStates.has(threadId)) {
+        sendJson(res, 409, { error: "Thread context is being compacted. Retry after compaction completes." });
+        return;
+      }
+      if (turnStartReservations.has(threadId)) {
+        sendJson(res, 409, { error: "Thread turn startup is already in progress.", code: "THREAD_STARTING" });
+        return;
+      }
+      turnStartReservations.add(threadId);
+      try {
+        if (typeof body.model === "string" && body.model) await provider.assertAgentModel(body.model);
+        await ensureThreadToolsReady(threadId, typeof body.model === "string" ? body.model : undefined);
+        if (await readHarnessActiveTurnId(threadId)) {
+          throw new GatewayRequestError("An active Turn cannot be reverted.", 409);
+        }
+        const source = await readHarnessRetrySource(threadId, messageItemId);
+        if (source.turnId !== expectedTurnId) {
+          throw new GatewayRequestError("The reply no longer belongs to the expected Turn.", 409);
+        }
+        const productContextRequest = readProductTurnContextRequest(
+          body.productIds,
+          source.contract.productContextMode,
+        );
+        if ((productContextRequest.mode === "selected") !== Boolean(productContextSetId)) {
+          throw new GatewayRequestError(
+            "The original selected-product context could not be restored exactly.",
+            409,
+          );
+        }
+        if (
+          source.contract.insightMethod &&
+          commerceInsightMethodRequiresSelectedProduct(source.contract.insightMethod) &&
+          productContextRequest.mode !== "selected"
+        ) {
+          throw new GatewayRequestError("Product retrospective retry requires its original selected product.", 409);
+        }
+
+        const scope = threadScopes.get(threadId);
+        if (!scope) throw new GatewayRequestError("Turn retry requires an enterprise scope.", 400);
+        let resolvedProductContext: ProductCatalogResult | null = null;
+        let firstPartySubject: FirstPartyResearchSubject | null = null;
+        if (productContextRequest.mode === "selected") {
+          if (!productCatalogControl.configured) {
+            throw new GatewayRequestError("Product catalog control service is not configured.", 503);
+          }
+          try {
+            const rawResearchSubject = await productCatalogControl.resolveResearchSubject(
+              productCatalogPrincipal(scope),
+              productContextSetId as string,
+            );
+            firstPartySubject = parseFirstPartyResearchSubject(
+              rawResearchSubject,
+              productContextSetId as string,
+              productContextRequest.productIds,
+            );
+            resolvedProductContext = projectProductResearchSubjectForModel(
+              rawResearchSubject,
+              firstPartySubject,
+            );
+          } catch (error) {
+            if (error instanceof ProductCatalogControlError) {
+              sendJson(res, error.status, { error: error.message, code: error.code, details: error.details });
+              return;
+            }
+            throw error;
+          }
+        }
+        const productInsightSubjectConstraint =
+          source.contract.workflow === "commerce-product-insight" ||
+          source.contract.workflow === "commerce-market-research"
+            ? buildProductInsightSubjectConstraint(productContextRequest, firstPartySubject)
+            : null;
+        const retryArtifacts = await threadArtifacts.buildRetryTurnInputs(
+          threadId,
+          source.turnId,
+          scope,
+          { productImportMetadataOnly: source.contract.workflow === "commerce-product-onboarding" },
+        );
+        const managedWorkflowTurn = source.contract.workflow
+          ? buildManagedWorkflowTurn(
+              config.runtimeRoot,
+              source.contract.workflow,
+              source.message,
+              source.contract.creativeMethod,
+              source.contract.insightMethod,
+              productInsightSubjectConstraint,
+            )
+          : null;
+        const explicitSkillTurn = source.contract.explicitSkillName
+          ? buildExplicitSkillTurn(
+              await resolveExplicitSkill(source.contract.explicitSkillName),
+              source.message,
+            )
+          : null;
+        const baseInput = managedWorkflowTurn?.input ??
+          explicitSkillTurn?.input ??
+          [{ type: "text" as const, text: source.message, text_elements: [] }];
+        const productContextInput = buildProductContextTurnInput(productContextRequest);
+        const requestedModel = typeof body.model === "string"
+          ? body.model
+          : threadScopes.get(threadId)?.model ?? config.defaultModel ?? null;
+
+        const historyRequest = buildNativeHarnessRetryHistoryRequest({
+          historyMode: source.historyMode,
+          threadId,
+          sourceTurnId: source.turnId,
+          revertedTurnCount: source.revertedTurnIds.length,
+        });
+        if (historyRequest.method === "thread/revert") {
+          await codex.request(historyRequest.method, historyRequest.params, 30_000);
+        } else {
+          await codex.request(historyRequest.method, historyRequest.params, 30_000);
+        }
+        clearRevertedTurnRuntimeState(threadId, source.revertedTurnIds);
+        pendingTurnModels.set(threadId, requestedModel);
+        let result: unknown;
+        try {
+          result = await codex.request("turn/start", {
+            threadId,
+            clientUserMessageId,
+            input: [
+              ...baseInput,
+              ...(productContextInput ? [productContextInput] : []),
+              ...retryArtifacts.inputs,
+            ],
+            model: typeof body.model === "string" ? body.model : undefined,
+            effort: typeof body.effort === "string" ? body.effort : undefined,
+            outputSchema: managedWorkflowTurn?.outputSchema,
+          });
+        } catch {
+          const acceptedTurnId = await findCommittedUserMessageTurnIdWithRetry(
+            threadId,
+            clientUserMessageId,
+          );
+          if (!acceptedTurnId) {
+            sendJson(res, 503, {
+              error: "Harness reverted the source Turn but the replacement Turn could not be confirmed. Refresh the task before retrying again.",
+              code: "HARNESS_RETRY_START_UNCERTAIN",
+            });
+            return;
+          }
+          result = { turn: { id: acceptedTurnId, status: "inProgress", items: [], error: null } };
+        } finally {
+          if (pendingTurnModels.get(threadId) === requestedModel) pendingTurnModels.delete(threadId);
+        }
+        const startedTurnId = readResultTurnId(result);
+        if (!startedTurnId) {
+          sendJson(res, 503, {
+            error: "Harness reverted the source Turn but returned no replacement Turn id. Refresh the task before retrying again.",
+            code: "HARNESS_RETRY_START_UNCERTAIN",
+          });
+          return;
+        }
+        if (retryArtifacts.artifactIds.length) {
+          await threadArtifacts.bindToTurn(threadId, retryArtifacts.artifactIds, startedTurnId);
+        }
+        bindTurnModel(threadId, startedTurnId, requestedModel);
+        updateThreadRuntimeModel(threadId, requestedModel);
+        activeTurnsByThread.set(threadId, startedTurnId);
+        turnExternalDataApprovalModes.set(startedTurnId, externalDataApprovalMode ?? "always_ask");
+        turnProductContexts.set(startedTurnId, {
+          ...productContextRequest,
+          resolved: resolvedProductContext,
+          subject: firstPartySubject,
+          selectedFactsRead: false,
+        });
+        if (source.message) turnResearchRequestTexts.set(startedTurnId, source.message);
+        scheduleTurnTimeout(threadId, startedTurnId);
+        sendJson(res, 200, {
+          result,
+          retriedFromTurnId: source.turnId,
+          revertedTurnIds: source.revertedTurnIds,
+        });
+        return;
+      } finally {
+        turnStartReservations.delete(threadId);
+      }
+    }
+
     const turnMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/turns$/);
     if (req.method === "POST" && turnMatch) {
       if (!isEventPipelineWritable()) {
@@ -1546,6 +1780,7 @@ const server = createServer(async (req, res) => {
         "DELETE /api/threads/:threadId",
         "POST /api/threads/:threadId/compact",
         "POST /api/threads/:threadId/turns",
+        "POST /api/threads/:threadId/messages/:messageItemId/retry",
         "POST /api/threads/:threadId/steer",
         "GET /api/threads/:threadId/queue",
         "POST /api/threads/:threadId/queue",
@@ -2097,6 +2332,97 @@ async function readResearchRequestText(threadId: string, turnId: string): Promis
   throw new Error("The current Turn contains no user request text for external-data provenance.");
 }
 
+async function readHarnessRetrySource(
+  threadId: string,
+  messageItemId: string,
+): Promise<{
+  turnId: string;
+  message: string;
+  contract: ReturnType<typeof readHarnessRetryContract>;
+  revertedTurnIds: string[];
+  historyMode: "legacy" | "paginated";
+}> {
+  const metadata = await readThreadWithStartupRetry(threadId, false);
+  if (!isRecord(metadata) || !isRecord(metadata.thread)) {
+    throw new GatewayRequestError("Harness returned invalid thread metadata for retry.", 502);
+  }
+  const historyMode = metadata.thread.historyMode === "paginated"
+    ? "paginated" as const
+    : metadata.thread.historyMode === "legacy"
+      ? "legacy" as const
+      : null;
+  if (!historyMode) throw new GatewayRequestError("Harness returned an unknown thread history mode.", 409);
+
+  let targetTurnId: string | null = null;
+  let sourceUserContent: unknown[] | null = null;
+  const revertedTurnIds: string[] = [];
+  let turnCursor: string | null = null;
+  turnPages: for (let page = 0; page < 50; page += 1) {
+    const pageResult = await readTurnsPageWithStartupRetry(threadId, turnCursor, 100, "full");
+    for (const turn of pageResult.data) {
+      const turnId = typeof turn.id === "string" ? turn.id : "";
+      if (!turnId) continue;
+      revertedTurnIds.push(turnId);
+      const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+      const selectedItem = items.find((item) => item.id === messageItemId);
+      if (!selectedItem) continue;
+      if (
+        selectedItem.type !== "agentMessage" ||
+        selectedItem.phase === "commentary" ||
+        typeof selectedItem.text !== "string" ||
+        !selectedItem.text.trim()
+      ) {
+        throw new GatewayRequestError("The selected item is not a completed assistant reply.", 409);
+      }
+      if (turn.status !== "completed" && turn.status !== "interrupted" && turn.status !== "failed") {
+        throw new GatewayRequestError("Only a terminal Harness Turn can be retried.", 409);
+      }
+      const userMessage = items.find(
+        (item) => item.type === "userMessage" && Array.isArray(item.content),
+      );
+      if (!userMessage || !Array.isArray(userMessage.content)) {
+        throw new GatewayRequestError("The source Turn has no authoritative user message to resend.", 409);
+      }
+      targetTurnId = turnId;
+      sourceUserContent = userMessage.content;
+      break turnPages;
+    }
+    turnCursor = pageResult.nextCursor;
+    if (!turnCursor) break;
+  }
+  if (!targetTurnId || !isSafeAgentId(targetTurnId) || !sourceUserContent) {
+    throw new GatewayRequestError("The selected assistant reply no longer exists in Harness history.", 404);
+  }
+  const message = readVisibleHarnessUserText(sourceUserContent);
+  const contract = readHarnessRetryContract(sourceUserContent);
+  if (!message) {
+    throw new GatewayRequestError("The source Turn has no visible user text to resend.", 409);
+  }
+  if (contract.workflow === "commerce-product-insight" && !contract.insightMethod) {
+    throw new GatewayRequestError("The source product-insight method is unavailable.", 409);
+  }
+  if (contract.creativeMethod && contract.workflow !== "commerce-creative-project") {
+    throw new GatewayRequestError("The source creative method does not match its managed workflow.", 409);
+  }
+  if (contract.explicitSkillName && !CODEX_SKILL_NAME_PATTERN.test(contract.explicitSkillName)) {
+    throw new GatewayRequestError("The source explicit Skill name is invalid.", 409);
+  }
+  return { turnId: targetTurnId, message, contract, revertedTurnIds, historyMode };
+}
+
+function clearRevertedTurnRuntimeState(threadId: string, turnIds: string[]): void {
+  for (const turnId of turnIds) {
+    clearTurnTimeout(turnId);
+    clearPendingInteractionsForTurn(threadId, turnId);
+    turnExternalDataApprovalModes.delete(turnId);
+    turnResearchRequestTexts.delete(turnId);
+    turnMarketplacePlatformCatalogs.delete(turnId);
+    turnProductContexts.delete(turnId);
+    turnModels.delete(turnModelKey(threadId, turnId));
+    if (activeTurnsByThread.get(threadId) === turnId) activeTurnsByThread.delete(threadId);
+  }
+}
+
 async function readHarnessActiveTurnId(threadId: string): Promise<string | null> {
   const statusResult = await readThreadWithStartupRetry(threadId, false);
   if (!isRecord(statusResult) || !isRecord(statusResult.thread) || !isRecord(statusResult.thread.status)) {
@@ -2321,19 +2647,21 @@ async function findCommittedUserMessageTurnId(
 ): Promise<string | null> {
   let cursor: string | null = null;
   do {
-    const result: unknown = await codex.request("thread/items/list", {
+    const result: unknown = await codex.request("thread/turns/list", {
       threadId,
       cursor,
       limit: 100,
       sortDirection: "desc",
+      itemsView: "full",
     });
     if (!isRecord(result) || !Array.isArray(result.data)) {
-      throw new Error("Codex App Server returned invalid items while locating a queued message.");
+      throw new Error("Codex App Server returned invalid Turns while locating a queued message.");
     }
-    for (const entry of result.data.filter(isRecord)) {
-      const item = isRecord(entry.item) ? entry.item : null;
-      if (item?.type === "userMessage" && item.clientId === clientUserMessageId) {
-        return typeof entry.turnId === "string" ? entry.turnId : null;
+    for (const turn of result.data.filter(isRecord)) {
+      const turnId = typeof turn.id === "string" ? turn.id : null;
+      const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+      if (items.some((item) => item.type === "userMessage" && item.clientId === clientUserMessageId)) {
+        return turnId;
       }
     }
     cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;

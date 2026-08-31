@@ -99,8 +99,8 @@
 - 桌面端组织“项目侧栏 / 创作画布 / Harness 对话”三栏结构。
 - 一个创作项目严格对应一个持久 Codex thread；项目对话、Turn、Item、队列、停止、恢复和压缩均由 App Server 管理。
 - 项目侧栏只读取租户/工作区/用户范围内 `recipe_id=creative_project` 或兼容 `recipe_id=copywriting` 的 thread 索引；禁止用分类或标题猜测 Recipe；运行中项目显示轻量 spinner。
-- 中央画布不保存独立业务状态，只投影所选 thread 中最新的完整交付 Turn：一个最终 Agent 文档与该 Turn 的全部原生 `imageGeneration` artifacts 组成同一产出记录。
-- 没有最终交付物时保持真正空白，不用示例卡片、伪画布节点或营销 empty state 填充；窄屏下空白画布不占固定高度，避免把 Harness composer 推到首屏之外。
+- 中央区域使用无限画布承载真实交付节点。Harness 完成 Item 是 Agent 产出来源；应用只保存节点、布局、视口、消息引用和追加式人工修订，不保存第二套对话或执行状态。
+- 节点类型固定为文案、原生图片加文字图层、脚本表格。没有最终交付物时保持真正空白，不用示例卡片、伪画布节点或营销 empty state 填充；窄屏下空白画布不占固定高度，避免把 Harness composer 推到首屏之外。
 - 右侧对话复用标准 `ConversationWorkspace`、`AgentComposer`、Harness 问题面板和审批面板；不得创建第二套消息数组、prompt loop 或 WebSocket。
 
 Harness 契约：
@@ -108,11 +108,14 @@ Harness 契约：
 - 新项目首次提交使用固定 `commerce-creative-project` workflow，由 Gateway 解析应用托管 Skill 路径和固定 output schema。
 - 用户通过业务模板选择“商品标题与文案 / 推广文案 / 商品主图 / 副图与场景图 / 商品详情页 / 产品拍摄脚本 / 短视频分镜”；模板只提交闭合 `creativeMethod`，Gateway 将其映射到应用托管专业 Skill。前端不得拼接隐藏 Prompt、Skill 路径或 output schema。
 - 浏览器不得直接提交 `recipeId`；BFF 将固定 workflow 映射为 `recipe_id=creative_project` 与 `category=creative`。
-- 后续修改在同一 thread 中进行：idle 时启动新 Turn，active 时通过原生 `turn/steer` 调整同一个 schema-constrained Turn；文本修改返回完整最新画布交付，而不是浏览器合并 patch。
+- 后续 Agent 修改在同一 thread 中进行：idle 时启动新 Turn，active 时通过原生 `turn/steer` 调整同一个 schema-constrained Turn；人工节点编辑只写入应用追加式 revision，不修改 Harness 历史。
 - 图片生成只使用 Harness 原生 `image_gen` 与 `imageGeneration` Item；画布读取 ownership-checked artifact URL。
 - 商品主图、副图、详情图和分镜的“保持真实商品外观”必须存在租户/线程归属的参考图。产品库 `imageUrl` 只用于摘要展示，不能由浏览器或 Agent 直接抓取；无参考图时控件需说明只能生成创意方向或概念图。
 - 切换已有项目时，通过受认证的 no-store 产品上下文接口恢复最新已成功绑定 Turn 的 Product chips。接口必须重新检查 `product_catalog.read`、线程所有权和 RLS，仅返回最多 20 个摘要；不得恢复未绑定请求，也不得返回原始记录、mapping、attributes、连接器或凭据。
 - 普通问答、commentary、streaming fragment 和用户消息不得覆盖当前画布。
+- 最终 assistant Item 与节点使用真实 Item id 映射。点击回复中的节点引用必须居中画布节点；点击节点必须定位到原始回复，禁止按标题或正文模糊匹配。
+- 原生图片 artifact 永不可由浏览器替换；浏览器只能编辑应用自有文字图层。商品主体或像素级修改必须形成新的 Harness 图片编辑/生成 Item。
+- 同一 Turn 内 phase 与正文完全相同的重复最终 `agentMessage` 只投影一次。`main_image` / `gallery_images` 没有同 Turn 完成的原生图片 artifact 时不得生成文档假节点，回复必须显示“图片未生成”。
 - “生成视频成片”在真实视频工具健康前保持 disabled，并用一行说明“当前可生成脚本与分镜，暂不渲染成片”；不得把多张图片、loading 或外链冒充视频产物。
 - 任何未来的发布、同步或保存到外部系统动作仍需应用授权、审批、幂等、审计和读回，不能由画布更新冒充完成。
 
@@ -127,7 +130,7 @@ Harness 契约：
 ### CreativeMethodSelector
 
 - 放在右侧 Harness composer 附近，显示普通电商用户可理解的中文业务类型，不显示 Skill 文件名或协议 id。
-- 按“商品上架 / 营销推广 / 短视频”分组，使用紧凑扁平列表；选择后只更新方法标签和预填用户可编辑的 starter，不得自动发送。
+- 按“商品上架 / 营销推广 / 短视频”分组，使用紧凑扁平列表；列表项只显示标题和一行结果描述，使用前提在选中后结合当前产品上下文显示一次；选择后只更新方法标签和预填用户可编辑的 starter，不得自动发送。
 - 无产品时允许标题、推广文案、脚本等方法继续使用 auto 产品上下文；主图、副图等依赖视觉一致性的类型必须引导选择产品并附加可信参考图。
 - 平台、受众、比例、时长等高影响缺失项由 Specialist Skill 通过原生 `request_user_input` 补问，前端不维护第二套固定表单。
 - 运行中的 Turn 不允许静默切换方法；变更必须作为同一 Harness `turn/steer` 的明确用户方向，或留给下一 Turn。
@@ -336,8 +339,9 @@ type WorkComposerProps = {
 - 运行中的整条活动文本只使用共享的 `cp-running-shimmer` 连续扫光层；状态文字和命令详情禁止各自动画造成多段、快速或错乱的亮片。完成态活动与 disclosure 不显示动画或成功勾选图标。
 - 命令、文件和工具 item 默认汇总为一行 disclosure，例如“运行了命令”或“编辑了文件并运行了命令”。
 - `turn/completed` 后隐藏过程 commentary，只保留最终正文，并把该轮活动归并为一个默认收起的 disclosure。
-- 每条已完成的最终 Agent 回复下方固定显示紧凑的复制、回复优秀、回复不佳三个图标按钮；commentary、streaming 和空回复不显示操作。所有图标必须有 tooltip 与 `aria-label`，好评和差评使用互斥的 `aria-pressed` 状态，选中项的拇指图标必须实心填充，再次点击当前评价表示取消。评价成功落库后在操作行短暂显示“感谢您的反馈！”，失败时不得显示成功提示。
+- 每条已完成的最终 Agent 回复下方固定显示紧凑的复制、回复优秀、回复不佳、重新尝试四个图标按钮；commentary、streaming 和空回复不显示操作。所有图标必须有 tooltip 与 `aria-label`，好评和差评使用互斥的 `aria-pressed` 状态，选中项的拇指图标必须实心填充，再次点击当前评价表示取消。评价成功落库后在操作行短暂显示“感谢您的反馈！”，失败时不得显示成功提示。重新尝试运行期间刷新图标旋转并禁用全部重试入口。
 - 复制必须复制用户实际看到的回复内容，结构化文案需要展开为标题、正文、行动引导和合规备注，不得复制内部 JSON。评价必须调用真实 BFF，按 Harness `threadId`、`turnId` 和 `agentMessage itemId` 保存；失败时撤销乐观状态并明确提示，刷新历史后必须回显已保存评价。
+- “重新尝试”只提交当前回复的权威 `agentMessage itemId`；BFF 与 Gateway 必须从 Harness 恢复原 `userMessage`，按线程历史模式使用原生 `thread/revert(beforeTurnId)` 或兼容 `thread/rollback(numTurns)`，再接 `turn/start`。浏览器不得提交替代文本、Skill、附件路径、产品 revision、输出 Schema 或回退边界；目标回复之后的 Turns 按 Harness 原生历史编辑语义被移出当前线程历史。
 - completed activity disclosure 必须按 Harness sequence 插回当前 turn 时间线，位于调用前 commentary 与调用后 final answer 之间；禁止固定追加到最终回答下方。运行中仍只显示当前最新 activity 的替换式单行状态，完成后再折叠成一个 disclosure。
 - disclosure 展开后才显示原始 item 明细、状态和耗时；不得把所有工具 item 默认平铺堆积在正文中。
 - disclosure 和展开明细不使用横向分割线，通过缩进与间距表达层级。

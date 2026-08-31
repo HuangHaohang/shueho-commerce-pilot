@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildAgentTurnRequestBody,
+  findRetrySourceMessage,
   readUserMessageSkillName,
 } from "./use-agent-thread";
 
@@ -74,5 +75,55 @@ describe("agent Turn request body", () => {
     expect(readUserMessageSkillName({
       content: [{ type: "skill", name: "commerce-copywriting", path: "hidden-path" }],
     })).toBe("commerce-copywriting");
+  });
+});
+
+describe("assistant reply retry source", () => {
+  it("uses the initial authoritative user message that started the reply's Harness Turn", () => {
+    const source = findRetrySourceMessage([
+      {
+        id: "user-original",
+        sequence: 1,
+        turnId: "turn-retry-1",
+        role: "user",
+        content: "生成商品主图",
+        status: "completed",
+      },
+      {
+        id: "user-reference",
+        sequence: 2,
+        turnId: "turn-retry-1",
+        role: "user",
+        content: "这个就是我的产品",
+        attachments: [{
+          id: "44444444-4444-4444-8444-444444444444",
+          name: "product.jpg",
+          mimeType: "image/jpeg",
+          size: 128,
+          kind: "image",
+          url: "/api/agent/attachments/product.jpg",
+        }],
+        status: "completed",
+      },
+      {
+        id: "agent-final",
+        sequence: 3,
+        turnId: "turn-retry-1",
+        role: "assistant",
+        content: "图片未生成",
+        phase: "final_answer",
+        status: "completed",
+      },
+    ], {
+      id: "agent-final",
+      sequence: 3,
+      turnId: "turn-retry-1",
+      role: "assistant",
+      content: "图片未生成",
+      phase: "final_answer",
+      status: "completed",
+    });
+
+    expect(source?.id).toBe("user-original");
   });
 });

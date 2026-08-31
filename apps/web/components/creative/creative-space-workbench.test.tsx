@@ -62,14 +62,16 @@ describe("CreativeSpaceWorkbench", () => {
     ]) {
       expect(html).toContain(label);
     }
-    expect(html).toContain("提供可识别商品外观的参考图");
+    expect(html).toContain("生成标题、卖点和商品页文案");
+    expect(html).not.toContain("提供可识别商品外观的参考图");
+    expect(html).not.toContain("选择后只会预填对话");
     expect(html).toContain("视频成片");
-    expect(html).toContain("当前仅支持脚本与分镜；真实成片工具尚未接入");
+    expect(html).toContain("当前可生成脚本与分镜，暂不渲染成片");
     expect(html).toContain("disabled");
     expect(html).toContain('aria-pressed="true"');
   });
 
-  it("renders method, channel, output ordinal and every native image from the same Turn", () => {
+  it("renders the persistent infinite-canvas surface before BFF node hydration", () => {
     const html = renderToStaticMarkup(
       <CreativeSpaceWorkbench
         projects={[project]}
@@ -103,11 +105,10 @@ describe("CreativeSpaceWorkbench", () => {
       />,
     );
 
-    expect(html).toContain("副图与场景图");
-    expect(html).toContain("京东");
-    expect(html).toContain("第 1 次产出");
-    expect(html).toContain('src="/image-1.png"');
-    expect(html).toContain('src="/image-2.png"');
-    expect(html).toContain("通勤包副图组");
+    expect(html).toContain("data-creative-infinite-canvas");
+    expect(html).toContain("创作画布");
+    expect(html).toContain('aria-label="电商创作画布"');
+    expect(html).not.toContain('src="/image-1.png"');
+    expect(html).not.toContain('src="/image-2.png"');
   });
 });

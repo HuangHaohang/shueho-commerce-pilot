@@ -61,6 +61,11 @@ export type ThreadArtifactTurnInputOptions = {
   productImportMetadataOnly?: boolean;
 };
 
+export type RetryThreadArtifactInputs = {
+  artifactIds: string[];
+  inputs: UserInput[];
+};
+
 export class ThreadArtifactStoreError extends Error {
   constructor(
     message: string,
@@ -253,16 +258,48 @@ export class ThreadArtifactStore {
     }
     const uniqueIds = [...new Set(artifactIds)];
     if (uniqueIds.length !== artifactIds.length) throw new Error("Duplicate attachment ids are not allowed.");
-    const inputs: UserInput[] = [];
+    const artifacts: ThreadArtifact[] = [];
     for (const artifactId of uniqueIds) {
       const artifact = await this.get(threadId, artifactId);
       if (!artifact || !artifactBelongsToScope(artifact, scope) || artifact.clientRequestId !== clientRequestId) {
         throw new Error("Attachment ownership or request binding is invalid.");
       }
+      artifacts.push(artifact);
+    }
+    return this.buildInputsFromArtifacts(artifacts, options);
+  }
+
+  async buildRetryTurnInputs(
+    threadId: string,
+    sourceTurnId: string,
+    scope: RuntimeScope,
+    options: ThreadArtifactTurnInputOptions = {},
+  ): Promise<RetryThreadArtifactInputs> {
+    assertScopeOwnsThread(scope, threadId);
+    assertAgentId(sourceTurnId, "source turn id");
+    const artifacts = (await this.listForThread(threadId)).filter(
+      (artifact) => artifact.turnId === sourceTurnId,
+    );
+    if (artifacts.length > MAX_THREAD_ATTACHMENTS_PER_TURN) {
+      throw new Error("Too many attachments are bound to the source Turn.");
+    }
+    for (const artifact of artifacts) this.assertReadableByScope(artifact, scope);
+    return {
+      artifactIds: artifacts.map((artifact) => artifact.id),
+      inputs: await this.buildInputsFromArtifacts(artifacts, options),
+    };
+  }
+
+  private async buildInputsFromArtifacts(
+    artifacts: ThreadArtifact[],
+    options: ThreadArtifactTurnInputOptions,
+  ): Promise<UserInput[]> {
+    const inputs: UserInput[] = [];
+    for (const artifact of artifacts) {
       if (artifact.kind === "image") {
         inputs.push({
           type: "localImage",
-          path: join(this.artifactDirectory(threadId, artifact.id), artifact.storedFilename),
+          path: join(this.artifactDirectory(artifact.threadId, artifact.id), artifact.storedFilename),
         });
         continue;
       }
@@ -280,7 +317,7 @@ export class ThreadArtifactStore {
       }
       let extracted: string;
       try {
-        extracted = await readFile(join(this.artifactDirectory(threadId, artifact.id), "extracted.txt"), "utf8");
+        extracted = await readFile(join(this.artifactDirectory(artifact.threadId, artifact.id), "extracted.txt"), "utf8");
       } catch {
         throw new ThreadArtifactStoreError(
           "Attachment extracted content is unavailable.",

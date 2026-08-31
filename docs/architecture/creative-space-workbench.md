@@ -6,7 +6,7 @@ Commerce Pilot's Creative Space is a three-pane, browser-based workbench built d
 
 - Clicking **创作空间** enters the workbench directly; it does not open a secondary generator menu.
 - The left pane lists creative projects.
-- The center pane is a blank creative canvas until the selected project produces a deliverable.
+- The center pane is an infinite commerce canvas. It stays visually empty until the selected project produces a real deliverable, while retaining neutral pan/zoom chrome.
 - The right pane is the normal Harness conversation, including streamed items, native questions, queueing, interruption, attachments, image generation, recovery, and history.
 
 Creative Space does not introduce a separate project conversation system:
@@ -15,10 +15,11 @@ Creative Space does not introduce a separate project conversation system:
 Creative project = persisted Codex thread
 User request or revision = Codex Turn
 Conversation/tool/media progress = Codex Item stream
-Canvas = projection of persisted final Agent Items
+Canvas source = persisted final Agent and native image Items
+Canvas editing state = tenant-owned nodes, layout and append-only revisions
 ```
 
-The PostgreSQL thread index remains an ownership and navigation index. Codex App Server is authoritative for conversation history and Turn state.
+The PostgreSQL thread index remains an ownership and navigation index. Codex App Server is authoritative for conversation history and Turn state. Canvas tables do not create a second Agent loop or message store: they bind application editing state to immutable Harness source ids.
 
 ## Managed Workflow
 
@@ -76,17 +77,27 @@ The route requires `requireAgentThreadContext(..., "product_catalog.read")`, rec
 
 `products` contains at most twenty canonical summary fields: id, title, SPU, status, variant count, source label, revision timestamp, and optional image URL. It never includes raw import records, mapping documents/evidence, arbitrary attributes, connector configuration, secret handles, or credentials. A project without a successfully bound selected-product Turn returns `turnId: null` and an empty array. Restoring this selection affects only the next unsent Turn; it does not mutate a running Turn or inject a synthetic user message into Harness history.
 
-## Canvas Projection
+## Infinite Canvas And Revisions
 
-The canvas owns no independent business state. It selects the newest completed creative delivery Turn by Harness sequence and groups:
+The canvas reconciles completed creative Items into bounded application nodes:
 
-1. its completed final assistant Item containing the structured document and delivery metadata;
-2. every native `imageGeneration` artifact from that same Turn, projected through the ownership-checked BFF;
-3. legacy completed final assistant text when no structured delivery exists.
+1. `document` nodes render structured title, body, CTA and compliance notes with an explicit edit mode;
+2. `image` nodes reference one ownership-checked native `imageGeneration` artifact and store only editable text overlays and review metadata;
+3. `table` nodes render script/storyboard columns and rows as semantic editable tables.
 
-Commentary, streaming fragments, user messages, and conversational `responseType=answer` replies do not replace the current canvas. A revision Turn returns the complete latest draft, so the canvas can project it deterministically without storing a browser-authored version history. Main-image and gallery Turns therefore retain every native image from their delivery instead of showing only the last one; the companion final message contributes labels and review notes but never becomes a duplicate media artifact.
+The managed creative output schema includes `canvasBlocks`. The model may describe document, image-overlay, or table content, but it never supplies coordinates, database ids, Harness ids, artifact URLs or UI commands. Gateway/BFF reconciliation binds the completed `threadId`, `turnId`, `agentMessage` Item id and native image artifact id. Legacy final messages are deterministically projected into document or table nodes.
 
-When no persisted delivery exists, the canvas remains blank.
+`commerce_creative_canvas_node` stores immutable source identity and current business metadata. `commerce_creative_canvas_node_revision` is append-only and distinguishes `harness` snapshots from `user` edits. Layout, viewport and message references live in separate forced-RLS tables. Manual editing never mutates App Server history; restoring a version appends a new user revision. A later Agent revision remains a new Harness Turn and completed Item.
+
+Each assistant Item may reference multiple nodes through `commerce_creative_canvas_message_ref`. Clicking a reply reference centers and selects the node; clicking a node scrolls to the originating assistant Item. “在对话中修改” only prepares a visible follow-up in the existing composer and uses the existing managed workflow on submission.
+
+Completed assistant replies expose a compact retry action, but retry remains a native Harness history operation rather than an application-authored duplicate prompt. The browser submits only the authoritative assistant Item id. The BFF resolves that Item to its terminal Turn under the current tenant, reserves normal Turn quota, and clones any immutable selected-product revision references. Gateway then reads the original Harness `userMessage`, recovers only application-registered workflow and specialist identities, and rebuilds tenant attachment inputs from the owned artifact store. Paginated threads use native `thread/revert` with `beforeTurnId` equal to the source Turn; legacy threads use the Harness compatibility method `thread/rollback` with the exact target-through-latest Turn count. Both paths then start the replacement with native `turn/start`. The stable Codex thread remains the project authority, and the reverted reply plus all later Turns leave the active Harness history. A browser cannot supply replacement text, Skill paths, output schemas, attachment paths, product revisions, runtime policy, or the history boundary.
+
+Retry is always an explicit user action. It does not silently replay a failed or uncertain paid provider request: external-data calls still pass live authorization, approval, budget reservation, exact-once dispatch, audit and settlement inside the replacement Turn. If `thread/revert` succeeds but the replacement `turn/start` response is uncertain, the client reconciles current Harness state before enabling another retry.
+
+Commentary, streaming fragments, user messages, and conversational `responseType=answer` replies never materialize persisted nodes. While a Turn runs, the canvas may show a non-persisted activity state, but a source node is created only from completed authoritative Items. When no persisted delivery exists, the canvas contains no example or fake asset nodes.
+
+Exact duplicate final `agentMessage` Items inside one Turn are coalesced by phase and content for browser/history projection. A `main_image` or `gallery_images` claim without a completed native image artifact materializes no canvas node and is shown in conversation as “图片未生成”. Reconciliation deletes obsolete unedited source projections under the same user-scoped RLS transaction; any node with a user revision is retained.
 
 ## Native Media Boundary
 
@@ -122,4 +133,4 @@ Desktop uses three panes:
 
 Composer popovers are collision-bound to the Harness conversation pane. Wide workbench pickers such as the Product Library switch to a compact, single-column surface instead of covering the creative canvas. Product selection updates the unsent composer context directly; removing the final product returns the next Turn to automatic product matching without changing an active Harness Turn.
 
-At narrower widths the workbench uses a controlled **项目 / 画布 / 对话** view switch instead of forcing three tall panes into one page. The Project tab renders the full-height scrollable project sidebar in place, while the active Conversation view keeps the composer reachable at 390 px width. Product and method controls stay inside the compact rail, and no page-level horizontal scrolling is allowed. The visual language remains the project-wide quiet grayscale system; Creative Space does not introduce a separate theme, font, radius, or color palette.
+At narrower widths the workbench uses a controlled **项目 / 画布 / 对话** view switch instead of forcing three tall panes into one page. The Project tab renders the full-height scrollable project sidebar in place, the Canvas tab keeps pan/zoom and selected-node editing inside the viewport, and the Conversation view keeps the composer reachable at 390 px width. Product and method controls stay inside the compact rail, and no page-level horizontal scrolling is allowed. The visual language remains the project-wide quiet grayscale system; Creative Space does not introduce a separate theme, font, radius, or color palette.

@@ -3,14 +3,11 @@
 import {
   AlertCircle,
   ArrowLeft,
-  CheckCircle2,
   ChevronDown,
-  CircleAlert,
   CircleStop,
   Clapperboard,
   FileText,
   FolderKanban,
-  Image as ImageIcon,
   LoaderCircle,
   Megaphone,
   MessageSquareText,
@@ -22,7 +19,6 @@ import {
 import type { ReactNode } from "react";
 import { useState } from "react";
 
-import { AssistantMarkdown } from "@/components/agent/assistant-markdown";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type {
@@ -30,10 +26,7 @@ import type {
   ConversationMessage,
   GeneratedImageItem,
 } from "@/lib/agent/use-agent-thread";
-import {
-  selectLatestCreativeCanvasDelivery,
-  type CreativeCanvasDelivery,
-} from "@/lib/creative/creative-canvas";
+import { CreativeCanvasNavigationProvider } from "@/lib/creative/creative-canvas-navigation";
 import {
   creativeMethodLabel,
   creativeMethodOptions,
@@ -42,10 +35,11 @@ import {
 import {
   creativeMethodGroupLabels,
   creativeMethodPresentation,
-  creativeMethodRequirement,
   type CreativeMethodGroupId,
 } from "@/lib/creative/creative-method-presentation";
 import { cn } from "@/lib/utils";
+
+import { CreativeInfiniteCanvas } from "./creative-infinite-canvas";
 
 export type CreativeSpaceWorkbenchProps = {
   projects: readonly AgentThreadSummary[];
@@ -82,44 +76,51 @@ export function CreativeSpaceWorkbench({
   onSelectProject,
   onBackToWorkbench,
 }: CreativeSpaceWorkbenchProps) {
-  const delivery = selectLatestCreativeCanvasDelivery(messages, images);
   const [mobileView, setMobileView] = useState<CreativeMobileView>("conversation");
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--cp-bg)] xl:grid xl:grid-cols-[var(--cp-sidebar-width)_minmax(0,1fr)_minmax(360px,430px)] xl:grid-rows-1">
-      <CreativeMobileNavigation
-        value={mobileView}
-        onChange={setMobileView}
-        onBackToWorkbench={onBackToWorkbench}
-        disabled={navigationDisabled}
-      />
-      <CreativeProjectSidebar
-        projects={projects}
-        activeProjectId={activeProjectId}
-        navigationDisabled={navigationDisabled}
-        mobileVisible={mobileView === "projects"}
-        onCreateProject={() => {
-          setMobileView("conversation");
-          onCreateProject();
-        }}
-        onSelectProject={(project) => {
-          setMobileView("conversation");
-          onSelectProject(project);
-        }}
-        onBackToWorkbench={onBackToWorkbench}
-      />
-      <CreativeCanvas delivery={delivery} mobileVisible={mobileView === "canvas"} />
-      <aside
-        data-creative-conversation
-        className={cn(
-          "min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-[var(--cp-border)] bg-[var(--cp-bg)] xl:flex xl:border-l xl:border-t-0",
-          mobileView === "conversation" ? "flex" : "hidden",
-        )}
-        aria-label="项目对话"
-      >
-        {conversation}
-      </aside>
-    </div>
+    <CreativeCanvasNavigationProvider key={activeProjectId ?? "new-creative-project"}>
+      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--cp-bg)] xl:grid xl:grid-cols-[var(--cp-sidebar-width)_minmax(0,1fr)_minmax(360px,430px)] xl:grid-rows-1">
+        <CreativeMobileNavigation
+          value={mobileView}
+          onChange={setMobileView}
+          onBackToWorkbench={onBackToWorkbench}
+          disabled={navigationDisabled}
+        />
+        <CreativeProjectSidebar
+          projects={projects}
+          activeProjectId={activeProjectId}
+          navigationDisabled={navigationDisabled}
+          mobileVisible={mobileView === "projects"}
+          onCreateProject={() => {
+            setMobileView("conversation");
+            onCreateProject();
+          }}
+          onSelectProject={(project) => {
+            setMobileView("conversation");
+            onSelectProject(project);
+          }}
+          onBackToWorkbench={onBackToWorkbench}
+        />
+        <CreativeInfiniteCanvas
+          threadId={activeProjectId}
+          messages={messages}
+          images={images}
+          running={projects.some((project) => project.threadId === activeProjectId && project.status === "running")}
+          mobileVisible={mobileView === "canvas"}
+        />
+        <aside
+          data-creative-conversation
+          className={cn(
+            "min-h-0 min-w-0 flex-1 flex-col overflow-hidden border-[var(--cp-border)] bg-[var(--cp-bg)] xl:flex xl:border-l xl:border-t-0",
+            mobileView === "conversation" ? "flex" : "hidden",
+          )}
+          aria-label="项目对话"
+        >
+          {conversation}
+        </aside>
+      </div>
+    </CreativeCanvasNavigationProvider>
   );
 }
 
@@ -237,11 +238,8 @@ export function CreativeMethodPickerPanel({
 
   return (
     <>
-      <div className="px-2 pb-2 pt-1">
+      <div className="px-2 pb-1 pt-1">
         <h2 className="m-0 text-sm font-semibold text-[var(--cp-text)]">创作类型</h2>
-        <p className="mb-0 mt-1 text-[11px] leading-4 text-[var(--cp-text-muted)]">
-          选择后只会预填对话，发送后由当前 Codex thread 执行。
-        </p>
       </div>
       {groups.map((group) => {
         const GroupIcon = groupIcons[group];
@@ -271,9 +269,6 @@ export function CreativeMethodPickerPanel({
                 >
                   <span className="block text-[13px] font-medium leading-5 text-[var(--cp-text)]">{option.label}</span>
                   <span className="mt-0.5 block text-[11px] leading-4 text-[var(--cp-text-muted)]">{option.shortDescription}</span>
-                  <span className="mt-1 block text-[10px] leading-4 text-[var(--cp-text-faint)]">
-                    {creativeMethodRequirement(option.value)}
-                  </span>
                 </button>
               ))}
               {group === "video" ? (
@@ -288,7 +283,7 @@ export function CreativeMethodPickerPanel({
                     视频成片
                   </span>
                   <span id="creative-video-render-disabled" className="mt-0.5 block text-[11px] leading-4 text-[var(--cp-text-faint)]">
-                    当前仅支持脚本与分镜；真实成片工具尚未接入。
+                    当前可生成脚本与分镜，暂不渲染成片
                   </span>
                 </button>
               ) : null}
@@ -386,157 +381,6 @@ export function CreativeProjectSidebar({
         )}
       </nav>
     </aside>
-  );
-}
-
-export function CreativeCanvas({
-  delivery,
-  mobileVisible = false,
-}: {
-  delivery: CreativeCanvasDelivery | null;
-  mobileVisible?: boolean;
-}) {
-  return (
-    <section
-      className={cn(
-        "relative min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--cp-bg)] xl:flex xl:h-auto",
-        mobileVisible ? "flex" : "hidden",
-      )}
-      aria-label="创作画布"
-      aria-live="polite"
-    >
-      {delivery ? (
-        <>
-          <CreativeCanvasHeader delivery={delivery} />
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-6 sm:px-8 lg:px-10">
-            <div className="mx-auto flex min-h-full w-full max-w-[760px] flex-col items-center">
-              {delivery.kind === "imageGroup" ? (
-                <CreativeImageGroup delivery={delivery} />
-              ) : (
-                <CreativeDocument delivery={delivery} />
-              )}
-            </div>
-          </div>
-        </>
-      ) : null}
-    </section>
-  );
-}
-
-function CreativeCanvasHeader({ delivery }: { delivery: CreativeCanvasDelivery }) {
-  const reviewRequired = delivery.kind === "document"
-    ? Boolean(delivery.draft?.complianceNotes.length)
-    : Boolean(delivery.companion?.draft?.complianceNotes.length);
-  const typeLabel = delivery.deliverableType
-    ? creativeMethodLabel(delivery.deliverableType)
-    : delivery.kind === "imageGroup"
-      ? "生成图片"
-      : "创作文档";
-
-  return (
-    <header className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--cp-border-subtle)] px-4 py-2 sm:px-5">
-      <span className="truncate text-sm font-medium text-[var(--cp-text)]">{typeLabel}</span>
-      {delivery.channel ? (
-        <span className="truncate text-xs text-[var(--cp-text-muted)]">{delivery.channel}</span>
-      ) : null}
-      <span className="text-xs tabular-nums text-[var(--cp-text-faint)]">第 {delivery.ordinal} 次产出</span>
-      <span
-        className={cn(
-          "ml-auto inline-flex h-6 items-center gap-1 rounded-full px-2 text-[10px]",
-          reviewRequired
-            ? "bg-[var(--cp-warning-bg)] text-[var(--cp-warning)]"
-            : "bg-[var(--cp-bg-subtle)] text-[var(--cp-text-muted)]",
-        )}
-      >
-        {reviewRequired ? <CircleAlert className="size-3" aria-hidden="true" /> : <CheckCircle2 className="size-3" aria-hidden="true" />}
-        {reviewRequired ? "待核查" : "已完成"}
-      </span>
-    </header>
-  );
-}
-
-function CreativeImageGroup({
-  delivery,
-}: {
-  delivery: Extract<CreativeCanvasDelivery, { kind: "imageGroup" }>;
-}) {
-  return (
-    <div className="w-full">
-      <div className={cn("grid w-full gap-3", delivery.images.length > 1 && "sm:grid-cols-2")}>
-        {delivery.images.map((image, index) => (
-          <figure
-            key={image.id}
-            className="m-0 flex min-h-[260px] items-center justify-center overflow-hidden rounded-[var(--cp-radius-item)] border border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] p-2"
-          >
-            {/* Native Harness image URLs are tenant-checked BFF routes. */}
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={image.url}
-              alt={image.filename ? `创作图片 ${index + 1}：${image.filename}` : `创作图片 ${index + 1}`}
-              className="block max-h-[min(620px,calc(100dvh-168px))] max-w-full object-contain"
-            />
-          </figure>
-        ))}
-      </div>
-      {delivery.companion ? (
-        <div className="mx-auto mt-6 max-w-[680px] border-t border-[var(--cp-border-subtle)] pt-2">
-          <CreativeDocument delivery={delivery.companion} />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function CreativeDocument({
-  delivery,
-}: {
-  delivery: Extract<CreativeCanvasDelivery, { kind: "document" }>;
-}) {
-  if (!delivery.draft) {
-    return (
-      <article className="w-full max-w-[680px] py-4 text-[15px] leading-7 text-[var(--cp-text-soft)]">
-        <AssistantMarkdown content={delivery.content} />
-      </article>
-    );
-  }
-
-  return (
-    <article className="w-full max-w-[680px] py-4 text-[15px] leading-7 text-[var(--cp-text-soft)]">
-      <h2 className="m-0 text-[26px] font-semibold leading-9 text-[var(--cp-text)]">
-        {delivery.draft.title}
-      </h2>
-      <div className="mt-7">
-        <AssistantMarkdown content={delivery.draft.body} />
-      </div>
-      {delivery.draft.callToAction ? (
-        <section className="mt-8" aria-labelledby={`creative-cta-${delivery.id}`}>
-          <h3
-            id={`creative-cta-${delivery.id}`}
-            className="m-0 text-xs font-medium text-[var(--cp-text-faint)]"
-          >
-            行动引导
-          </h3>
-          <p className="mb-0 mt-2 font-medium text-[var(--cp-text)]">
-            {delivery.draft.callToAction}
-          </p>
-        </section>
-      ) : null}
-      {delivery.draft.complianceNotes.length > 0 ? (
-        <section className="mt-8" aria-labelledby={`creative-compliance-${delivery.id}`}>
-          <h3
-            id={`creative-compliance-${delivery.id}`}
-            className="m-0 text-xs font-medium text-[var(--cp-text-faint)]"
-          >
-            合规提醒
-          </h3>
-          <ul className="mb-0 mt-2 space-y-1.5 pl-5 text-sm text-[var(--cp-text-muted)]">
-            {delivery.draft.complianceNotes.map((note, index) => (
-              <li key={`${index}-${note}`}>{note}</li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </article>
   );
 }
 

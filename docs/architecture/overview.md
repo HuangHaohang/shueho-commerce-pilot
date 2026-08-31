@@ -26,6 +26,7 @@ Commerce Pilot must not replace these concerns with a custom agent loop, prompt 
 |---|---|---|
 | Browser application | Next.js 15 App Router, React 19, TypeScript | Workbench, conversation UI, BFF route handlers, authenticated artifact delivery |
 | UI system | Tailwind CSS v4, shadcn/ui, Radix primitives, lucide-react | Accessible controls and the project design system |
+| Creative canvas | `@xyflow/react` custom React nodes | Infinite viewport, node selection, resize, MiniMap and accessible spatial navigation; content remains application React UI |
 | Client server-state | TanStack Query | Models, threads, plugins, Skills, Enterprise state, cache invalidation |
 | Agent gateway | Node.js 20.16+, TypeScript, native HTTP/SSE | App Server ownership, policy, scope binding, event sanitization, host tools |
 | Agent runtime | `@openai/codex` App Server | Threads, Turns, streaming, tools, Skills, approvals, queue, compaction, multi-agent |
@@ -77,7 +78,8 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 | Creative project and its conversation | One persisted Codex thread indexed as `recipe_id=creative_project`; no parallel project chat store |
 | Creative method catalog | Closed application registry that maps one business method id to one versioned specialist Skill; the browser never supplies a Skill path or body |
 | Thread product selection | Newest product context set successfully bound to a Turn for the authenticated tenant/workspace/user/thread; only bounded canonical summaries are restored |
-| Creative canvas | Latest completed delivery Turn projected as its final assistant document plus all native `imageGeneration` Items from that Turn |
+| Creative canvas source | Completed Codex `agentMessage` and native `imageGeneration` Items, bound by real thread, Turn and Item ids |
+| Creative canvas editing state | Application-owned RLS tables for nodes, append-only revisions, layout, viewport and message references; native image bytes remain immutable Harness artifacts |
 | Active Turn and queue | App Server read/queue APIs |
 | Browser identity and Enterprise access | Better Auth + PostgreSQL RLS context |
 | Cross-company/workspace isolation | Server-derived tenant/workspace principal + forced RLS + validated compound foreign keys + live RBAC |
@@ -131,9 +133,9 @@ No external write is complete merely because the model said it succeeded.
 3. The user chooses a business method such as listing copy, promotion copy, main image, gallery images, detail page, shooting script, or short-video storyboard. The browser submits only its closed method id.
 4. A new or revised creative request starts a native Turn with the application-owned `commerce-creative-project` Skill plus the mapped specialist Skill Item. Product context and tenant-owned image attachments are separate server-validated native inputs.
 5. App Server streams questions, commentary, tool calls, native image generation and final Items through the existing Gateway SSE path.
-6. The center canvas projects the newest completed delivery Turn, including its final document and every native image generated in that same Turn; it does not store a second browser-authored version history.
+6. The center canvas reconciles completed delivery Items into document, image-layer, and table nodes. Harness history remains authoritative for the Agent result; application-owned RLS tables persist spatial layout, editable overlays and append-only user revisions.
 7. Selecting an existing project reads its newest successfully bound product context through an authenticated `product_catalog.read` route. PostgreSQL RLS and explicit tenant/workspace/user/thread predicates restrict the response to at most twenty product summaries; raw imports, mappings, attributes, credentials, and connector configuration are not returned.
-8. Later feedback starts another Turn in the same project thread, and the complete latest delivery replaces the canvas projection.
+8. Later feedback starts another Turn in the same project thread. New completed Items add new nodes; manual edits create application revisions, and reply-to-node references preserve bidirectional navigation without rewriting Harness history.
 
 Product visual identity is not inferred from a catalog URL. A main-image, gallery, or storyboard request needs a tenant-owned reference image or user attachment before the native `image_gen` flow may claim visual fidelity. Text-only product facts can still produce copy, scripts, page structure, or a clearly labelled conceptual image direction. Rendered video is unavailable: future video generation must be an application-owned asynchronous commerce tool with quote/approval, live RBAC, idempotency, audit, tenant artifact storage, and authoritative status/content readback rather than a fabricated Harness Item.
 

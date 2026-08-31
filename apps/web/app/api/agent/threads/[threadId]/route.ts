@@ -122,6 +122,7 @@ function normalizeThreadHistory(
     const turnAttachments = threadAttachments.filter((attachment) => attachment.turnId === turnId);
     const turnRunning = turn.status === "inProgress" || turn.status === "running";
     const items = Array.isArray(turn.items) ? turn.items.filter(isRecord) : [];
+    const seenAgentMessages = new Set<string>();
     const turnAnswers = userInputAnswers.filter((answer) => answer.turnId === turnId);
     const persistedUserTexts = new Set(
       items
@@ -183,6 +184,10 @@ function normalizeThreadHistory(
           });
         }
       } else if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
+        const phase = item.phase === "commentary" || item.phase === "final_answer" ? item.phase : null;
+        const fingerprint = `${phase ?? ""}\u0000${item.text}`;
+        if (seenAgentMessages.has(fingerprint)) continue;
+        seenAgentMessages.add(fingerprint);
         if (item.phase !== "commentary") appendAnswers();
         messages.push({
           id,
@@ -190,7 +195,7 @@ function normalizeThreadHistory(
           turnId,
           role: "assistant",
           content: item.text,
-          phase: item.phase === "commentary" || item.phase === "final_answer" ? item.phase : null,
+          phase,
           feedback: feedbackByMessageItemId.get(id) ?? null,
           status: "completed",
         });
@@ -219,6 +224,21 @@ function normalizeThreadHistory(
         model: typeof artifact.model === "string" ? artifact.model : "gpt-image-2",
         filename,
       });
+    }
+  }
+
+  const imageTurnIds = new Set(
+    images
+      .map((image) => typeof image.turnId === "string" ? image.turnId : null)
+      .filter((turnId): turnId is string => Boolean(turnId)),
+  );
+  for (const message of messages) {
+    if (
+      message.role === "assistant" && message.phase !== "commentary" &&
+      typeof message.turnId === "string" && !imageTurnIds.has(message.turnId) &&
+      claimsGeneratedImage(message.content)
+    ) {
+      message.artifactStatus = "missing_image";
     }
   }
 
@@ -264,6 +284,18 @@ function readThreadAttachment(threadId: string, value: unknown) {
     turnId,
     url: `/api/agent/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(id)}`,
   };
+}
+
+function claimsGeneratedImage(content: unknown): boolean {
+  if (typeof content !== "string") return false;
+  const normalized = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  try {
+    const parsed = JSON.parse(normalized) as Record<string, unknown>;
+    return parsed.responseType === "draft" &&
+      (parsed.deliverableType === "main_image" || parsed.deliverableType === "gallery_images");
+  } catch {
+    return false;
+  }
 }
 
 function normalizeActivity(

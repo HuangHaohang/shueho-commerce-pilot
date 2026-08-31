@@ -60,6 +60,7 @@ export type ConversationMessage = {
   skillName?: string | null;
   attachments?: ConversationAttachment[];
   feedback?: AgentMessageFeedbackRating | null;
+  artifactStatus?: "missing_image" | null;
   status: "streaming" | "completed";
 };
 
@@ -138,6 +139,8 @@ export type AgentSubmitOptions = {
   productIds?: string[];
   productContextMode?: "auto" | "selected" | "none";
 };
+
+export type AgentRetryOptions = Pick<AgentSubmitOptions, "externalDataApprovalMode">;
 
 export function buildAgentTurnRequestBody(input: {
   message: string;
@@ -241,6 +244,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     () => new Set(),
   );
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
+  const [retryingMessageId, setRetryingMessageId] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const threadIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ConversationMessage[]>([]);
@@ -254,6 +258,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const threadReconcileInFlightRef = useRef(false);
   const titleGenerationAttemptRef = useRef(new Set<string>());
   const feedbackSubmittingIdsRef = useRef(new Set<string>());
+  const retryingMessageIdRef = useRef<string | null>(null);
   const pendingSubmitClientIdRef = useRef<string | null>(null);
   const pendingSubmitStartedAtRef = useRef<number | null>(null);
   const pendingSteerClientIdRef = useRef<string | null>(null);
@@ -405,6 +410,50 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setDurationMs(startedAtRef.current ? Date.now() - startedAtRef.current : null);
       setError(typeof params.message === "string" ? params.message : "上下文整理失败，请继续对话或稍后重试。");
       setStatus("failed");
+      return;
+    }
+
+    if (method === "thread/reverted") {
+      const revertedThreadId = typeof params.threadId === "string" ? params.threadId : null;
+      if (!revertedThreadId || revertedThreadId !== threadIdRef.current) return;
+      activeTurnIdRef.current = null;
+      startedAtRef.current = null;
+      pendingUserInputRef.current = null;
+      setActiveTurnId(null);
+      setPendingUserInput(null);
+      setAnsweringUserInput(false);
+      setDurationMs(null);
+      setError(null);
+      setStatus("connecting");
+      void (async () => {
+        try {
+          const response = await fetch(`/api/agent/threads/${encodeURIComponent(revertedThreadId)}`, {
+            cache: "no-store",
+          });
+          const payload = (await response.json().catch(() => null)) as StoredThreadResponse | null;
+          if (!response.ok || !payload || threadIdRef.current !== revertedThreadId) return;
+          if (
+            activeTurnIdRef.current &&
+            payload.thread.lastTurnId !== activeTurnIdRef.current
+          ) {
+            return;
+          }
+          sequenceRef.current = Math.max(
+            0,
+            ...payload.messages.map((message) => message.sequence),
+            ...payload.activities.map((activity) => activity.sequence),
+            ...payload.images.map((image) => image.sequence),
+          );
+          setMessages(payload.messages);
+          setActivities(payload.activities);
+          setImages(payload.images);
+          setHistoryCursor(payload.nextCursor);
+          setLastTurnId(payload.thread.lastTurnId);
+          setStatus(payload.thread.status);
+        } catch {
+          setError("Harness 已回退历史，正在等待替代 Turn 状态同步。");
+        }
+      })();
       return;
     }
 
@@ -834,6 +883,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     runtimeInstanceIdRef.current = null;
     compactingRef.current = false;
     feedbackSubmittingIdsRef.current.clear();
+    retryingMessageIdRef.current = null;
     setThreadId(null);
     setThreadTitle(null);
     setMessages([]);
@@ -858,6 +908,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     setAnsweringUserInput(false);
     setFeedbackSubmittingIds(new Set());
     setFeedbackError(null);
+    setRetryingMessageId(null);
     pendingSubmitClientIdRef.current = null;
     pendingSubmitStartedAtRef.current = null;
     pendingSteerClientIdRef.current = null;
@@ -902,6 +953,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       setFeedbackError(null);
       feedbackSubmittingIdsRef.current.clear();
       setFeedbackSubmittingIds(new Set());
+      retryingMessageIdRef.current = null;
+      setRetryingMessageId(null);
       queueRefreshSuppressionRef.current = 0;
       threadReconcileInFlightRef.current = false;
       pendingSteerClientIdRef.current = null;
@@ -1200,6 +1253,126 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       }
     },
     [activateTurn, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
+  );
+
+  const retryMessage = useCallback(
+    async (
+      assistantMessageId: string,
+      sourceMessage: ConversationMessage,
+      options?: AgentRetryOptions,
+    ): Promise<boolean> => {
+      if (
+        !threadId ||
+        sourceMessage.role !== "user" ||
+        (!sourceMessage.content.trim() && !sourceMessage.attachments?.length) ||
+        status === "running" ||
+        status === "connecting" ||
+        compactingRef.current ||
+        retryingMessageIdRef.current
+      ) {
+        return false;
+      }
+
+      const retryThreadId = threadId;
+      const retryTurnId = sourceMessage.turnId;
+      if (!retryTurnId) return false;
+      const previousStatus = status;
+      const clientRequestId = crypto.randomUUID();
+      const boundarySequence = messagesRef.current.reduce(
+        (boundary, message) => message.turnId === retryTurnId
+          ? Math.min(boundary, message.sequence)
+          : boundary,
+        sourceMessage.sequence,
+      );
+      retryingMessageIdRef.current = assistantMessageId;
+      setRetryingMessageId(assistantMessageId);
+      setError(null);
+      setStatus("connecting");
+      pendingSubmitClientIdRef.current = clientRequestId;
+      pendingSubmitStartedAtRef.current = Date.now();
+      try {
+        const response = await fetch(
+          `/api/agent/threads/${encodeURIComponent(retryThreadId)}/messages/${encodeURIComponent(assistantMessageId)}/retry`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model,
+              effort,
+              externalDataApprovalMode: options?.externalDataApprovalMode ?? "always_ask",
+              clientRequestId,
+            }),
+          },
+        );
+        const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!response.ok) {
+          if (response.status >= 500) {
+            setError("连接中断，正在向 Harness 核对重新尝试是否已被接收。");
+            return true;
+          }
+          pendingSubmitClientIdRef.current = null;
+          pendingSubmitStartedAtRef.current = null;
+          setStatus(previousStatus);
+          throw new Error(readError(payload) || "无法重新尝试这条回复。");
+        }
+        if (threadIdRef.current !== retryThreadId) {
+          throw new Error("会话已切换，未执行重新尝试。");
+        }
+        const result = payload && isRecord(payload.result) ? payload.result : null;
+        const turn = result && isRecord(result.turn) ? result.turn : null;
+        const newTurnId = turn && typeof turn.id === "string" ? turn.id : null;
+        const revertedTurnId = payload && typeof payload.retriedFromTurnId === "string"
+          ? payload.retriedFromTurnId
+          : null;
+        if (!newTurnId || revertedTurnId !== retryTurnId) {
+          throw new Error("Harness 未返回有效的重试 Turn。");
+        }
+
+        setMessages((current) => {
+          const retained = current.filter((message) =>
+            message.sequence < boundarySequence ||
+            message.turnId === newTurnId ||
+            message.clientId === clientRequestId,
+          );
+          if (retained.some((message) => message.clientId === clientRequestId)) return retained;
+          return [
+            ...retained,
+            {
+              ...sourceMessage,
+              id: `user-${clientRequestId}`,
+              sequence: nextSequence(sequenceRef),
+              turnId: newTurnId,
+              clientId: clientRequestId,
+              delivery: "committed",
+            },
+          ];
+        });
+        setActivities((current) => current.filter((activity) =>
+          activity.sequence < boundarySequence || activity.turnId === newTurnId
+        ));
+        setImages((current) => current.filter((image) =>
+          image.sequence < boundarySequence || image.turnId === newTurnId
+        ));
+        pendingUserInputRef.current = null;
+        setPendingUserInput(null);
+        setAnsweringUserInput(false);
+        activateTurn(newTurnId);
+        setDurationMs(null);
+        setStatus("running");
+        return true;
+      } catch (retryError) {
+        pendingSubmitClientIdRef.current = null;
+        pendingSubmitStartedAtRef.current = null;
+        setError(retryError instanceof Error ? retryError.message : "无法重新发送这条消息。");
+        return false;
+      } finally {
+        if (retryingMessageIdRef.current === assistantMessageId) {
+          retryingMessageIdRef.current = null;
+          setRetryingMessageId(null);
+        }
+      }
+    },
+    [activateTurn, effort, model, status, threadId],
   );
 
   const steerMessage = useCallback(
@@ -1672,7 +1845,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     error,
     feedbackError,
     feedbackSubmittingIds,
+    retryingMessageId,
     submit,
+    retryMessage,
     steerMessage,
     enqueueMessage,
     updateQueuedMessage,
@@ -1686,6 +1861,38 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     loadThread,
     loadOlderHistory,
   };
+}
+
+export function findRetrySourceMessage(
+  messages: ConversationMessage[],
+  assistantMessage: ConversationMessage,
+): ConversationMessage | null {
+  if (
+    assistantMessage.role !== "assistant" ||
+    assistantMessage.phase === "commentary" ||
+    assistantMessage.status !== "completed"
+  ) {
+    return null;
+  }
+  const candidates = messages.filter((message) =>
+    message.role === "user" &&
+    message.status === "completed" &&
+    message.sequence < assistantMessage.sequence &&
+    (Boolean(message.content.trim()) || Boolean(message.attachments?.length)),
+  );
+  const sameTurn = assistantMessage.turnId
+    ? candidates.filter((message) => message.turnId === assistantMessage.turnId)
+    : [];
+  if (sameTurn.length) {
+    return sameTurn.reduce<ConversationMessage | null>(
+      (first, message) => !first || message.sequence < first.sequence ? message : first,
+      null,
+    );
+  }
+  return candidates.reduce<ConversationMessage | null>(
+    (latest, message) => !latest || message.sequence > latest.sequence ? message : latest,
+    null,
+  );
 }
 
 export async function waitForCommittedUserMessage(

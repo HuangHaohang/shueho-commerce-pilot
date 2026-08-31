@@ -855,6 +855,89 @@ export async function createProductContextSet(
   });
 }
 
+export async function cloneProductContextSetForRetry(
+  scope: EnterpriseScope,
+  input: { threadId: string; sourceTurnId: string; clientRequestId: string },
+): Promise<{ contextSetId: string; productIds: string[] } | null> {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(input.threadId) || !/^[A-Za-z0-9_-]{8,128}$/.test(input.sourceTurnId)) {
+    throw new ProductCatalogError("会话或 Turn 标识无效。", "PRODUCT_CONTEXT_ID_INVALID", 400);
+  }
+  assertUuid(input.clientRequestId, "请求标识");
+  return withEnterpriseDatabaseContext(scope, async (client) => {
+    const existing = await client.query<{ id: string }>(
+      `SELECT id FROM commerce_agent_product_context_set
+       WHERE tenant_id=$1 AND workspace_id=$2 AND user_id=$3
+         AND thread_id=$4 AND client_request_id=$5`,
+      [scope.tenantId, scope.workspaceId, scope.userId, input.threadId, input.clientRequestId],
+    );
+    if (existing.rows[0]) {
+      const items = await client.query<{ product_id: string }>(
+        `SELECT product_id FROM commerce_agent_product_context_item
+         WHERE tenant_id=$1 AND workspace_id=$2 AND context_set_id=$3
+         ORDER BY ordinal`,
+        [scope.tenantId, scope.workspaceId, existing.rows[0].id],
+      );
+      return { contextSetId: existing.rows[0].id, productIds: items.rows.map((item) => item.product_id) };
+    }
+
+    const source = await client.query<{ id: string }>(
+      `SELECT id FROM commerce_agent_product_context_set
+       WHERE tenant_id=$1 AND workspace_id=$2 AND user_id=$3
+         AND thread_id=$4 AND turn_id=$5
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [scope.tenantId, scope.workspaceId, scope.userId, input.threadId, input.sourceTurnId],
+    );
+    if (!source.rows[0]) return null;
+
+    const context = await client.query<{ id: string }>(
+      `INSERT INTO commerce_agent_product_context_set
+        (tenant_id,workspace_id,user_id,thread_id,client_request_id)
+       VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+      [scope.tenantId, scope.workspaceId, scope.userId, input.threadId, input.clientRequestId],
+    );
+    const contextSetId = context.rows[0]?.id;
+    if (!contextSetId) {
+      throw new ProductCatalogError("无法复制产品上下文。", "PRODUCT_CONTEXT_CREATE_FAILED", 500);
+    }
+    await client.query(
+      `INSERT INTO commerce_agent_product_context_item
+        (tenant_id,workspace_id,context_set_id,ordinal,product_id,product_revision_id,variant_id,variant_revision_id)
+       SELECT tenant_id,workspace_id,$4,ordinal,product_id,product_revision_id,variant_id,variant_revision_id
+       FROM commerce_agent_product_context_item
+       WHERE tenant_id=$1 AND workspace_id=$2 AND context_set_id=$3
+       ORDER BY ordinal`,
+      [scope.tenantId, scope.workspaceId, source.rows[0].id, contextSetId],
+    );
+    const items = await client.query<{ product_id: string }>(
+      `SELECT product_id FROM commerce_agent_product_context_item
+       WHERE tenant_id=$1 AND workspace_id=$2 AND context_set_id=$3
+       ORDER BY ordinal`,
+      [scope.tenantId, scope.workspaceId, contextSetId],
+    );
+    return { contextSetId, productIds: items.rows.map((item) => item.product_id) };
+  });
+}
+
+export async function hasBoundProductContextForTurn(
+  scope: EnterpriseScope,
+  input: { threadId: string; turnId: string },
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(input.threadId) || !/^[A-Za-z0-9_-]{8,128}$/.test(input.turnId)) {
+    throw new ProductCatalogError("会话或 Turn 标识无效。", "PRODUCT_CONTEXT_ID_INVALID", 400);
+  }
+  return withEnterpriseDatabaseContext(scope, async (client) => {
+    const result = await client.query(
+      `SELECT 1 FROM commerce_agent_product_context_set
+       WHERE tenant_id=$1 AND workspace_id=$2 AND user_id=$3
+         AND thread_id=$4 AND turn_id=$5
+       LIMIT 1`,
+      [scope.tenantId, scope.workspaceId, scope.userId, input.threadId, input.turnId],
+    );
+    return result.rowCount === 1;
+  });
+}
+
 export async function bindProductContextToTurn(
   scope: EnterpriseScope,
   input: { contextSetId: string; turnId: string },

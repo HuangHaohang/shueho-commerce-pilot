@@ -58,6 +58,49 @@ test("maps creative projects to the orchestrator plus an allowlisted specialist 
         items: { type: "string" },
       },
       message: { type: "string" },
+      canvasBlocks: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            key: { type: "string" },
+            type: { type: "string", enum: ["document", "image", "table"] },
+            title: { type: "string" },
+            body: { type: "string" },
+            columns: { type: "array", items: { type: "string" } },
+            rows: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  cells: { type: "array", items: { type: "string" } },
+                },
+                required: ["cells"],
+                additionalProperties: false,
+              },
+            },
+            textLayers: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  text: { type: "string" },
+                  x: { type: "number" },
+                  y: { type: "number" },
+                  width: { type: "number" },
+                  fontSize: { type: "number" },
+                  align: { type: "string", enum: ["left", "center", "right"] },
+                },
+                required: ["id", "text", "x", "y", "width", "fontSize", "align"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["key", "type", "title", "body", "columns", "rows", "textLayers"],
+          additionalProperties: false,
+        },
+      },
     },
     required: [
       "responseType",
@@ -68,6 +111,7 @@ test("maps creative projects to the orchestrator plus an allowlisted specialist 
       "callToAction",
       "complianceNotes",
       "message",
+      "canvasBlocks",
     ],
     additionalProperties: false,
   });
@@ -93,6 +137,9 @@ test("keeps creative revisions in Harness history and uses native image generati
   assert.match(skill, /Rendered video is unavailable/);
   assert.match(skill, /Never call an image provider directly/);
   assert.match(skill, /Do not call shell, filesystem, process/);
+  assert.match(skill, /one or more canvasBlocks/);
+  assert.match(skill, /Do not return canvas coordinates/);
+  assert.match(skill, /no completed image artifact/);
   assert.doesNotMatch(skill, /thread\/inject_items/);
 });
 
@@ -127,6 +174,8 @@ test("renders every specialist as an explicit-only application Skill", () => {
 });
 
 test("detail-page generation requires tenant-owned media for actual native images", () => {
+  const mainImageSkill = renderCreativeMethodSkill("main_image");
+  assert.match(mainImageSkill, /task is not complete until image_gen returns a completed native imageGeneration Item/);
   const skill = renderCreativeMethodSkill("detail_page");
   assert.match(skill, /tenant-owned product reference media/);
   assert.match(skill, /native image_gen/);
