@@ -31,6 +31,7 @@ export type ThreadArtifact = {
   workspaceId: string;
   userId: string;
   clientRequestId: string;
+  purpose: "turn_attachment" | "canvas_asset";
   turnId: string | null;
   originalName: string;
   storedFilename: string;
@@ -48,6 +49,7 @@ export type SaveThreadArtifactInput = {
   clientRequestId: string;
   originalName: string;
   declaredMimeType: string;
+  purpose?: ThreadArtifact["purpose"];
   bytes: Buffer;
 };
 
@@ -107,6 +109,7 @@ export class ThreadArtifactStore {
       workspaceId: input.scope.workspaceId,
       userId: input.scope.userId,
       clientRequestId: input.clientRequestId,
+      purpose: input.purpose ?? "turn_attachment",
       turnId: null,
       originalName,
       storedFilename,
@@ -261,7 +264,10 @@ export class ThreadArtifactStore {
     const artifacts: ThreadArtifact[] = [];
     for (const artifactId of uniqueIds) {
       const artifact = await this.get(threadId, artifactId);
-      if (!artifact || !artifactBelongsToScope(artifact, scope) || artifact.clientRequestId !== clientRequestId) {
+      if (
+        !artifact || artifact.purpose !== "turn_attachment" ||
+        !artifactBelongsToScope(artifact, scope) || artifact.clientRequestId !== clientRequestId
+      ) {
         throw new Error("Attachment ownership or request binding is invalid.");
       }
       artifacts.push(artifact);
@@ -278,7 +284,7 @@ export class ThreadArtifactStore {
     assertScopeOwnsThread(scope, threadId);
     assertAgentId(sourceTurnId, "source turn id");
     const artifacts = (await this.listForThread(threadId)).filter(
-      (artifact) => artifact.turnId === sourceTurnId,
+      (artifact) => artifact.purpose === "turn_attachment" && artifact.turnId === sourceTurnId,
     );
     if (artifacts.length > MAX_THREAD_ATTACHMENTS_PER_TURN) {
       throw new Error("Too many attachments are bound to the source Turn.");
@@ -343,6 +349,9 @@ export class ThreadArtifactStore {
     for (const artifactId of artifactIds) {
       const artifact = await this.get(threadId, artifactId);
       if (!artifact) throw new Error("Attachment disappeared before turn binding.");
+      if (artifact.purpose !== "turn_attachment") {
+        throw new Error("Canvas assets cannot be bound as Turn attachments.");
+      }
       await this.writeMetadata({ ...artifact, turnId });
     }
   }
@@ -544,7 +553,10 @@ function parseArtifact(value: unknown, expectedThreadId: string, expectedId: str
     throw new Error("Invalid thread attachment metadata.");
   }
   if (value.turnId !== null && typeof value.turnId !== "string") throw new Error("Invalid thread attachment metadata.");
-  return value as ThreadArtifact;
+  return {
+    ...(value as Omit<ThreadArtifact, "purpose">),
+    purpose: value.purpose === "canvas_asset" ? "canvas_asset" : "turn_attachment",
+  };
 }
 
 function artifactBelongsToScope(artifact: ThreadArtifact, scope: RuntimeScope): boolean {

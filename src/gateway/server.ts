@@ -400,6 +400,8 @@ const browserEventMethods = new Set([
 const MAX_JSON_BODY_BYTES = 64 * 1024;
 const MAX_QUEUED_MESSAGES_PER_THREAD = 50;
 const MAX_QUEUED_MESSAGE_BYTES_PER_THREAD = 500_000;
+const MAX_CANVAS_ASSETS_PER_THREAD = 100;
+const MAX_CANVAS_ASSET_BYTES_PER_THREAD = 100 * 1024 * 1024;
 
 codex.on("event", (event: AppServerEvent) => {
   if (event.type === "server_request_resolved") {
@@ -753,14 +755,33 @@ const server = createServer(async (req, res) => {
       const scope = threadScopes.get(threadId);
       if (!scope) throw new GatewayRequestError("Attachment upload requires an enterprise scope.", 400);
       const clientRequestId = readSingleHeader(req, "x-commerce-client-request-id") ?? "";
+      const purposeHeader = readSingleHeader(req, "x-commerce-artifact-purpose");
+      const purpose = purposeHeader === null || purposeHeader === "turn_attachment"
+        ? "turn_attachment" as const
+        : purposeHeader === "canvas_asset"
+          ? "canvas_asset" as const
+          : null;
+      if (!purpose) throw new GatewayRequestError("Unknown attachment purpose.", 400);
       const encodedFilename = readSingleHeader(req, "x-commerce-filename") ?? "";
       const originalName = decodeHeaderComponent(encodedFilename, "attachment filename");
-      const existing = (await threadArtifacts.listForThread(threadId))
+      const artifactInventory = await threadArtifacts.listForThread(threadId);
+      const existing = artifactInventory
         .filter((artifact) => artifact.clientRequestId === clientRequestId);
       if (existing.length >= MAX_THREAD_ATTACHMENTS_PER_TURN) {
         throw new GatewayRequestError("Too many attachments for one turn.", 413);
       }
       const bytes = await readRawBody(req, MAX_THREAD_ATTACHMENT_BYTES);
+      const existingCanvasAssets = artifactInventory.filter((artifact) => artifact.purpose === "canvas_asset");
+      if (
+        purpose === "canvas_asset" &&
+        (
+          existingCanvasAssets.length >= MAX_CANVAS_ASSETS_PER_THREAD ||
+          existingCanvasAssets.reduce((total, artifact) => total + artifact.size, 0) + bytes.byteLength >
+            MAX_CANVAS_ASSET_BYTES_PER_THREAD
+        )
+      ) {
+        throw new GatewayRequestError("Canvas asset storage limit exceeded for this thread.", 413);
+      }
       const existingBytes = existing.reduce((total, artifact) => total + artifact.size, 0);
       if (existingBytes + bytes.byteLength > MAX_THREAD_ATTACHMENT_TOTAL_BYTES) {
         throw new GatewayRequestError("Attachment total exceeds the turn limit.", 413);
@@ -771,8 +792,13 @@ const server = createServer(async (req, res) => {
         clientRequestId,
         originalName,
         declaredMimeType: readSingleHeader(req, "content-type") ?? "",
+        purpose,
         bytes,
       });
+      if (purpose === "canvas_asset" && artifact.kind !== "image") {
+        await threadArtifacts.removePending(threadId, artifact.id, scope, clientRequestId);
+        throw new GatewayRequestError("Canvas assets must be an image.", 415);
+      }
       sendJson(res, 201, { artifact });
       return;
     }
@@ -813,6 +839,25 @@ const server = createServer(async (req, res) => {
       url.pathname,
       /^\/api\/threads\/([^/]+)\/attachments\/([^/]+)$/,
     );
+    if (req.method === "GET" && threadAttachmentMatch) {
+      const threadId = decodeURIComponent(threadAttachmentMatch[1] ?? "");
+      const artifactId = decodeURIComponent(threadAttachmentMatch[2] ?? "");
+      if (!isSafeAgentId(threadId)) {
+        sendJson(res, 400, { error: "Invalid thread id." });
+        return;
+      }
+      bindRequestRuntimeScope(req, threadId);
+      const scope = threadScopes.get(threadId);
+      if (!scope) throw new GatewayRequestError("Attachment metadata read requires an enterprise scope.", 400);
+      const artifact = await threadArtifacts.get(threadId, artifactId);
+      if (!artifact) {
+        sendJson(res, 404, { error: "Attachment not found." });
+        return;
+      }
+      threadArtifacts.assertReadableByScope(artifact, scope);
+      sendJson(res, 200, { artifact });
+      return;
+    }
     if (req.method === "DELETE" && threadAttachmentMatch) {
       const threadId = decodeURIComponent(threadAttachmentMatch[1] ?? "");
       const artifactId = decodeURIComponent(threadAttachmentMatch[2] ?? "");

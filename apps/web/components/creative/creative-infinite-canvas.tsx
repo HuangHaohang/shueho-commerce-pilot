@@ -67,6 +67,7 @@ import { useCreativeCanvas } from "@/lib/creative/use-creative-canvas";
 import { cn } from "@/lib/utils";
 
 type CanvasNodeData = {
+  threadId: string | null;
   record: CreativeCanvasNodeRecord;
   saving: boolean;
   onSaveContent: (nodeId: string, content: CreativeCanvasNodeContent) => Promise<CreativeCanvasNodeRecord | null>;
@@ -182,6 +183,7 @@ function CreativeCanvasFlow({
       draggable: !record.layout.locked,
       selected: record.id === selectedNodeId,
       data: {
+        threadId,
         record,
         saving: savingNodeIds.has(record.id),
         onSaveContent,
@@ -197,6 +199,7 @@ function CreativeCanvasFlow({
     savingNodeIds,
     selectedNodeId,
     state?.nodes,
+    threadId,
   ]);
 
   useEffect(() => {
@@ -619,7 +622,7 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
         </button>
         {content.editorLayers
           ? content.editorLayers.filter((layer) => layer.visible).map((layer) => (
-              <CanvasEditorLayerPreview key={layer.id} layer={layer} imageUrl={content.image.url} />
+              <CanvasEditorLayerPreview key={layer.id} layer={layer} imageUrl={content.image.url} threadId={data.threadId} />
             ))
           : content.textLayers.map((layer) => (
               <ImageTextLayerEditor
@@ -769,9 +772,11 @@ function ImageTextLayerEditor({
 function CanvasEditorLayerPreview({
   layer,
   imageUrl,
+  threadId,
 }: {
   layer: CreativeCanvasEditorLayer;
   imageUrl: string;
+  threadId: string | null;
 }) {
   const style = {
     left: `${layer.x}%`,
@@ -800,9 +805,12 @@ function CanvasEditorLayerPreview({
     );
   }
   if (layer.kind === "image") {
+    const sourceUrl = layer.source === "canvas_asset" && layer.assetId && threadId
+      ? `/api/agent/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(layer.assetId)}`
+      : imageUrl;
     return (
       // eslint-disable-next-line @next/next/no-img-element
-      <img src={imageUrl} alt="" className={cn("pointer-events-none absolute select-none", layer.fit === "cover" ? "object-cover" : "object-contain")} style={style} />
+      <img src={sourceUrl} alt="" className={cn("pointer-events-none absolute select-none", layer.fit === "cover" ? "object-cover" : "object-contain")} style={style} />
     );
   }
   const points = layer.points.map((point) => `${point.x},${point.y}`).join(" ");

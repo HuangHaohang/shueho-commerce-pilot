@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 
-import { AGENT_ID_PATTERN, requireAgentThreadContext } from "@/lib/agent/http";
+import {
+  AGENT_ID_PATTERN,
+  gatewayHeaders,
+  gatewayUrl,
+  requireAgentThreadContext,
+} from "@/lib/agent/http";
 import {
   CreativeCanvasRepositoryError,
   readCreativeCanvasState,
@@ -49,6 +54,7 @@ export async function PATCH(
     }
     if (patch.content !== undefined) {
       const content = parseCreativeCanvasContentUpdate(node.revision.content, patch.content);
+      await assertOwnedCanvasAssets(content, threadId, access.context);
       node = await saveCreativeCanvasNodeRevision(access.context, threadId, nodeId, content);
     }
     return NextResponse.json({ node }, { headers: noStoreHeaders() });
@@ -57,6 +63,12 @@ export async function PATCH(
       return NextResponse.json(
         { error: "画布修改内容无效。", code: "CANVAS_NODE_PATCH_INVALID" },
         { status: 400, headers: noStoreHeaders() },
+      );
+    }
+    if (error instanceof CanvasAssetError) {
+      return NextResponse.json(
+        { error: "设计素材不存在或不属于当前项目。", code: "CANVAS_ASSET_NOT_OWNED" },
+        { status: 404, headers: noStoreHeaders() },
       );
     }
     if (error instanceof CreativeCanvasRepositoryError) {
@@ -72,6 +84,44 @@ export async function PATCH(
   }
 }
 
+async function assertOwnedCanvasAssets(
+  content: ReturnType<typeof parseCreativeCanvasContentUpdate>,
+  threadId: string,
+  context: Parameters<typeof gatewayHeaders>[1],
+) {
+  if (content.kind !== "image") return;
+  const assetIds = [...new Set(
+    (content.editorLayers ?? [])
+      .filter((layer) => layer.kind === "image" && layer.source === "canvas_asset")
+      .map((layer) => layer.kind === "image" ? layer.assetId : undefined)
+      .filter((id): id is string => Boolean(id)),
+  )];
+  await Promise.all(assetIds.map(async (assetId) => {
+    const response = await fetch(
+      gatewayUrl(`/api/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(assetId)}`),
+      {
+        headers: gatewayHeaders({}, context),
+        cache: "no-store",
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const artifact = payload && isRecord(payload.artifact) ? payload.artifact : null;
+    if (
+      !response.ok || !artifact || artifact.id !== assetId || artifact.threadId !== threadId ||
+      artifact.kind !== "image" || artifact.purpose !== "canvas_asset"
+    ) {
+      throw new CanvasAssetError();
+    }
+  }));
+}
+
+class CanvasAssetError extends Error {}
+
 function noStoreHeaders(): HeadersInit {
   return { "Cache-Control": "no-store" };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
