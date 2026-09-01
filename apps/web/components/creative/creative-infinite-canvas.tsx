@@ -554,6 +554,7 @@ function CreativeDocumentNode({ data, selected }: NodeProps<CanvasFlowNode>) {
 
 function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
   const record = data.record;
+  const navigation = useCreativeCanvasNavigation();
   const [content, setContent, save] = useNodeDraft(record, data.onSaveContent);
   if (content.kind !== "image") return null;
 
@@ -588,13 +589,33 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
       onRestore={record.previousRevisionId ? () => void data.onRestoreRevision(record.id, record.previousRevisionId as string) : null}
     >
       <div className="nodrag nopan relative min-h-0 flex-1 overflow-hidden bg-[var(--cp-bg-subtle)]" data-canvas-image-stage>
-        {/* Native Harness image URLs are tenant-checked BFF routes. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={content.image.url}
-          alt={content.title}
-          className="pointer-events-none h-full w-full select-none object-contain"
-        />
+        <button
+          type="button"
+          className="group absolute inset-0 block size-full cursor-zoom-in overflow-hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--cp-focus)]"
+          aria-label={`打开图片工作区：${content.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            navigation?.openImageStudio({
+              artifactId: content.image.artifactId,
+              url: content.image.url,
+              filename: content.image.filename,
+              model: content.image.model,
+              title: content.title,
+              nodeId: record.id,
+            });
+          }}
+        >
+          {/* Native Harness image URLs are tenant-checked BFF routes. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={content.image.url}
+            alt={content.title}
+            className="pointer-events-none h-full w-full select-none object-contain transition-opacity duration-[var(--cp-duration-fast)] group-hover:opacity-95"
+          />
+          <span className="absolute right-2 top-2 rounded-full bg-black/65 px-2 py-1 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+            图片工作区
+          </span>
+        </button>
         {content.textLayers.map((layer) => (
           <ImageTextLayerEditor
             key={layer.id}

@@ -241,6 +241,7 @@ function normalizeThreadHistory(
         url: `/api/provider/generated-images/${encodeURIComponent(filename)}`,
         model: typeof artifact.model === "string" ? artifact.model : "gpt-image-2",
         filename,
+        sourceFilenames: readGeneratedImageSourceFilenames(artifact.sourceFilenames),
       });
     }
   }
@@ -448,6 +449,12 @@ function normalizeStatus(value: string): "running" | "completed" | "interrupted"
       : value === "interrupted"
         ? "interrupted"
         : "completed";
+}
+
+function readGeneratedImageSourceFilenames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string =>
+    typeof entry === "string" && /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i.test(entry)).slice(0, 4);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

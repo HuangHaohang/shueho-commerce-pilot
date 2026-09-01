@@ -100,6 +100,7 @@ export type GeneratedImageItem = {
   url: string;
   model: string;
   filename: string;
+  sourceFilenames: string[];
 };
 
 export type AgentThreadStatus = "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
@@ -137,6 +138,7 @@ export type AgentSubmitOptions = {
   skillName?: string;
   displaySkillName?: string;
   attachments?: PendingAttachmentUpload[];
+  imageEditSourceFilenames?: string[];
   externalDataApprovalMode?: "always_ask" | "task" | "policy";
   productIds?: string[];
   productContextMode?: "auto" | "selected" | "none";
@@ -165,6 +167,9 @@ export function buildAgentTurnRequestBody(input: {
     insightMethod: input.options?.insightMethod,
     skillName: input.options?.skillName,
     attachmentIds: input.attachmentIds,
+    ...(input.options?.imageEditSourceFilenames?.length
+      ? { imageEditSourceFilenames: input.options.imageEditSourceFilenames }
+      : {}),
     externalDataApprovalMode: input.options?.externalDataApprovalMode ?? "always_ask",
     productIds: input.options?.productIds ?? [],
     productContextMode: input.options?.productContextMode ?? "none",
@@ -597,6 +602,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
                   url: publicUrl,
                   filename,
                   model: typeof params.model === "string" ? params.model : "gpt-image-2",
+                  sourceFilenames: readImageEditSourceFilenames(params.sourceFilenames),
                 },
               ],
         );
@@ -1199,8 +1205,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         if (!response.ok) {
           const responseError = readError(payload) || "无法启动 Agent 任务。";
           if (
-            /thread not found|不可恢复|工具契约已更新/i.test(responseError) ||
-            payload?.code === "THREAD_TOOL_CONTRACT_STALE"
+            !options?.imageEditSourceFilenames?.length &&
+            (
+              /thread not found|不可恢复|工具契约已更新/i.test(responseError) ||
+              payload?.code === "THREAD_TOOL_CONTRACT_STALE"
+            )
           ) {
             eventSourceRef.current?.close();
             eventSourceRef.current = null;
@@ -2319,6 +2328,15 @@ function readConversationAttachment(value: unknown): ConversationAttachment | nu
   return id && name && mimeType && size >= 0 && kind && url
     ? { id, name, mimeType, size, kind, url }
     : null;
+}
+
+function readImageEditSourceFilenames(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const filenames = value.filter((entry): entry is string =>
+    typeof entry === "string" && /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i.test(entry));
+  return filenames.length === value.length && new Set(filenames).size === filenames.length
+    ? filenames.slice(0, 4)
+    : [];
 }
 
 export function readPendingRequestUserInputEvent(event: Record<string, unknown>): PendingRequestUserInput | null {

@@ -95,6 +95,20 @@ The managed creative output schema includes `canvasBlocks`. The model may descri
 
 Each assistant Item may reference multiple nodes through `commerce_creative_canvas_message_ref`. Clicking a reply reference centers and selects the node; clicking a node scrolls to the originating assistant Item. “在对话中修改” only prepares a visible follow-up in the existing composer and uses the existing managed workflow on submission.
 
+### Image Studio And Immutable Edit Versions
+
+Clicking a completed generated image in the conversation or its canvas node opens the same in-workbench Image Studio rather than navigating to an artifact URL. The studio provides three views:
+
+- **Focused** inspects one owned image at a bounded zoom level;
+- **Canvas** shows the generated images from the same Codex thread and allows at most four explicit edit sources;
+- **Edit** accepts natural-language changes, preservation constraints, output aspect ratio, coordinate-based region comments, and application-owned editable text layers.
+
+Text-layer changes remain application revisions of the existing canvas node and never rewrite native image bytes. Pixel changes are a new Harness Turn in the same creative-project thread. The browser submits only bounded generated-image filenames through `imageEditSourceFilenames`; the authenticated BFF verifies that the persisted Recipe is `creative_project`, and Gateway reloads each artifact from the application-owned `GeneratedImageStore`, requires exact thread ownership, and converts it to a native `localImage` input. Browser URLs, host paths, base64, Provider credentials, masks, raw App Server inputs, and Provider identity are never accepted.
+
+The edit Turn uses the normal `commerce-creative-project` managed Skill and the existing actor-authorized Provider path. Completion still requires a native `imageGeneration` Item. Each saved artifact records immutable `sourceFilenames`, so the browser can display a real parent-to-child version chain while retaining every source image. Harness-native reply retry reconstructs those generated-image `localImage` inputs from the authoritative source `userMessage`; it never downloads through the browser or fabricates an edit request.
+
+Region comments are model instructions tied to visible percentage coordinates, not a claim of a Provider-native pixel mask. A future true mask tool may be added only when the selected Harness/Provider contract can preserve mask semantics through the same owned Turn and native Item lifecycle.
+
 Completed assistant replies expose a compact retry action, but retry remains a native Harness history operation rather than an application-authored duplicate prompt. The browser submits only the authoritative assistant Item id. The BFF resolves that Item to its terminal Turn under the current tenant, reserves normal Turn quota, and clones any immutable selected-product revision references. Gateway then reads the original Harness `userMessage`, recovers only application-registered workflow and specialist identities, and rebuilds tenant attachment inputs from the owned artifact store. Paginated threads use native `thread/revert` with `beforeTurnId` equal to the source Turn; legacy threads use the Harness compatibility method `thread/rollback` with the exact target-through-latest Turn count. Both paths then start the replacement with native `turn/start`. The stable Codex thread remains the project authority, and the reverted reply plus all later Turns leave the active Harness history. A browser cannot supply replacement text, Skill paths, output schemas, attachment paths, product revisions, runtime policy, or the history boundary.
 
 Retry is always an explicit user action. It does not silently replay a failed or uncertain paid provider request: external-data calls still pass live authorization, approval, budget reservation, exact-once dispatch, audit and settlement inside the replacement Turn. If `thread/revert` succeeds but the replacement `turn/start` response is uncertain, the client reconciles current Harness state before enabling another retry.

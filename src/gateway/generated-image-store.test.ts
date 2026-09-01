@@ -49,3 +49,39 @@ test("deletes generated image files and metadata for one thread without touching
   await assert.rejects(store.readImage(first.filename), /ENOENT/);
   assert.equal((await store.listForThread("thread-87654321")).length, 1);
 });
+
+test("builds owned localImage inputs and preserves image-edit lineage", async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), "commerce-generated-image-edit-"));
+  const store = new GeneratedImageStore(codexHome);
+  const source = await store.save({
+    base64: Buffer.from("source").toString("base64"),
+    threadId: "thread-12345678",
+    turnId: "turn-12345678",
+    callId: "image-item-source",
+    model: "gpt-image-2",
+    mimeType: "image/png",
+    quality: null,
+    size: null,
+  });
+  const edited = await store.save({
+    base64: Buffer.from("edited").toString("base64"),
+    threadId: "thread-12345678",
+    turnId: "turn-87654321",
+    callId: "image-item-edited",
+    model: "gpt-image-2",
+    mimeType: "image/png",
+    quality: null,
+    size: null,
+    sourceFilenames: [source.filename],
+  });
+
+  assert.deepEqual((await store.get(edited.filename))?.sourceFilenames, [source.filename]);
+  const inputs = await store.buildTurnInputs("thread-12345678", [source.filename]);
+  assert.equal(inputs.length, 1);
+  assert.equal(inputs[0]?.type, "localImage");
+  assert.match(inputs[0]?.path ?? "", new RegExp(`${source.filename.replace(".", "\\.")}$`));
+  await assert.rejects(
+    store.buildTurnInputs("thread-87654321", [source.filename]),
+    /does not belong to this thread/,
+  );
+});

@@ -66,6 +66,7 @@ import { createPortal } from "react-dom";
 import { AgentRequestUserInputPanel } from "@/components/agent/request-user-input-panel";
 import { AssistantMessageActions } from "@/components/agent/assistant-message-actions";
 import { AssistantMarkdown } from "@/components/agent/assistant-markdown";
+import { ImagePreview } from "@/components/agent/image-preview";
 import {
   ComposerAddMenu,
   SelectedSkillChip,
@@ -943,6 +944,27 @@ export function CommerceWorkbenchShell({
     });
   }
 
+  async function submitCreativeImageEdit({
+    message,
+    sourceFilenames,
+  }: {
+    message: string;
+    sourceFilenames: string[];
+  }) {
+    if (
+      navigationLocked || !agentThread.threadId || !sourceFilenames.length ||
+      agentThread.status === "connecting" || agentThread.status === "running" || agentThread.compacting
+    ) {
+      return false;
+    }
+    return agentThread.submit(message, {
+      workflow: "commerce-creative-project",
+      imageEditSourceFilenames: sourceFilenames,
+      externalDataApprovalMode,
+      productContextMode: "none",
+    });
+  }
+
   function openProductInsights() {
     if (!isAuthenticated) {
       openAuthDialog("login");
@@ -1299,6 +1321,7 @@ export function CommerceWorkbenchShell({
             onCreateProject={startCreativeProject}
             onSelectProject={openCreativeProject}
             onBackToWorkbench={startNewTask}
+            onSubmitImageEdit={submitCreativeImageEdit}
             conversation={(
               <div className="flex h-full min-h-0 flex-col">
                 <header className="flex min-h-[var(--cp-topbar-height)] shrink-0 items-center gap-3 border-b border-[var(--cp-border-subtle)] px-3 py-2">
@@ -2938,16 +2961,15 @@ function ConversationAttachmentList({ attachments }: { attachments: Conversation
     <div className="mb-2 flex max-w-full flex-wrap justify-end gap-2" aria-label="消息附件">
       {attachments.map((attachment) =>
         attachment.kind === "image" ? (
-          <a
+          <ImagePreview
             key={attachment.id}
-            href={attachment.url}
-            target="_blank"
-            rel="noreferrer"
-            className="block overflow-hidden rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-surface)]"
-            aria-label={`查看图片 ${attachment.name}`}
-          >
-            <img src={attachment.url} alt={attachment.name} className="h-[88px] w-[112px] object-cover" />
-          </a>
+            src={attachment.url}
+            thumbnailAlt={attachment.name}
+            previewAlt={`${attachment.name} 预览`}
+            triggerLabel={`预览上传图片 ${attachment.name}`}
+            triggerClassName="block overflow-hidden rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] focus-visible:ring-offset-2"
+            imageClassName="block h-[88px] w-[112px] object-cover transition-opacity duration-[var(--cp-duration-fast)] hover:opacity-95"
+          />
         ) : (
           <a
             key={attachment.id}
@@ -3521,32 +3543,9 @@ function ProcessingStatus({
 }
 
 function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const previewTriggerRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!previewOpen) {
-      return;
-    }
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closePreview();
-      }
-    }
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [previewOpen]);
-
-  function closePreview() {
-    setPreviewOpen(false);
-    window.requestAnimationFrame(() => previewTriggerRef.current?.focus());
-  }
-
+  const navigation = useCreativeCanvasNavigation();
+  const triggerClassName = "group block aspect-square w-full overflow-hidden rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] focus-visible:ring-offset-2";
+  const imageClassName = "block size-full object-cover transition-opacity duration-[var(--cp-duration-fast)] group-hover:opacity-95";
   return (
     <div
       data-conversation-minimap-anchor
@@ -3555,53 +3554,33 @@ function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
       data-minimap-preview="AI 生成图片"
       className="grid gap-3 sm:grid-cols-2"
     >
-      <button
-        ref={previewTriggerRef}
-        type="button"
-        className="group block aspect-square w-full overflow-hidden rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] focus-visible:ring-offset-2"
-        aria-label="预览生成图片"
-        onClick={() => setPreviewOpen(true)}
-      >
-        {/* Generated provider images have dynamic dimensions and are served by an authenticated route. */}
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+      {navigation ? (
+        <button
+          type="button"
+          className={triggerClassName}
+          aria-label="打开生成图片工作区"
+          onClick={() => navigation.openImageStudio({
+            artifactId: image.id,
+            url: image.url,
+            filename: image.filename,
+            model: image.model,
+            title: "AI 生成图片",
+            nodeId: null,
+          })}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={image.url} alt="AI 生成内容" className={imageClassName} />
+        </button>
+      ) : (
+        <ImagePreview
           src={image.url}
-          alt="AI 生成内容"
-          className="block size-full object-cover transition-opacity duration-[var(--cp-duration-fast)] group-hover:opacity-95"
+          thumbnailAlt="AI 生成内容"
+          previewAlt="生成图片预览"
+          triggerLabel="预览生成图片"
+          triggerClassName={triggerClassName}
+          imageClassName={imageClassName}
         />
-      </button>
-      {previewOpen
-        ? createPortal(
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="图片预览"
-              className="fixed inset-0 z-[80] flex items-center justify-center bg-[rgba(0,0,0,0.82)] p-4 md:p-8"
-              onPointerDown={(event) => {
-                if (event.target === event.currentTarget) {
-                  closePreview();
-                }
-              }}
-            >
-              <button
-                type="button"
-                className="absolute right-4 top-4 flex size-10 items-center justify-center rounded-full bg-[rgba(24,24,24,0.82)] text-white transition-colors hover:bg-[rgba(40,40,40,0.92)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white md:right-6 md:top-6"
-                aria-label="关闭图片预览"
-                onClick={closePreview}
-                autoFocus
-              >
-                <X className="size-5" strokeWidth={1.8} />
-              </button>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={image.url}
-                alt="生成图片预览"
-                className="max-h-[calc(100dvh-64px)] max-w-[calc(100vw-32px)] object-contain md:max-h-[calc(100dvh-96px)] md:max-w-[calc(100vw-96px)]"
-              />
-            </div>,
-            document.body,
-          )
-        : null}
+      )}
     </div>
   );
 }

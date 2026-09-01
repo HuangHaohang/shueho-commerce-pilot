@@ -128,6 +128,50 @@ describe("agent turn workflow contract", () => {
     );
   });
 
+  it("forwards only bounded generated-image edit sources for a creative Turn", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ result: { turn: { id: "turn-image-edit-1", status: "inProgress" } } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const sourceFilename = "1788220800000-11111111-1111-4111-8111-111111111111.png";
+
+    const response = await POST(
+      jsonRequest({
+        message: "保留商品结构，把背景改成暖灰色影棚。",
+        model: "gpt-5.6-luna",
+        workflow: "commerce-creative-project",
+        imageEditSourceFilenames: [sourceFilename],
+        productContextMode: "none",
+      }),
+      { params: Promise.resolve({ threadId: "thread-creative-1" }) },
+    );
+
+    expect(response.status).toBe(200);
+    const forwarded = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
+    expect(forwarded.imageEditSourceFilenames).toEqual([sourceFilename]);
+    expect(forwarded.workflow).toBe("commerce-creative-project");
+  });
+
+  it("rejects generated-image edit sources outside the creative workflow", async () => {
+    const response = await POST(
+      jsonRequest({
+        message: "修改图片",
+        model: "gpt-5.6-luna",
+        imageEditSourceFilenames: [
+          "1788220800000-11111111-1111-4111-8111-111111111111.png",
+        ],
+        productContextMode: "none",
+      }),
+      { params: Promise.resolve({ threadId: "thread-creative-1" }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.reserveAgentTurn).not.toHaveBeenCalled();
+  });
+
   it("rejects strict creative methods before quota when Product or reference media is missing", async () => {
     const campaignWithoutProduct = await POST(
       jsonRequest({

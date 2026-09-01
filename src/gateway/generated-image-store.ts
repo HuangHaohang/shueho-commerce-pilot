@@ -4,6 +4,7 @@ import { basename, extname, join } from "node:path";
 
 const IMAGE_FILENAME_PATTERN = /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i;
 const AGENT_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+const MAX_IMAGE_EDIT_SOURCES = 4;
 
 export type GeneratedImageArtifact = {
   version: 1;
@@ -15,11 +16,16 @@ export type GeneratedImageArtifact = {
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   quality: string | null;
   size: string | null;
+  sourceFilenames: string[];
   createdAt: string;
 };
 
-export type SaveGeneratedImageInput = Omit<GeneratedImageArtifact, "version" | "filename" | "createdAt"> & {
+export type SaveGeneratedImageInput = Omit<
+  GeneratedImageArtifact,
+  "version" | "filename" | "sourceFilenames" | "createdAt"
+> & {
   base64: string;
+  sourceFilenames?: string[];
 };
 
 export class GeneratedImageStore {
@@ -35,6 +41,7 @@ export class GeneratedImageStore {
   async save(input: SaveGeneratedImageInput): Promise<GeneratedImageArtifact> {
     assertAgentId(input.threadId, "thread id");
     assertAgentId(input.turnId, "turn id");
+    const sourceFilenames = normalizeSourceFilenames(input.sourceFilenames);
     const extension = extensionForMimeType(input.mimeType);
     const filename = `${Date.now()}-${randomUUID()}.${extension}`;
     const artifact: GeneratedImageArtifact = {
@@ -47,6 +54,7 @@ export class GeneratedImageStore {
       mimeType: input.mimeType,
       quality: input.quality,
       size: input.size,
+      sourceFilenames,
       createdAt: new Date().toISOString(),
     };
     await this.ensureDirectories();
@@ -69,13 +77,20 @@ export class GeneratedImageStore {
 
   async registerExisting(
     filename: string,
-    input: Omit<GeneratedImageArtifact, "version" | "filename">,
+    input: Omit<GeneratedImageArtifact, "version" | "filename" | "sourceFilenames"> & {
+      sourceFilenames?: string[];
+    },
   ): Promise<GeneratedImageArtifact> {
     assertImageFilename(filename);
     assertAgentId(input.threadId, "thread id");
     assertAgentId(input.turnId, "turn id");
     await stat(this.imagePath(filename));
-    const artifact: GeneratedImageArtifact = { version: 1, filename, ...input };
+    const artifact: GeneratedImageArtifact = {
+      version: 1,
+      filename,
+      ...input,
+      sourceFilenames: normalizeSourceFilenames(input.sourceFilenames),
+    };
     await this.ensureDirectories();
     await this.writeMetadata(artifact);
     return artifact;
@@ -124,6 +139,24 @@ export class GeneratedImageStore {
     return artifacts
       .filter((artifact): artifact is GeneratedImageArtifact => artifact?.threadId === threadId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  }
+
+  async buildTurnInputs(
+    threadId: string,
+    filenames: string[],
+  ): Promise<Array<{ type: "localImage"; path: string }>> {
+    assertAgentId(threadId, "thread id");
+    const normalized = normalizeSourceFilenames(filenames);
+    const inputs: Array<{ type: "localImage"; path: string }> = [];
+    for (const filename of normalized) {
+      const artifact = await this.get(filename);
+      if (!artifact || artifact.threadId !== threadId) {
+        throw new Error("Generated image source does not belong to this thread.");
+      }
+      await stat(this.imagePath(filename));
+      inputs.push({ type: "localImage", path: this.imagePath(filename) });
+    }
+    return inputs;
   }
 
   async findByCallId(
@@ -216,8 +249,22 @@ function parseArtifact(value: unknown, expectedFilename: string): GeneratedImage
     mimeType: value.mimeType,
     quality: typeof value.quality === "string" ? value.quality : null,
     size: typeof value.size === "string" ? value.size : null,
+    sourceFilenames: normalizeSourceFilenames(value.sourceFilenames),
     createdAt: value.createdAt,
   };
+}
+
+function normalizeSourceFilenames(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > MAX_IMAGE_EDIT_SOURCES) {
+    throw new Error("Invalid generated image source list.");
+  }
+  const filenames = value.filter((entry): entry is string =>
+    typeof entry === "string" && isSafeImageFilename(entry));
+  if (filenames.length !== value.length || new Set(filenames).size !== filenames.length) {
+    throw new Error("Invalid or duplicate generated image source.");
+  }
+  return filenames;
 }
 
 function extensionForMimeType(mimeType: GeneratedImageArtifact["mimeType"]): "png" | "jpg" | "webp" {

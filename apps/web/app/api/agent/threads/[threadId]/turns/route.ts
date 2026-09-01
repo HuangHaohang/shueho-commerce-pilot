@@ -32,6 +32,7 @@ const effortValues = new Set(["low", "medium", "high", "xhigh", "max", "ultra"])
 const externalDataApprovalModes = new Set(["always_ask", "task", "policy"]);
 const skillNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const attachmentIdPattern = /^[0-9a-f-]{36}$/i;
+const generatedImageFilenamePattern = /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i;
 const productIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const productContextModes = new Set(["auto", "selected", "none"]);
 const selectedProductCreativeMethods = new Set<CreativeMethod>([
@@ -74,6 +75,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     insightMethod?: unknown;
     skillName?: unknown;
     attachmentIds?: unknown;
+    imageEditSourceFilenames?: unknown;
     externalDataApprovalMode?: unknown;
     productIds?: unknown;
     productContextMode?: unknown;
@@ -89,8 +91,16 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   if (!attachmentIds) {
     return NextResponse.json({ error: "附件标识无效。" }, { status: 400 });
   }
-  if (!body || typeof body.message !== "string" || (!body.message.trim() && !attachmentIds.length) || body.message.length > 50_000) {
-    return NextResponse.json({ error: "请输入内容或添加附件。" }, { status: 400 });
+  const imageEditSourceFilenames = readImageEditSourceFilenames(body?.imageEditSourceFilenames);
+  if (!imageEditSourceFilenames) {
+    return NextResponse.json({ error: "图片编辑来源无效。" }, { status: 400 });
+  }
+  if (
+    !body || typeof body.message !== "string" ||
+    (!body.message.trim() && !attachmentIds.length && !imageEditSourceFilenames.length) ||
+    body.message.length > 50_000
+  ) {
+    return NextResponse.json({ error: "请输入内容、添加附件或选择待编辑图片。" }, { status: 400 });
   }
   if (typeof body.model !== "string" || body.model.length > 128) {
     return NextResponse.json({ error: "请选择有效模型。" }, { status: 400 });
@@ -111,6 +121,9 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   }
   if (creativeMethod && workflow !== "commerce-creative-project") {
     return NextResponse.json({ error: "创作方式只能用于创作项目。" }, { status: 400 });
+  }
+  if (imageEditSourceFilenames.length && workflow !== "commerce-creative-project") {
+    return NextResponse.json({ error: "图片编辑只能用于创作项目。" }, { status: 400 });
   }
   if (body.insightMethod !== undefined && !insightMethod) {
     return NextResponse.json({ error: "商品决策 Skill 标识无效。" }, { status: 400 });
@@ -164,7 +177,8 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   if (
     creativeMethod &&
     referenceImageCreativeMethods.has(creativeMethod) &&
-    attachmentIds.length === 0
+    attachmentIds.length === 0 &&
+    imageEditSourceFilenames.length === 0
   ) {
     return NextResponse.json(
       { error: "商品主图和副图生成必须在本轮上传商品参考图。", code: "CREATIVE_REFERENCE_IMAGE_REQUIRED" },
@@ -247,6 +261,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
         insightMethod,
         skillName,
         attachmentIds,
+        imageEditSourceFilenames,
         externalDataApprovalMode,
         productIds,
         productContextMode,
@@ -321,6 +336,16 @@ function readAttachmentIds(value: unknown): string[] | null {
   if (!Array.isArray(value) || value.length > 8) return null;
   const ids = value.filter((item): item is string => typeof item === "string" && attachmentIdPattern.test(item));
   return ids.length === value.length && new Set(ids).size === ids.length ? ids : null;
+}
+
+function readImageEditSourceFilenames(value: unknown): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 4) return null;
+  const filenames = value.filter((item): item is string =>
+    typeof item === "string" && generatedImageFilenamePattern.test(item));
+  return filenames.length === value.length && new Set(filenames).size === filenames.length
+    ? filenames
+    : null;
 }
 
 function readProductIds(value: unknown): string[] | null {

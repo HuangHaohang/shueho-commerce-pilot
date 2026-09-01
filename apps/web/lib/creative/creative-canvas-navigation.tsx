@@ -22,11 +22,24 @@ export type CanvasRevisionRequest = {
   nonce: number;
 } | null;
 
+export type ImageStudioRequest = {
+  artifactId: string;
+  url: string;
+  filename: string;
+  model: string;
+  title: string;
+  nodeId: string | null;
+  nonce: number;
+} | null;
+
 type CreativeCanvasNavigationContextValue = {
   focusRequest: CanvasFocusRequest;
   revisionRequest: CanvasRevisionRequest;
+  imageStudioRequest: ImageStudioRequest;
   requestCanvasFocus: (nodeId: string) => void;
   requestNodeRevision: (node: Omit<NonNullable<CanvasRevisionRequest>, "nonce">) => void;
+  openImageStudio: (image: Omit<NonNullable<ImageStudioRequest>, "nonce">) => void;
+  closeImageStudio: () => void;
   focusConversationMessage: (messageItemId: string) => void;
   registerConversationMessage: (messageItemId: string, element: HTMLElement | null) => void;
   refsForMessage: (messageItemId: string) => CreativeCanvasMessageReference[];
@@ -42,6 +55,7 @@ export function CreativeCanvasNavigationProvider({
 }) {
   const [focusRequest, setFocusRequest] = useState<CanvasFocusRequest>(null);
   const [revisionRequest, setRevisionRequest] = useState<CanvasRevisionRequest>(null);
+  const [imageStudioRequest, setImageStudioRequest] = useState<ImageStudioRequest>(null);
   const [messageRefs, setMessageRefs] = useState<CreativeCanvasMessageReference[]>([]);
   const messageElements = useRef(new Map<string, HTMLElement>());
   const nonceRef = useRef(0);
@@ -54,6 +68,11 @@ export function CreativeCanvasNavigationProvider({
     nonceRef.current += 1;
     setRevisionRequest({ ...node, nonce: nonceRef.current });
   }, []);
+  const openImageStudio = useCallback((image: Omit<NonNullable<ImageStudioRequest>, "nonce">) => {
+    nonceRef.current += 1;
+    setImageStudioRequest({ ...image, nonce: nonceRef.current });
+  }, []);
+  const closeImageStudio = useCallback(() => setImageStudioRequest(null), []);
 
   const registerConversationMessage = useCallback((messageItemId: string, element: HTMLElement | null) => {
     if (element) messageElements.current.set(messageItemId, element);
@@ -97,8 +116,11 @@ export function CreativeCanvasNavigationProvider({
   const value = useMemo<CreativeCanvasNavigationContextValue>(() => ({
     focusRequest,
     revisionRequest,
+    imageStudioRequest,
     requestCanvasFocus,
     requestNodeRevision,
+    openImageStudio,
+    closeImageStudio,
     focusConversationMessage,
     registerConversationMessage,
     refsForMessage,
@@ -106,11 +128,14 @@ export function CreativeCanvasNavigationProvider({
   }), [
     focusConversationMessage,
     focusRequest,
+    imageStudioRequest,
     revisionRequest,
     refsForMessage,
     registerConversationMessage,
     requestCanvasFocus,
     requestNodeRevision,
+    openImageStudio,
+    closeImageStudio,
     publishMessageRefs,
   ]);
 

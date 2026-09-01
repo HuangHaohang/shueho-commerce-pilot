@@ -85,6 +85,23 @@ describe("agent Turn request body", () => {
     }).creativeMethod).toBeUndefined();
   });
 
+  it("forwards only selected generated-image filenames for a creative edit Turn", () => {
+    const sourceFilename = "1788220800000-11111111-1111-4111-8111-111111111111.png";
+    const body = buildAgentTurnRequestBody({
+      message: "把背景改成暖灰色，商品保持不变。",
+      model: "gpt-5.6-luna",
+      options: {
+        workflow: "commerce-creative-project",
+        imageEditSourceFilenames: [sourceFilename],
+      },
+      attachmentIds: [],
+      clientRequestId: "66666666-6666-4666-8666-666666666666",
+    });
+
+    expect(body.imageEditSourceFilenames).toEqual([sourceFilename]);
+    expect(body.workflow).toBe("commerce-creative-project");
+  });
+
   it("treats only a durable 202 queue receipt as an accepted queued submission", () => {
     expect(isPersistedQueuedTurnResponse(202, { queued: true })).toBe(true);
     expect(isPersistedQueuedTurnResponse(202, { queued: false })).toBe(false);

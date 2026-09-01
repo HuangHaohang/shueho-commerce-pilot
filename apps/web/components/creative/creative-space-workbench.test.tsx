@@ -34,6 +34,7 @@ describe("CreativeSpaceWorkbench", () => {
         onCreateProject={vi.fn()}
         onSelectProject={vi.fn()}
         onBackToWorkbench={vi.fn()}
+        onSubmitImageEdit={vi.fn()}
       />,
     );
 
@@ -101,13 +102,14 @@ describe("CreativeSpaceWorkbench", () => {
           }),
         }]}
         images={[
-          { id: "image-1", sequence: 2, turnId: "turn-gallery", url: "/image-1.png", filename: "image-1.png", model: "gpt-image-2" },
-          { id: "image-2", sequence: 3, turnId: "turn-gallery", url: "/image-2.png", filename: "image-2.png", model: "gpt-image-2" },
+          { id: "image-1", sequence: 2, turnId: "turn-gallery", url: "/image-1.png", filename: "image-1.png", model: "gpt-image-2", sourceFilenames: [] },
+          { id: "image-2", sequence: 3, turnId: "turn-gallery", url: "/image-2.png", filename: "image-2.png", model: "gpt-image-2", sourceFilenames: [] },
         ]}
         conversation={<div>Harness conversation</div>}
         onCreateProject={vi.fn()}
         onSelectProject={vi.fn()}
         onBackToWorkbench={vi.fn()}
+        onSubmitImageEdit={vi.fn()}
       />,
     );
 

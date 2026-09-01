@@ -3,7 +3,7 @@ import "dotenv/config";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { CodexAppServerClient } from "../codex/app-server-client.js";
 import {
@@ -318,6 +318,7 @@ const turnProductContexts = new Map<string, TurnProductContext>();
 const turnExternalDataApprovalModes = new Map<string, ExternalDataApprovalMode>();
 const turnResearchRequestTexts = new Map<string, string>();
 const turnMarketplacePlatformCatalogs = new Map<string, MarketplacePlatformCatalog>();
+const turnImageEditSources = new Map<string, { threadId: string; filenames: string[] }>();
 const pendingExternalDataExecutions = new Set<Promise<void>>();
 const pendingNativeImageArtifacts = new Map<string, Promise<void>>();
 const codexEnvironment: NodeJS.ProcessEnv = {
@@ -418,6 +419,7 @@ codex.on("event", (event: AppServerEvent) => {
     pendingProductCatalogApprovals.clear();
     pendingExternalDataApprovals.clear();
     turnProductContexts.clear();
+    turnImageEditSources.clear();
     managedMcpReadyPromise = null;
     managedMcpReadyThreadIds.clear();
     managedMcpThreadReadyPromises.clear();
@@ -1255,6 +1257,9 @@ const server = createServer(async (req, res) => {
           scope,
           { productImportMetadataOnly: source.contract.workflow === "commerce-product-onboarding" },
         );
+        const retryImageEditInputs = source.imageEditSourceFilenames.length
+          ? await buildGeneratedImageEditInputs(threadId, source.imageEditSourceFilenames)
+          : [];
         const managedWorkflowTurn = source.contract.workflow
           ? buildManagedWorkflowTurn(
               config.runtimeRoot,
@@ -1301,6 +1306,7 @@ const server = createServer(async (req, res) => {
               ...baseInput,
               ...(productContextInput ? [productContextInput] : []),
               ...retryArtifacts.inputs,
+              ...retryImageEditInputs,
             ],
             model: typeof body.model === "string" ? body.model : undefined,
             effort: typeof body.effort === "string" ? body.effort : undefined,
@@ -1343,6 +1349,12 @@ const server = createServer(async (req, res) => {
           subject: firstPartySubject,
           selectedFactsRead: false,
         });
+        if (source.imageEditSourceFilenames.length) {
+          turnImageEditSources.set(startedTurnId, {
+            threadId,
+            filenames: source.imageEditSourceFilenames,
+          });
+        }
         if (source.message) turnResearchRequestTexts.set(startedTurnId, source.message);
         scheduleTurnTimeout(threadId, startedTurnId);
         sendJson(res, 200, {
@@ -1365,6 +1377,7 @@ const server = createServer(async (req, res) => {
       const body = await readJsonBody<Omit<TurnStartInput, "threadId"> & { clientRequestId?: string }>(req);
       const message = typeof body.message === "string" ? body.message.trim() : "";
       const attachmentIds = readAttachmentIds(body.attachmentIds);
+      const imageEditSourceFilenames = readImageEditSourceFilenames(body.imageEditSourceFilenames);
       let productContextRequest: ProductTurnContextRequest;
       try {
         productContextRequest = readProductTurnContextRequest(body.productIds, body.productContextMode);
@@ -1391,8 +1404,8 @@ const server = createServer(async (req, res) => {
         });
         return;
       }
-      if ((!message && attachmentIds.length === 0) || message.length > 50_000) {
-        sendJson(res, 400, { error: "Expected a message or at least one attachment." });
+      if ((!message && attachmentIds.length === 0 && imageEditSourceFilenames.length === 0) || message.length > 50_000) {
+        sendJson(res, 400, { error: "Expected a message, attachment, or generated image edit source." });
         return;
       }
       if (body.workflow !== undefined && !isManagedWorkflowId(body.workflow)) {
@@ -1414,6 +1427,10 @@ const server = createServer(async (req, res) => {
       }
       if (creativeMethod && workflow !== "commerce-creative-project") {
         sendJson(res, 400, { error: "A creative method requires the commerce-creative-project workflow." });
+        return;
+      }
+      if (imageEditSourceFilenames.length && workflow !== "commerce-creative-project") {
+        sendJson(res, 400, { error: "Generated image editing requires the commerce-creative-project workflow." });
         return;
       }
       const creativeProductFailure = validateCreativeProductContext(
@@ -1489,7 +1506,10 @@ const server = createServer(async (req, res) => {
         await ensureThreadToolsReady(threadId, body.model);
         const activeTurnId = await readHarnessActiveTurnId(threadId);
         if (activeTurnId) {
-          if (workflow || skillName || attachmentIds.length || productContextRequest.mode !== "none") {
+          if (
+            workflow || skillName || attachmentIds.length || imageEditSourceFilenames.length ||
+            productContextRequest.mode !== "none"
+          ) {
             sendJson(res, 409, {
               error: "Skill, attachment, and product-context turns cannot be queued behind an active turn.",
               code: workflow
@@ -1498,6 +1518,8 @@ const server = createServer(async (req, res) => {
                   ? "EXPLICIT_SKILL_ACTIVE_TURN"
                   : attachmentIds.length
                     ? "ATTACHMENT_ACTIVE_TURN"
+                    : imageEditSourceFilenames.length
+                      ? "IMAGE_EDIT_ACTIVE_TURN"
                     : "PRODUCT_CONTEXT_ACTIVE_TURN",
             });
             return;
@@ -1522,6 +1544,9 @@ const server = createServer(async (req, res) => {
         const scope = threadScopes.get(threadId);
         if (attachmentIds.length && !scope) {
           throw new GatewayRequestError("Attachment turns require an enterprise scope.", 400);
+        }
+        if (imageEditSourceFilenames.length && !scope) {
+          throw new GatewayRequestError("Generated image edit turns require an enterprise scope.", 400);
         }
         if (productContextRequest.mode !== "none" && !scope) {
           throw new GatewayRequestError("Product context requires an enterprise scope.", 400);
@@ -1561,9 +1586,15 @@ const server = createServer(async (req, res) => {
         const attachments = attachmentIds.length
           ? await readBoundTurnAttachments(threadId, attachmentIds, scope as RuntimeScope, clientUserMessageId)
           : [];
+        const imageEditInputs = imageEditSourceFilenames.length
+          ? await buildGeneratedImageEditInputs(threadId, imageEditSourceFilenames)
+          : [];
         const creativeMediaFailure = validateCreativeReferenceMedia(
           creativeMethod,
-          attachments.map((attachment) => attachment.kind),
+          [
+            ...attachments.map((attachment) => attachment.kind),
+            ...imageEditSourceFilenames.map(() => "image" as const),
+          ],
         );
         if (creativeMediaFailure) {
           sendJson(res, 400, {
@@ -1611,6 +1642,7 @@ const server = createServer(async (req, res) => {
               ...baseInput,
               ...(productContextInput ? [productContextInput] : []),
               ...attachmentInputs,
+              ...imageEditInputs,
             ],
             model: body.model,
             effort: body.effort,
@@ -1635,6 +1667,9 @@ const server = createServer(async (req, res) => {
             subject: firstPartySubject,
             selectedFactsRead: false,
           });
+          if (imageEditSourceFilenames.length) {
+            turnImageEditSources.set(startedTurnId, { threadId, filenames: imageEditSourceFilenames });
+          }
           if (message) turnResearchRequestTexts.set(startedTurnId, message);
           scheduleTurnTimeout(threadId, startedTurnId);
         }
@@ -1985,6 +2020,7 @@ function handleRuntimeNotification(event: Extract<AppServerEvent, { type: "notif
   turnResearchRequestTexts.delete(turnId);
   turnMarketplacePlatformCatalogs.delete(turnId);
   turnProductContexts.delete(turnId);
+  turnImageEditSources.delete(turnId);
   const completedEvent = readTurnCompletedOutboxEvent(event, threadId, turnId);
   if (completedEvent) scheduleAgentEvent(completedEvent);
   turnModels.delete(turnModelKey(threadId, turnId));
@@ -2029,7 +2065,8 @@ function scheduleNativeImageArtifact(
   if (!isSafeAgentId(threadId) || !isSafeAgentId(turnId)) return;
   const key = `${threadId}:${turnId}:${item.id}`;
   if (pendingNativeImageArtifacts.has(key)) return;
-  const operation = persistNativeImageArtifact(threadId, turnId, item)
+  const sourceFilenames = turnImageEditSources.get(turnId)?.filenames ?? [];
+  const operation = persistNativeImageArtifact(threadId, turnId, item, true, sourceFilenames)
     .catch((error) => {
       console.error(
         `Unable to persist native image artifact ${item.id}: ${error instanceof Error ? error.message : String(error)}`,
@@ -2044,6 +2081,7 @@ async function persistNativeImageArtifact(
   turnId: string,
   item: Record<string, unknown>,
   notifyBrowser = true,
+  sourceFilenames: string[] = [],
 ): Promise<void> {
   const itemId = typeof item.id === "string" ? item.id : "";
   if (!itemId) return;
@@ -2056,6 +2094,7 @@ async function persistNativeImageArtifact(
     mimeType: readNativeImageMimeType(item.result),
     quality: null,
     size: null,
+    sourceFilenames,
   });
   if (!notifyBrowser) return;
   broadcastEvent({
@@ -2069,6 +2108,7 @@ async function persistNativeImageArtifact(
       filename: artifact.filename,
       publicUrl: `/api/provider/generated-images/${encodeURIComponent(artifact.filename)}`,
       mimeType: artifact.mimeType,
+      sourceFilenames: artifact.sourceFilenames,
       revisedPrompt: typeof item.revisedPrompt === "string" ? item.revisedPrompt : null,
     },
     at: new Date().toISOString(),
@@ -2364,6 +2404,7 @@ async function readHarnessRetrySource(
   turnId: string;
   message: string;
   contract: ReturnType<typeof readHarnessRetryContract>;
+  imageEditSourceFilenames: string[];
   revertedTurnIds: string[];
   historyMode: "legacy" | "paginated";
 }> {
@@ -2420,6 +2461,10 @@ async function readHarnessRetrySource(
   }
   const message = readVisibleHarnessUserText(sourceUserContent);
   const contract = readHarnessRetryContract(sourceUserContent);
+  const imageEditSourceFilenames = await readGeneratedImageSourcesFromHarnessContent(
+    threadId,
+    sourceUserContent,
+  );
   if (!message) {
     throw new GatewayRequestError("The source Turn has no visible user text to resend.", 409);
   }
@@ -2432,7 +2477,31 @@ async function readHarnessRetrySource(
   if (contract.explicitSkillName && !CODEX_SKILL_NAME_PATTERN.test(contract.explicitSkillName)) {
     throw new GatewayRequestError("The source explicit Skill name is invalid.", 409);
   }
-  return { turnId: targetTurnId, message, contract, revertedTurnIds, historyMode };
+  return {
+    turnId: targetTurnId,
+    message,
+    contract,
+    imageEditSourceFilenames,
+    revertedTurnIds,
+    historyMode,
+  };
+}
+
+async function readGeneratedImageSourcesFromHarnessContent(
+  threadId: string,
+  content: unknown[],
+): Promise<string[]> {
+  const candidates = content
+    .filter(isRecord)
+    .filter((entry) => entry.type === "localImage" && typeof entry.path === "string")
+    .map((entry) => basename(entry.path as string))
+    .filter((filename) => generatedImages.isSafeFilename(filename));
+  const filenames: string[] = [];
+  for (const filename of [...new Set(candidates)].slice(0, 4)) {
+    const artifact = await generatedImages.get(filename);
+    if (artifact?.threadId === threadId) filenames.push(filename);
+  }
+  return filenames;
 }
 
 function clearRevertedTurnRuntimeState(threadId: string, turnIds: string[]): void {
@@ -2443,6 +2512,7 @@ function clearRevertedTurnRuntimeState(threadId: string, turnIds: string[]): voi
     turnResearchRequestTexts.delete(turnId);
     turnMarketplacePlatformCatalogs.delete(turnId);
     turnProductContexts.delete(turnId);
+    turnImageEditSources.delete(turnId);
     turnModels.delete(turnModelKey(threadId, turnId));
     if (activeTurnsByThread.get(threadId) === turnId) activeTurnsByThread.delete(threadId);
   }
@@ -2920,6 +2990,9 @@ async function clearDeletedThreadRuntimeState(threadIds: string[]): Promise<void
     }
     for (const key of turnModels.keys()) {
       if (key.startsWith(`${deletedThreadId}:`)) turnModels.delete(key);
+    }
+    for (const [turnId, source] of turnImageEditSources) {
+      if (source.threadId === deletedThreadId) turnImageEditSources.delete(turnId);
     }
   }
   await Promise.all(externalApprovalCancellations);
@@ -6539,6 +6612,30 @@ function readAttachmentIds(value: unknown): string[] {
     throw new GatewayRequestError("Invalid or duplicate attachment id.", 400);
   }
   return ids;
+}
+
+function readImageEditSourceFilenames(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 4) {
+    throw new GatewayRequestError("Invalid generated image edit source list.", 400);
+  }
+  const filenames = value.filter((entry): entry is string =>
+    typeof entry === "string" && generatedImages.isSafeFilename(entry));
+  if (filenames.length !== value.length || new Set(filenames).size !== filenames.length) {
+    throw new GatewayRequestError("Invalid or duplicate generated image edit source.", 400);
+  }
+  return filenames;
+}
+
+async function buildGeneratedImageEditInputs(
+  threadId: string,
+  filenames: string[],
+): Promise<Array<{ type: "localImage"; path: string }>> {
+  try {
+    return await generatedImages.buildTurnInputs(threadId, filenames);
+  } catch {
+    throw new GatewayRequestError("A selected generated image is unavailable for this thread.", 404);
+  }
 }
 
 async function readBoundTurnAttachments(

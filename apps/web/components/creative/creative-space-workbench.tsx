@@ -28,7 +28,10 @@ import type {
   ConversationMessage,
   GeneratedImageItem,
 } from "@/lib/agent/use-agent-thread";
-import { CreativeCanvasNavigationProvider } from "@/lib/creative/creative-canvas-navigation";
+import {
+  CreativeCanvasNavigationProvider,
+  useCreativeCanvasNavigation,
+} from "@/lib/creative/creative-canvas-navigation";
 import {
   creativeMethodLabel,
   creativeMethodOptions,
@@ -42,6 +45,10 @@ import {
 import { cn } from "@/lib/utils";
 
 import { CreativeInfiniteCanvas } from "./creative-infinite-canvas";
+import {
+  CreativeImageStudio,
+  type ImageEditSubmission,
+} from "./creative-image-studio";
 
 export type CreativeSpaceWorkbenchProps = {
   projects: readonly AgentThreadSummary[];
@@ -53,6 +60,7 @@ export type CreativeSpaceWorkbenchProps = {
   onCreateProject: () => void;
   onSelectProject: (project: AgentThreadSummary) => void;
   onBackToWorkbench: () => void;
+  onSubmitImageEdit: (submission: ImageEditSubmission) => Promise<boolean>;
 };
 
 type CreativeMobileView = "projects" | "canvas" | "conversation";
@@ -67,7 +75,15 @@ const creativeMobileViews = [
   icon: typeof FolderKanban;
 }>;
 
-export function CreativeSpaceWorkbench({
+export function CreativeSpaceWorkbench(props: CreativeSpaceWorkbenchProps) {
+  return (
+    <CreativeCanvasNavigationProvider key={props.activeProjectId ?? "new-creative-project"}>
+      <CreativeSpaceWorkbenchBody {...props} />
+    </CreativeCanvasNavigationProvider>
+  );
+}
+
+function CreativeSpaceWorkbenchBody({
   projects,
   activeProjectId,
   messages,
@@ -77,12 +93,16 @@ export function CreativeSpaceWorkbench({
   onCreateProject,
   onSelectProject,
   onBackToWorkbench,
+  onSubmitImageEdit,
 }: CreativeSpaceWorkbenchProps) {
   const [mobileView, setMobileView] = useState<CreativeMobileView>("conversation");
+  const navigation = useCreativeCanvasNavigation();
+  const projectRunning = projects.some(
+    (project) => project.threadId === activeProjectId && project.status === "running",
+  );
 
   return (
-    <CreativeCanvasNavigationProvider key={activeProjectId ?? "new-creative-project"}>
-      <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--cp-bg)] xl:grid xl:grid-cols-[var(--cp-sidebar-width)_minmax(0,1fr)_minmax(360px,430px)] xl:grid-rows-1">
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--cp-bg)] xl:grid xl:grid-cols-[var(--cp-sidebar-width)_minmax(0,1fr)_minmax(360px,430px)] xl:grid-rows-1">
         <CreativeMobileNavigation
           value={mobileView}
           onChange={setMobileView}
@@ -108,7 +128,7 @@ export function CreativeSpaceWorkbench({
           threadId={activeProjectId}
           messages={messages}
           images={images}
-          running={projects.some((project) => project.threadId === activeProjectId && project.status === "running")}
+          running={projectRunning}
           mobileVisible={mobileView === "canvas"}
         />
         <aside
@@ -121,8 +141,17 @@ export function CreativeSpaceWorkbench({
         >
           {conversation}
         </aside>
+        {activeProjectId && navigation?.imageStudioRequest ? (
+          <CreativeImageStudio
+            threadId={activeProjectId}
+            request={navigation.imageStudioRequest}
+            images={images}
+            running={projectRunning}
+            onClose={navigation.closeImageStudio}
+            onSubmitEdit={onSubmitImageEdit}
+          />
+        ) : null}
       </div>
-    </CreativeCanvasNavigationProvider>
   );
 }
 

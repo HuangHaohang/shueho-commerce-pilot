@@ -37,6 +37,7 @@ function generatedImage(
     url: "/api/provider/generated-images/image-1.png",
     filename: "image-1.png",
     model: "gpt-image-2",
+    sourceFilenames: [],
     ...overrides,
   };
 }
