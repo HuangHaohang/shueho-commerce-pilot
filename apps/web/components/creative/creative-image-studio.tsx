@@ -1,20 +1,14 @@
 "use client";
 
 import {
-  AlignCenter,
-  AlignLeft,
-  AlignRight,
   Check,
   CircleAlert,
   Image as ImageIcon,
   Images,
   LoaderCircle,
-  MessageSquarePlus,
-  MousePointer2,
-  Plus,
-  Save,
+  Maximize2,
+  MessageCirclePlus,
   SendHorizontal,
-  Sparkles,
   Trash2,
   X,
   ZoomIn,
@@ -29,17 +23,12 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { GeneratedImageItem } from "@/lib/agent/use-agent-thread";
 import type { ImageStudioRequest } from "@/lib/creative/creative-canvas-navigation";
-import type {
-  CreativeCanvasImageContent,
-  CreativeCanvasImageTextLayer,
-  CreativeCanvasNodeRecord,
-  CreativeCanvasState,
-} from "@/lib/creative/creative-canvas-types";
 import { cn } from "@/lib/utils";
 
-type ImageStudioView = "focused" | "canvas" | "edit";
+type ImageStudioView = "focused" | "canvas";
 
 type ImageAnnotation = {
   id: string;
@@ -53,14 +42,14 @@ export type ImageEditSubmission = {
   sourceFilenames: string[];
 };
 
-const studioViews = [
-  { value: "focused", label: "Focused", icon: ImageIcon },
-  { value: "canvas", label: "Canvas", icon: Images },
-  { value: "edit", label: "Edit", icon: Sparkles },
+const resizeOptions = [
+  { label: "保持原图", prompt: "保持原图画幅和尺寸比例。" },
+  { label: "方形 1:1", prompt: "将输出调整为方形 1:1 构图，保持主体完整且居中。" },
+  { label: "竖版 4:5", prompt: "将输出调整为竖版 4:5 构图，保持主体完整并留出安全边距。" },
+  { label: "横版 16:9", prompt: "将输出调整为横版 16:9 构图，保持主体完整并自然扩展背景。" },
 ] as const;
 
 export function CreativeImageStudio({
-  threadId,
   request,
   images,
   running,
@@ -81,19 +70,14 @@ export function CreativeImageStudio({
   );
   const [zoom, setZoom] = useState(1);
   const [instruction, setInstruction] = useState("");
-  const [preserve, setPreserve] = useState("保持商品主体、结构、颜色和品牌信息不变");
-  const [aspectRatio, setAspectRatio] = useState("保持原图");
+  const [resizeInstruction, setResizeInstruction] = useState("");
   const [annotations, setAnnotations] = useState<ImageAnnotation[]>([]);
-  const [annotationMode, setAnnotationMode] = useState(false);
+  const [commentMode, setCommentMode] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitStatus, setSubmitStatus] = useState<string | null>(null);
-  const [canvasNode, setCanvasNode] = useState<CreativeCanvasNodeRecord | null>(null);
-  const [imageContent, setImageContent] = useState<CreativeCanvasImageContent | null>(null);
-  const [loadingNode, setLoadingNode] = useState(false);
-  const [savingLayers, setSavingLayers] = useState(false);
-  const [layerError, setLayerError] = useState<string | null>(null);
   const previousImageCountRef = useRef(images.length);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const imageByFilename = useMemo(
     () => new Map(images.map((image) => [image.filename, image])),
@@ -116,8 +100,9 @@ export function CreativeImageStudio({
     setSelectedFilenames(new Set([request.filename]));
     setZoom(1);
     setInstruction("");
+    setResizeInstruction("");
     setAnnotations([]);
-    setAnnotationMode(false);
+    setCommentMode(false);
     setSubmitError(null);
     setSubmitStatus(null);
     previousImageCountRef.current = images.length;
@@ -136,40 +121,8 @@ export function CreativeImageStudio({
     setActiveFilename(edited.filename);
     setSelectedFilenames(new Set([edited.filename]));
     setView("focused");
-    setSubmitStatus("新版本已生成并加入当前 Canvas。");
+    setSubmitStatus("新版本已生成。");
   }, [images, selectedFilenames]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoadingNode(true);
-    setLayerError(null);
-    void (async () => {
-      try {
-        const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/canvas`, {
-          cache: "no-store",
-        });
-        const payload = (await response.json().catch(() => null)) as
-          | (CreativeCanvasState & { error?: string })
-          | null;
-        if (!response.ok || !payload) throw new Error(payload?.error || "无法读取图片图层。");
-        if (cancelled) return;
-        const matched = payload.nodes.find((node) => {
-          if (node.nodeType !== "image" || node.revision.content.kind !== "image") return false;
-          return node.revision.content.image.filename === activeFilename ||
-            node.revision.content.image.artifactId === activeFilename;
-        }) ?? null;
-        setCanvasNode(matched);
-        setImageContent(matched?.revision.content.kind === "image" ? matched.revision.content : null);
-      } catch (error) {
-        if (!cancelled) setLayerError(error instanceof Error ? error.message : "无法读取图片图层。");
-      } finally {
-        if (!cancelled) setLoadingNode(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [activeFilename, threadId]);
 
   function toggleSelected(filename: string) {
     setSelectedFilenames((current) => {
@@ -184,7 +137,7 @@ export function CreativeImageStudio({
   }
 
   function addAnnotation(event: PointerEvent<HTMLDivElement>) {
-    if (!annotationMode || view !== "edit") return;
+    if (!commentMode || view !== "focused") return;
     const bounds = event.currentTarget.getBoundingClientRect();
     const x = Math.min(98, Math.max(2, ((event.clientX - bounds.left) / bounds.width) * 100));
     const y = Math.min(98, Math.max(2, ((event.clientY - bounds.top) / bounds.height) * 100));
@@ -192,14 +145,20 @@ export function CreativeImageStudio({
       ...current,
       { id: crypto.randomUUID(), x, y, text: "" },
     ]);
-    setAnnotationMode(false);
+    setCommentMode(false);
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+
+  function startRemoveAction() {
+    setInstruction((current) => current || "请移除我标注区域中的内容，并自然补全背景；其他区域保持不变。");
+    setCommentMode(true);
   }
 
   async function submitEdit() {
     const trimmed = instruction.trim();
-    const annotationText = annotations.some((annotation) => annotation.text.trim());
-    if (!trimmed && !annotationText) {
-      setSubmitError("请描述需要修改的内容，或先添加区域标注。");
+    const hasAnnotationText = annotations.some((annotation) => annotation.text.trim());
+    if (!trimmed && !hasAnnotationText && !resizeInstruction) {
+      setSubmitError("请描述需要修改的内容，或先添加评论标注。");
       return;
     }
     setSubmitting(true);
@@ -211,61 +170,25 @@ export function CreativeImageStudio({
         sourceFilenames,
         message: buildImageEditMessage({
           instruction: trimmed,
-          preserve,
-          aspectRatio,
+          preserve: "保持未明确要求修改的商品外观、颜色、结构、Logo 和版式不变",
+          aspectRatio: resizeInstruction || "保持原图画幅和尺寸比例。",
           annotations,
           sourceCount: sourceFilenames.length,
         }),
       });
       if (!accepted) {
-        setSubmitError("图片编辑任务未被接收，请检查当前任务状态后重试。");
+        setSubmitError("当前 Codex 任务暂时不能接收图片修改，请稍后重试。");
         return;
       }
       setInstruction("");
+      setResizeInstruction("");
       setAnnotations([]);
-      setAnnotationMode(false);
-      setSubmitStatus("编辑任务已提交到当前 Codex 对话，正在生成新版本。");
+      setCommentMode(false);
+      setSubmitStatus("修改要求已提交到当前 Codex thread，正在生成新版本。");
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "无法提交图片编辑任务。");
+      setSubmitError(error instanceof Error ? error.message : "无法提交图片修改。");
     } finally {
       setSubmitting(false);
-    }
-  }
-
-  async function saveTextLayers() {
-    if (!canvasNode || !imageContent) return;
-    setSavingLayers(true);
-    setLayerError(null);
-    try {
-      const response = await fetch(
-        `/api/agent/threads/${encodeURIComponent(threadId)}/canvas/nodes/${encodeURIComponent(canvasNode.id)}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            content: {
-              kind: "image",
-              title: imageContent.title,
-              description: imageContent.description,
-              textLayers: imageContent.textLayers,
-              complianceNotes: imageContent.complianceNotes,
-            },
-          }),
-        },
-      );
-      const payload = (await response.json().catch(() => null)) as {
-        node?: CreativeCanvasNodeRecord;
-        error?: string;
-      } | null;
-      if (!response.ok || !payload?.node || payload.node.revision.content.kind !== "image") {
-        throw new Error(payload?.error || "无法保存文字图层。");
-      }
-      setCanvasNode(payload.node);
-      setImageContent(payload.node.revision.content);
-    } catch (error) {
-      setLayerError(error instanceof Error ? error.message : "无法保存文字图层。");
-    } finally {
-      setSavingLayers(false);
     }
   }
 
@@ -273,204 +196,173 @@ export function CreativeImageStudio({
     <Dialog open onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent
         showClose={false}
-        className="left-auto right-0 top-0 z-[120] flex h-dvh max-h-none w-full max-w-[1120px] translate-x-0 translate-y-0 flex-col rounded-none border-y-0 border-r-0 bg-[var(--cp-bg)] xl:w-[calc(100vw_-_var(--cp-sidebar-width))]"
+        className="inset-0 flex h-dvh max-h-none w-screen max-w-none translate-x-0 translate-y-0 flex-col rounded-none border-0 bg-[var(--cp-bg-subtle)]"
       >
         <DialogDescription className="sr-only">
-          查看同一对话生成的图片、添加区域反馈和文字图层，并在当前 Codex thread 中生成编辑版本。
+          使用 Codex Harness 在同一对话中查看、选择并通过自然语言修改生成图片。
         </DialogDescription>
-        <header className="flex min-h-[var(--cp-topbar-height)] shrink-0 items-center gap-3 border-b border-[var(--cp-border)] px-3 md:px-4">
-          <span className="flex size-9 items-center justify-center rounded-[var(--cp-radius-control)] bg-[var(--cp-bg-subtle)] text-[var(--cp-text-muted)]">
-            <ImageIcon className="size-4" aria-hidden="true" />
-          </span>
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-3">
+          <div className="flex rounded-[9px] bg-[var(--cp-bg-muted)] p-0.5" role="tablist" aria-label="图片工作区视图">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "focused"}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-[7px] text-[var(--cp-text-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                view === "focused" && "bg-[var(--cp-surface)] text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]",
+              )}
+              aria-label="Focused 单图视图"
+              onClick={() => setView("focused")}
+            >
+              <ImageIcon className="size-4" />
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "canvas"}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-[7px] text-[var(--cp-text-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+                view === "canvas" && "bg-[var(--cp-surface)] text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]",
+              )}
+              aria-label="Canvas 图片集合视图"
+              onClick={() => setView("canvas")}
+            >
+              <Images className="size-4" />
+            </button>
+          </div>
           <div className="min-w-0 flex-1">
-            <DialogTitle className="truncate text-sm">{request.title || "图片工作区"}</DialogTitle>
-            <div className="mt-0.5 truncate text-[11px] text-[var(--cp-text-faint)]">
-              第 {versionNumber} 版 · {activeImage.model} · 原图保持不可覆盖
+            <DialogTitle className="truncate text-sm">{request.title || "图片"}</DialogTitle>
+            <div className="mt-0.5 truncate text-[10px] text-[var(--cp-text-faint)]">
+              第 {versionNumber} 版 · {activeImage.model} · Harness 原生图片版本
             </div>
           </div>
-          <div className="hidden rounded-[var(--cp-radius-segment)] bg-[var(--cp-bg-muted)] p-0.5 sm:flex" role="tablist" aria-label="图片工作区视图">
-            {studioViews.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                role="tab"
-                aria-selected={view === item.value}
-                className={cn(
-                  "flex h-8 items-center gap-1.5 rounded-[var(--cp-radius-control)] px-3 text-xs text-[var(--cp-text-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-                  view === item.value && "bg-[var(--cp-surface)] font-medium text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]",
-                )}
-                onClick={() => setView(item.value)}
-              >
-                <item.icon className="size-3.5" aria-hidden="true" />
-                {item.label}
-              </button>
-            ))}
-          </div>
           <Button type="button" variant="ghost" size="icon" className="rounded-full" aria-label="关闭图片工作区" onClick={onClose}>
-            <X aria-hidden="true" />
+            <X className="size-4" />
           </Button>
         </header>
 
-        <div className="grid grid-cols-3 gap-1 border-b border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] p-1 sm:hidden" role="tablist" aria-label="图片工作区视图">
-          {studioViews.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              role="tab"
-              aria-selected={view === item.value}
-              className={cn(
-                "flex h-9 items-center justify-center gap-1.5 rounded-[var(--cp-radius-control)] text-xs text-[var(--cp-text-muted)]",
-                view === item.value && "bg-[var(--cp-surface)] font-medium text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]",
-              )}
-              onClick={() => setView(item.value)}
-            >
-              <item.icon className="size-3.5" aria-hidden="true" />
-              {item.label}
-            </button>
-          ))}
-        </div>
+        <main className="relative min-h-0 flex-1 overflow-hidden">
+          {view === "focused" ? (
+            <FocusedImageView
+              image={activeImage}
+              zoom={zoom}
+              annotations={annotations}
+              commentMode={commentMode}
+              onAddAnnotation={addAnnotation}
+              onComment={() => setCommentMode((current) => !current)}
+              onRemove={startRemoveAction}
+              onResize={(prompt) => {
+                setResizeInstruction(prompt);
+                requestAnimationFrame(() => composerRef.current?.focus());
+              }}
+              onZoomChange={setZoom}
+            />
+          ) : (
+            <CanvasImageView
+              images={images}
+              imageByFilename={imageByFilename}
+              activeFilename={activeFilename}
+              selectedFilenames={selectedFilenames}
+              onActivate={(filename) => {
+                setActiveFilename(filename);
+                setView("focused");
+              }}
+              onToggleSelected={toggleSelected}
+            />
+          )}
+        </main>
 
-        {view === "canvas" ? (
-          <ImageCanvasView
-            images={images}
-            activeFilename={activeFilename}
-            selectedFilenames={selectedFilenames}
-            imageByFilename={imageByFilename}
-            onActivate={setActiveFilename}
-            onToggleSelected={toggleSelected}
-            onEdit={() => setView("edit")}
-          />
-        ) : (
-          <div className={cn("min-h-0 flex-1", view === "edit" ? "grid lg:grid-cols-[minmax(0,1fr)_340px]" : "flex flex-col")}>
-            <div className="relative flex min-h-[320px] min-w-0 flex-1 flex-col overflow-hidden bg-[#202020]">
-              <ImageStage
-                image={activeImage}
-                zoom={zoom}
-                textLayers={imageContent?.textLayers ?? []}
-                annotations={annotations}
-                annotationMode={annotationMode}
-                editing={view === "edit"}
-                onAddAnnotation={addAnnotation}
-              />
-              <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/70 p-1 text-white shadow-[var(--cp-shadow-popover)]">
-                <StudioIconButton label="缩小图片" disabled={zoom <= 0.5} onClick={() => setZoom((value) => Math.max(0.5, value - 0.1))}>
-                  <ZoomOut className="size-4" />
-                </StudioIconButton>
-                <button type="button" className="h-8 min-w-12 rounded-full px-2 text-[11px] tabular-nums hover:bg-white/10" onClick={() => setZoom(1)}>
-                  {Math.round(zoom * 100)}%
-                </button>
-                <StudioIconButton label="放大图片" disabled={zoom >= 2} onClick={() => setZoom((value) => Math.min(2, value + 0.1))}>
-                  <ZoomIn className="size-4" />
-                </StudioIconButton>
-              </div>
-              {view === "focused" ? (
-                <div className="absolute right-3 top-3 flex items-center gap-2">
-                  <Button type="button" variant="subtle" size="sm" className="rounded-full bg-white/90" onClick={() => setView("canvas")}>
-                    <Images className="size-3.5" />
-                    全部版本
-                  </Button>
-                  <Button type="button" size="sm" className="rounded-full" onClick={() => setView("edit")}>
-                    <Sparkles className="size-3.5" />
-                    编辑图片
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-            {view === "edit" ? (
-              <ImageEditInspector
-                images={images}
-                selectedFilenames={selectedFilenames}
-                instruction={instruction}
-                preserve={preserve}
-                aspectRatio={aspectRatio}
-                annotations={annotations}
-                annotationMode={annotationMode}
-                imageContent={imageContent}
-                loadingNode={loadingNode}
-                savingLayers={savingLayers}
-                layerError={layerError}
-                running={running}
-                submitting={submitting}
-                submitError={submitError}
-                submitStatus={submitStatus}
-                onInstructionChange={setInstruction}
-                onPreserveChange={setPreserve}
-                onAspectRatioChange={setAspectRatio}
-                onToggleSelected={toggleSelected}
-                onAnnotationModeChange={setAnnotationMode}
-                onAnnotationsChange={setAnnotations}
-                onImageContentChange={setImageContent}
-                onSaveTextLayers={saveTextLayers}
-                onSubmit={submitEdit}
-              />
-            ) : (
-              <footer className="flex min-h-14 shrink-0 items-center gap-3 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-4">
-                <span className="min-w-0 flex-1 truncate text-xs text-[var(--cp-text-muted)]">
-                  {activeImage.sourceFilenames.length
-                    ? `由 ${activeImage.sourceFilenames.length} 张图片编辑生成`
-                    : "Codex 原生图片产物"}
-                </span>
-                <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={() => setView("edit")}>
-                  <Sparkles className="size-3.5" />
-                  继续创作
-                </Button>
-              </footer>
-            )}
-          </div>
-        )}
+        <ImageEditComposer
+          forwardedRef={composerRef}
+          images={images}
+          selectedFilenames={selectedFilenames}
+          annotations={annotations}
+          value={instruction}
+          resizeInstruction={resizeInstruction}
+          running={running}
+          submitting={submitting}
+          error={submitError}
+          status={submitStatus}
+          onChange={setInstruction}
+          onAnnotationsChange={setAnnotations}
+          onSubmit={submitEdit}
+        />
       </DialogContent>
     </Dialog>
   );
 }
 
-function ImageStage({
+function FocusedImageView({
   image,
   zoom,
-  textLayers,
   annotations,
-  annotationMode,
-  editing,
+  commentMode,
   onAddAnnotation,
+  onComment,
+  onRemove,
+  onResize,
+  onZoomChange,
 }: {
   image: GeneratedImageItem;
   zoom: number;
-  textLayers: CreativeCanvasImageTextLayer[];
   annotations: ImageAnnotation[];
-  annotationMode: boolean;
-  editing: boolean;
+  commentMode: boolean;
   onAddAnnotation: (event: PointerEvent<HTMLDivElement>) => void;
+  onComment: () => void;
+  onRemove: () => void;
+  onResize: (prompt: string) => void;
+  onZoomChange: (zoom: number) => void;
 }) {
   return (
-    <div
-      className={cn(
-        "relative flex min-h-0 flex-1 items-center justify-center overflow-auto p-5 md:p-8",
-        editing && annotationMode && "cursor-crosshair",
-      )}
-      data-image-studio-stage
-      onPointerDown={onAddAnnotation}
-    >
+    <section className="relative flex size-full items-center justify-center overflow-hidden bg-[var(--cp-bg-subtle)] p-5 md:p-10" aria-label="Focused 图片预览">
+      <div className="absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--cp-border)] bg-[var(--cp-surface)] p-1 shadow-[var(--cp-shadow-soft)]">
+        <button type="button" className={codexToolbarButton(commentMode)} aria-pressed={commentMode} onClick={onComment}>
+          <MessageCirclePlus className="size-3.5" />
+          添加评论
+        </button>
+        <button type="button" className={codexToolbarButton(false)} onClick={onRemove}>
+          <Trash2 className="size-3.5" />
+          移除
+        </button>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button type="button" className={codexToolbarButton(false)}>
+              <Maximize2 className="size-3.5" />
+              调整大小
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="bottom" align="center" className="w-48 p-1.5">
+            {resizeOptions.map((option) => (
+              <button
+                key={option.label}
+                type="button"
+                className="flex h-9 w-full items-center rounded-[7px] px-2.5 text-left text-xs text-[var(--cp-text)] hover:bg-[var(--cp-bg-subtle)]"
+                onClick={() => onResize(option.prompt)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
+      </div>
+
       <div
-        className="relative max-h-full max-w-full origin-center transition-transform duration-[var(--cp-duration-fast)]"
+        className={cn(
+          "relative flex max-h-full max-w-full items-center justify-center transition-transform duration-[var(--cp-duration-fast)]",
+          commentMode && "cursor-crosshair",
+        )}
         style={{ transform: `scale(${zoom})` }}
+        onPointerDown={onAddAnnotation}
+        data-image-comment-stage
       >
         {/* Generated images are served by authenticated same-origin routes. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={image.url} alt="图片工作区当前图片" className="block max-h-[calc(100dvh-190px)] max-w-full select-none object-contain" draggable={false} />
-        {textLayers.map((layer) => (
-          <div
-            key={layer.id}
-            className="pointer-events-none absolute whitespace-pre-wrap font-medium text-white [text-shadow:0_1px_4px_rgba(0,0,0,0.65)]"
-            style={{
-              left: `${layer.x}%`,
-              top: `${layer.y}%`,
-              width: `${layer.width}%`,
-              fontSize: `${layer.fontSize}px`,
-              textAlign: layer.align,
-            }}
-          >
-            {layer.text}
-          </div>
-        ))}
+        <img
+          src={image.url}
+          alt="图片工作区当前图片"
+          className="block max-h-[calc(100dvh-230px)] max-w-[calc(100vw-48px)] select-none rounded-[4px] bg-white object-contain shadow-[var(--cp-shadow-popover)]"
+          draggable={false}
+        />
         {annotations.map((annotation, index) => (
           <span
             key={annotation.id}
@@ -481,349 +373,163 @@ function ImageStage({
           </span>
         ))}
       </div>
-      {editing && annotationMode ? (
-        <div className="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white">
-          <MousePointer2 className="size-3.5" />
-          点击图片添加修改标注
-        </div>
+
+      <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-white/20 bg-black/75 p-1 text-white shadow-[var(--cp-shadow-popover)]">
+        <IconButton label="缩小" disabled={zoom <= 0.5} onClick={() => onZoomChange(Math.max(0.5, zoom - 0.1))}><ZoomOut className="size-4" /></IconButton>
+        <button type="button" className="h-8 min-w-12 rounded-full px-2 text-[11px] tabular-nums hover:bg-white/10" onClick={() => onZoomChange(1)}>{Math.round(zoom * 100)}%</button>
+        <IconButton label="放大" disabled={zoom >= 2} onClick={() => onZoomChange(Math.min(2, zoom + 0.1))}><ZoomIn className="size-4" /></IconButton>
+      </div>
+      {commentMode ? (
+        <div className="pointer-events-none absolute left-1/2 top-16 -translate-x-1/2 rounded-full bg-black/70 px-3 py-1.5 text-[11px] text-white">点击图片放置评论标记</div>
       ) : null}
-    </div>
+    </section>
   );
 }
 
-function ImageCanvasView({
+function CanvasImageView({
   images,
+  imageByFilename,
   activeFilename,
   selectedFilenames,
-  imageByFilename,
   onActivate,
   onToggleSelected,
-  onEdit,
 }: {
   images: readonly GeneratedImageItem[];
+  imageByFilename: ReadonlyMap<string, GeneratedImageItem>;
   activeFilename: string;
   selectedFilenames: ReadonlySet<string>;
-  imageByFilename: ReadonlyMap<string, GeneratedImageItem>;
   onActivate: (filename: string) => void;
   onToggleSelected: (filename: string) => void;
-  onEdit: () => void;
 }) {
   return (
-    <section className="min-h-0 flex-1 overflow-y-auto bg-[var(--cp-bg-subtle)] p-4 md:p-6" aria-label="同一对话的图片 Canvas">
-      <div className="mx-auto flex max-w-[980px] items-center gap-3 pb-4">
-        <div className="min-w-0 flex-1">
-          <h2 className="m-0 text-base font-semibold text-[var(--cp-text)]">对话图片 Canvas</h2>
-          <p className="m-0 mt-1 text-xs text-[var(--cp-text-muted)]">选择最多 4 张图片作为下一次编辑输入，原图和历史版本都会保留。</p>
+    <section className="size-full overflow-y-auto bg-[var(--cp-bg-subtle)] p-4 md:p-6" aria-label="Canvas 图片集合">
+      <div className="mx-auto max-w-[1120px]">
+        <div className="mb-4 flex items-end gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="m-0 text-sm font-semibold text-[var(--cp-text)]">本对话生成的图片</h2>
+            <p className="m-0 mt-1 text-[11px] text-[var(--cp-text-muted)]">可选择最多 4 张图片，一起交给当前 Codex thread 修改。</p>
+          </div>
+          <span className="text-[11px] text-[var(--cp-text-faint)]">已选择 {selectedFilenames.size} 张</span>
         </div>
-        <Button type="button" size="sm" className="rounded-full" onClick={onEdit}>
-          <Sparkles className="size-3.5" />
-          编辑所选图片
-        </Button>
-      </div>
-      <div className="mx-auto grid max-w-[980px] grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
-        {images.map((image) => {
-          const selected = selectedFilenames.has(image.filename);
-          const active = image.filename === activeFilename;
-          return (
-            <article
-              key={image.id}
-              className={cn(
-                "group overflow-hidden rounded-[var(--cp-radius-panel)] border bg-[var(--cp-surface)] shadow-[var(--cp-shadow-soft)]",
-                active ? "border-[var(--cp-text)]" : "border-[var(--cp-border)]",
-              )}
-            >
-              <button type="button" className="relative block aspect-square w-full overflow-hidden bg-[var(--cp-bg-muted)] p-0" onClick={() => onActivate(image.filename)}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={image.url} alt={`图片版本 ${imageVersionNumber(image, imageByFilename)}`} className="size-full object-cover transition-transform duration-[var(--cp-duration-fast)] group-hover:scale-[1.015]" />
-                <span className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-1 text-[10px] text-white">
-                  第 {imageVersionNumber(image, imageByFilename)} 版
-                </span>
-              </button>
-              <div className="flex items-center gap-2 px-2.5 py-2">
-                <button
-                  type="button"
-                  className={cn(
-                    "flex size-6 shrink-0 items-center justify-center rounded-[6px] border",
-                    selected ? "border-[var(--cp-text)] bg-[var(--cp-text)] text-white" : "border-[var(--cp-border)] text-transparent",
-                  )}
-                  aria-label={selected ? "取消选择此图片" : "选择此图片用于编辑"}
-                  onClick={() => onToggleSelected(image.filename)}
-                >
-                  <Check className="size-3.5" />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+          {images.map((image) => {
+            const selected = selectedFilenames.has(image.filename);
+            return (
+              <article key={image.id} className={cn("overflow-hidden rounded-[10px] border bg-[var(--cp-surface)]", image.filename === activeFilename ? "border-[var(--cp-text)]" : "border-[var(--cp-border)]")}>
+                <button type="button" className="relative block aspect-square w-full overflow-hidden bg-white p-0" onDoubleClick={() => onActivate(image.filename)}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={image.url} alt={`图片版本 ${imageVersionNumber(image, imageByFilename)}`} className="size-full object-contain" />
+                  <span className="absolute bottom-2 left-2 rounded-full bg-black/65 px-2 py-1 text-[10px] text-white">第 {imageVersionNumber(image, imageByFilename)} 版</span>
+                  <span className={cn("absolute right-2 top-2 flex size-6 items-center justify-center rounded-full border", selected ? "border-[var(--cp-text)] bg-[var(--cp-text)] text-white" : "border-[var(--cp-border)] bg-white text-transparent")}>
+                    <Check className="size-3.5" />
+                  </span>
                 </button>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--cp-text-muted)]">{image.model}</span>
-              </div>
-            </article>
-          );
-        })}
+                <div className="flex items-center gap-2 px-2 py-2">
+                  <button type="button" className="min-w-0 flex-1 truncate text-left text-[11px] text-[var(--cp-text-muted)]" onClick={() => onActivate(image.filename)}>查看此版本</button>
+                  <button type="button" className="h-7 rounded-[6px] px-2 text-[10px] text-[var(--cp-text)] hover:bg-[var(--cp-bg-subtle)]" onClick={() => onToggleSelected(image.filename)}>{selected ? "取消" : "选择"}</button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
       </div>
     </section>
   );
 }
 
-function ImageEditInspector({
+const ImageEditComposer = function ImageEditComposer({
   images,
   selectedFilenames,
-  instruction,
-  preserve,
-  aspectRatio,
   annotations,
-  annotationMode,
-  imageContent,
-  loadingNode,
-  savingLayers,
-  layerError,
+  value,
+  resizeInstruction,
   running,
   submitting,
-  submitError,
-  submitStatus,
-  onInstructionChange,
-  onPreserveChange,
-  onAspectRatioChange,
-  onToggleSelected,
-  onAnnotationModeChange,
+  error,
+  status,
+  onChange,
   onAnnotationsChange,
-  onImageContentChange,
-  onSaveTextLayers,
   onSubmit,
+  forwardedRef,
 }: {
   images: readonly GeneratedImageItem[];
   selectedFilenames: ReadonlySet<string>;
-  instruction: string;
-  preserve: string;
-  aspectRatio: string;
   annotations: ImageAnnotation[];
-  annotationMode: boolean;
-  imageContent: CreativeCanvasImageContent | null;
-  loadingNode: boolean;
-  savingLayers: boolean;
-  layerError: string | null;
+  value: string;
+  resizeInstruction: string;
   running: boolean;
   submitting: boolean;
-  submitError: string | null;
-  submitStatus: string | null;
-  onInstructionChange: (value: string) => void;
-  onPreserveChange: (value: string) => void;
-  onAspectRatioChange: (value: string) => void;
-  onToggleSelected: (filename: string) => void;
-  onAnnotationModeChange: (value: boolean) => void;
-  onAnnotationsChange: (value: ImageAnnotation[]) => void;
-  onImageContentChange: (value: CreativeCanvasImageContent) => void;
-  onSaveTextLayers: () => Promise<void>;
+  error: string | null;
+  status: string | null;
+  onChange: (value: string) => void;
+  onAnnotationsChange: (annotations: ImageAnnotation[]) => void;
   onSubmit: () => Promise<void>;
+  forwardedRef: React.Ref<HTMLTextAreaElement>;
 }) {
+  const selectedImages = images.filter((image) => selectedFilenames.has(image.filename));
   return (
-    <aside className="min-h-0 overflow-y-auto border-t border-[var(--cp-border)] bg-[var(--cp-surface)] lg:border-l lg:border-t-0" aria-label="图片编辑工具">
-      <div className="space-y-5 p-4">
-        <section>
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="m-0 text-xs font-semibold text-[var(--cp-text)]">编辑来源</h3>
-            <span className="text-[10px] text-[var(--cp-text-faint)]">{selectedFilenames.size}/4</span>
-          </div>
-          <div className="cp-flat-scrollbar flex gap-2 overflow-x-auto pb-1">
-            {images.map((image) => {
-              const selected = selectedFilenames.has(image.filename);
-              return (
-                <button
-                  key={image.id}
-                  type="button"
-                  className={cn(
-                    "relative size-14 shrink-0 overflow-hidden rounded-[8px] border bg-[var(--cp-bg-subtle)]",
-                    selected ? "border-[var(--cp-text)] ring-1 ring-[var(--cp-text)]" : "border-[var(--cp-border)] opacity-60",
-                  )}
-                  aria-label={selected ? "取消此编辑来源" : "添加为编辑来源"}
-                  onClick={() => onToggleSelected(image.filename)}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={image.url} alt="" className="size-full object-cover" />
-                  {selected ? <Check className="absolute right-1 top-1 size-4 rounded-full bg-black/70 p-0.5 text-white" /> : null}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        <section>
-          <label className="mb-2 block text-xs font-semibold text-[var(--cp-text)]" htmlFor="image-edit-instruction">修改要求</label>
-          <textarea
-            id="image-edit-instruction"
-            className="min-h-28 w-full resize-y rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 py-2 text-sm leading-6 text-[var(--cp-text)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-            placeholder="例如：移除衣架，改成暖灰影棚背景，保留短裤的水洗纹理和白色抽绳。"
-            value={instruction}
-            onChange={(event) => onInstructionChange(event.target.value)}
-          />
-        </section>
-
-        <section className="grid gap-3">
-          <label className="grid gap-1.5 text-xs font-semibold text-[var(--cp-text)]">
-            必须保留
-            <input
-              className="h-9 rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 text-xs font-normal outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-              value={preserve}
-              onChange={(event) => onPreserveChange(event.target.value)}
-            />
-          </label>
-          <label className="grid gap-1.5 text-xs font-semibold text-[var(--cp-text)]">
-            输出画幅
-            <select
-              className="h-9 rounded-[var(--cp-radius-control)] border border-[var(--cp-border)] bg-[var(--cp-bg)] px-3 text-xs font-normal outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-              value={aspectRatio}
-              onChange={(event) => onAspectRatioChange(event.target.value)}
-            >
-              <option>保持原图</option>
-              <option>1:1 商品主图</option>
-              <option>4:5 竖版</option>
-              <option>16:9 横版</option>
-            </select>
-          </label>
-        </section>
-
-        <section>
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="m-0 text-xs font-semibold text-[var(--cp-text)]">区域反馈</h3>
-            <Button type="button" variant={annotationMode ? "subtle" : "outline"} size="sm" className="h-7 px-2 text-[11px]" onClick={() => onAnnotationModeChange(!annotationMode)}>
-              <MessageSquarePlus className="size-3.5" />
-              {annotationMode ? "点击图片标注" : "添加标注"}
-            </Button>
-          </div>
-          <div className="space-y-2">
+    <footer className="shrink-0 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 pb-3 pt-2 md:px-5">
+      <div className="mx-auto max-w-[760px]">
+        {annotations.length ? (
+          <div className="mb-2 space-y-1.5">
             {annotations.map((annotation, index) => (
               <div key={annotation.id} className="flex items-center gap-2">
                 <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cp-text)] text-[10px] font-semibold text-white">{index + 1}</span>
                 <input
                   className="h-8 min-w-0 flex-1 rounded-[7px] border border-[var(--cp-border)] px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                  placeholder="说明这个区域需要怎么改"
+                  placeholder="说明这个区域需要怎么修改"
                   value={annotation.text}
                   onChange={(event) => onAnnotationsChange(annotations.map((item) => item.id === annotation.id ? { ...item, text: event.target.value } : item))}
                 />
-                <button type="button" className="flex size-7 items-center justify-center rounded-[6px] text-[var(--cp-text-faint)] hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-danger)]" aria-label={`删除标注 ${index + 1}`} onClick={() => onAnnotationsChange(annotations.filter((item) => item.id !== annotation.id))}>
-                  <Trash2 className="size-3.5" />
-                </button>
+                <button type="button" className="flex size-7 items-center justify-center rounded-full text-[var(--cp-text-faint)] hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-danger)]" aria-label={`删除评论 ${index + 1}`} onClick={() => onAnnotationsChange(annotations.filter((item) => item.id !== annotation.id))}><X className="size-3.5" /></button>
               </div>
             ))}
-            {!annotations.length ? <p className="m-0 text-[11px] leading-5 text-[var(--cp-text-faint)]">可直接点击图片定位需要修改的区域，标注会随编辑指令提交给 Agent。</p> : null}
           </div>
-        </section>
-
-        <section className="border-t border-[var(--cp-border-subtle)] pt-4">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="m-0 text-xs font-semibold text-[var(--cp-text)]">文字图层</h3>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-7 px-2 text-[11px]"
-              disabled={!imageContent || imageContent.textLayers.length >= 24}
-              onClick={() => {
-                if (!imageContent) return;
-                onImageContentChange({
-                  ...imageContent,
-                  textLayers: [
-                    ...imageContent.textLayers,
-                    { id: `text-${crypto.randomUUID()}`, text: "输入图片文案", x: 8, y: 8, width: 48, fontSize: 28, align: "left" },
-                  ],
-                });
+        ) : null}
+        {resizeInstruction ? <div className="mb-2 rounded-[7px] bg-[var(--cp-bg-subtle)] px-2.5 py-1.5 text-[11px] text-[var(--cp-text-muted)]">{resizeInstruction}</div> : null}
+        <div className="rounded-[18px] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-soft)]">
+          {selectedImages.length ? (
+            <div className="mb-1.5 flex gap-1.5 px-1" aria-label="图片修改来源">
+              {selectedImages.map((image) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={image.id} src={image.url} alt="已选择的图片" className="size-10 rounded-[6px] border border-[var(--cp-border)] bg-white object-cover" />
+              ))}
+            </div>
+          ) : null}
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={forwardedRef}
+              className="min-h-11 max-h-32 min-w-0 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-[var(--cp-text)] outline-none"
+              placeholder="描述要修改的内容"
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  if (!running && !submitting) void onSubmit();
+                }
               }}
-            >
-              <Plus className="size-3.5" />
-              添加文字
+            />
+            <Button type="button" size="icon" className="size-9 shrink-0 rounded-full" disabled={running || submitting || (!value.trim() && !annotations.some((item) => item.text.trim()) && !resizeInstruction)} aria-label="提交图片修改" onClick={() => void onSubmit()}>
+              {running || submitting ? <LoaderCircle className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
             </Button>
           </div>
-          {loadingNode ? (
-            <div className="flex items-center gap-2 text-[11px] text-[var(--cp-text-muted)]"><LoaderCircle className="size-3.5 animate-spin" />读取图层</div>
-          ) : imageContent ? (
-            <div className="space-y-3">
-              {imageContent.textLayers.map((layer, index) => (
-                <TextLayerInspector
-                  key={layer.id}
-                  layer={layer}
-                  index={index}
-                  onChange={(next) => onImageContentChange({
-                    ...imageContent,
-                    textLayers: imageContent.textLayers.map((item) => item.id === layer.id ? next : item),
-                  })}
-                  onDelete={() => onImageContentChange({
-                    ...imageContent,
-                    textLayers: imageContent.textLayers.filter((item) => item.id !== layer.id),
-                  })}
-                />
-              ))}
-              <Button type="button" variant="outline" size="sm" className="w-full" disabled={savingLayers} onClick={() => void onSaveTextLayers()}>
-                {savingLayers ? <LoaderCircle className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
-                保存文字图层
-              </Button>
-            </div>
-          ) : (
-            <p className="m-0 text-[11px] leading-5 text-[var(--cp-text-faint)]">当前图片尚未完成画布节点同步，模型编辑仍可正常使用。</p>
-          )}
-          {layerError ? <p className="m-0 mt-2 flex items-start gap-1.5 text-[11px] leading-5 text-[var(--cp-danger)]"><CircleAlert className="mt-0.5 size-3.5 shrink-0" />{layerError}</p> : null}
-        </section>
-
-        {submitError ? <p className="m-0 flex items-start gap-1.5 text-xs leading-5 text-[var(--cp-danger)]" role="alert"><CircleAlert className="mt-0.5 size-3.5 shrink-0" />{submitError}</p> : null}
-        {submitStatus ? <p className="m-0 text-xs leading-5 text-[var(--cp-success)]" role="status">{submitStatus}</p> : null}
+        </div>
+        {error ? <p className="m-0 mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-[var(--cp-danger)]"><CircleAlert className="mt-0.5 size-3.5 shrink-0" />{error}</p> : null}
+        {status ? <p className="m-0 mt-1.5 text-center text-[11px] text-[var(--cp-text-muted)]">{status}</p> : null}
       </div>
-      <footer className="sticky bottom-0 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] p-3">
-        <Button type="button" className="w-full" disabled={running || submitting || !selectedFilenames.size} onClick={() => void onSubmit()}>
-          {running || submitting ? <LoaderCircle className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
-          {running ? "当前对话正在处理" : submitting ? "正在提交" : "生成编辑版本"}
-        </Button>
-        <p className="m-0 mt-2 text-center text-[10px] leading-4 text-[var(--cp-text-faint)]">提交后会在同一 Codex thread 中生成新的原生图片版本。</p>
-      </footer>
-    </aside>
+    </footer>
   );
+};
+
+function IconButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
+  return <button type="button" className="flex size-8 items-center justify-center rounded-full hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-30" aria-label={label} disabled={disabled} onClick={onClick}>{children}</button>;
 }
 
-function TextLayerInspector({
-  layer,
-  index,
-  onChange,
-  onDelete,
-}: {
-  layer: CreativeCanvasImageTextLayer;
-  index: number;
-  onChange: (layer: CreativeCanvasImageTextLayer) => void;
-  onDelete: () => void;
-}) {
-  return (
-    <div className="rounded-[8px] border border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] p-2">
-      <div className="mb-2 flex items-center gap-2">
-        <span className="text-[10px] font-medium text-[var(--cp-text-muted)]">图层 {index + 1}</span>
-        <button type="button" className="ml-auto flex size-6 items-center justify-center rounded-[6px] text-[var(--cp-text-faint)] hover:bg-[var(--cp-surface)] hover:text-[var(--cp-danger)]" aria-label={`删除文字图层 ${index + 1}`} onClick={onDelete}>
-          <Trash2 className="size-3.5" />
-        </button>
-      </div>
-      <input className="h-8 w-full rounded-[6px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 text-xs outline-none" value={layer.text} aria-label={`文字图层 ${index + 1} 内容`} onChange={(event) => onChange({ ...layer, text: event.target.value })} />
-      <div className="mt-2 grid grid-cols-4 gap-1.5">
-        <NumberField label="X" value={layer.x} min={0} max={100} onChange={(value) => onChange({ ...layer, x: value })} />
-        <NumberField label="Y" value={layer.y} min={0} max={100} onChange={(value) => onChange({ ...layer, y: value })} />
-        <NumberField label="宽" value={layer.width} min={8} max={100} onChange={(value) => onChange({ ...layer, width: value })} />
-        <NumberField label="字号" value={layer.fontSize} min={12} max={72} onChange={(value) => onChange({ ...layer, fontSize: value })} />
-      </div>
-      <div className="mt-2 flex gap-1">
-        {(["left", "center", "right"] as const).map((align) => (
-          <button key={align} type="button" className={cn("flex size-7 items-center justify-center rounded-[6px] text-[var(--cp-text-muted)]", layer.align === align && "bg-[var(--cp-surface)] text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]")} aria-label={`${index + 1} 图层${align === "left" ? "左对齐" : align === "center" ? "居中" : "右对齐"}`} onClick={() => onChange({ ...layer, align })}>
-            {align === "left" ? <AlignLeft className="size-3.5" /> : align === "center" ? <AlignCenter className="size-3.5" /> : <AlignRight className="size-3.5" />}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function NumberField({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
-  return (
-    <label className="grid gap-1 text-[9px] text-[var(--cp-text-faint)]">
-      {label}
-      <input type="number" min={min} max={max} className="h-7 min-w-0 rounded-[6px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-1.5 text-[10px] text-[var(--cp-text)] outline-none" value={Math.round(value)} onChange={(event) => onChange(Math.min(max, Math.max(min, Number(event.target.value) || min)))} />
-    </label>
-  );
-}
-
-function StudioIconButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" className="flex size-8 items-center justify-center rounded-full hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-30" aria-label={label} disabled={disabled} onClick={onClick}>
-      {children}
-    </button>
+function codexToolbarButton(active: boolean) {
+  return cn(
+    "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-[11px] text-[var(--cp-text)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
+    active && "bg-[var(--cp-bg-subtle)]",
   );
 }
 
@@ -848,9 +554,9 @@ export function buildImageEditMessage({
     `请基于本轮选中的 ${sourceCount} 张图片生成一个实际编辑后的新图片版本。`,
     instruction,
     preserve.trim() ? `必须保留：${preserve.trim()}。` : "",
-    aspectRatio !== "保持原图" ? `输出画幅：${aspectRatio}。` : "保持原图画幅。",
+    aspectRatio,
     regionInstructions.length ? `区域修改要求：\n${regionInstructions.join("\n")}` : "",
-    "不要覆盖原图片；完成时必须产生新的原生 imageGeneration 图片产物，并在回复中简要说明改动和仍需人工核对的内容。",
+    "不要覆盖原图片；完成时必须产生新的原生 imageGeneration 图片产物，并简要说明修改结果和仍需人工核对的内容。",
   ].filter(Boolean).join("\n");
 }
 

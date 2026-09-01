@@ -97,13 +97,14 @@ Each assistant Item may reference multiple nodes through `commerce_creative_canv
 
 ### Image Studio And Immutable Edit Versions
 
-Clicking a completed generated image in the conversation or its canvas node opens the same in-workbench Image Studio rather than navigating to an artifact URL. The studio provides three views:
+Clicking a completed generated image in the conversation or its canvas node opens the same in-workbench, Codex-style Image Studio rather than navigating to an artifact URL. The studio provides two views:
 
 - **Focused** inspects one owned image at a bounded zoom level;
 - **Canvas** shows the generated images from the same Codex thread and allows at most four explicit edit sources;
-- **Edit** accepts natural-language changes, preservation constraints, output aspect ratio, coordinate-based region comments, and application-owned editable text layers.
 
-Text-layer changes remain application revisions of the existing canvas node and never rewrite native image bytes. Pixel changes are a new Harness Turn in the same creative-project thread. The browser submits only bounded generated-image filenames through `imageEditSourceFilenames`; the authenticated BFF verifies that the persisted Recipe is `creative_project`, and Gateway reloads each artifact from the application-owned `GeneratedImageStore`, requires exact thread ownership, and converts it to a native `localImage` input. Browser URLs, host paths, base64, Provider credentials, masks, raw App Server inputs, and Provider identity are never accepted.
+Both views share one bottom natural-language composer. Focused exposes Codex-like `添加评论`, `移除` and `调整大小` actions: comments become coordinate-bound instructions, while remove/resize only prepare visible natural-language requests. Canvas provides multi-selection and version navigation. There is no separate direct-design or layer-editing mode in Image Studio.
+
+Every Image Studio modification is a new Harness Turn in the same creative-project thread. The browser submits only bounded generated-image filenames through `imageEditSourceFilenames`; the authenticated BFF verifies that the persisted Recipe is `creative_project`, and Gateway reloads each artifact from the application-owned `GeneratedImageStore`, requires exact thread ownership, and converts it to a native `localImage` input. Browser URLs, host paths, base64, Provider credentials, masks, raw App Server inputs, direct Provider requests, and Provider identity are never accepted.
 
 The edit Turn uses the normal `commerce-creative-project` managed Skill and the existing actor-authorized Provider path. Completion still requires a native `imageGeneration` Item. Each saved artifact records immutable `sourceFilenames`, so the browser can display a real parent-to-child version chain while retaining every source image. Harness-native reply retry reconstructs those generated-image `localImage` inputs from the authoritative source `userMessage`; it never downloads through the browser or fabricates an edit request.
 
