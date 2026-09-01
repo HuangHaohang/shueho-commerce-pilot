@@ -27,7 +27,6 @@ Commerce Pilot must not replace these concerns with a custom agent loop, prompt 
 | Browser application | Next.js 15 App Router, React 19, TypeScript | Workbench, conversation UI, BFF route handlers, authenticated artifact delivery |
 | UI system | Tailwind CSS v4, shadcn/ui, Radix primitives, lucide-react | Accessible controls and the project design system |
 | Creative canvas | `@xyflow/react` custom React nodes | Infinite viewport, node selection, resize, MiniMap and accessible spatial navigation; content remains application React UI |
-| Creative image design | Fabric.js 7 with application-owned React controls | Browser-only object scene graph for direct text, shape, drawing, Logo/image, crop/filter, undo/redo and PNG/JPG export; Commerce Pilot owns the UI, validation and persisted revision contract |
 | Client server-state | TanStack Query | Models, threads, plugins, Skills, Enterprise state, cache invalidation |
 | Agent gateway | Node.js 20.16+, TypeScript, native HTTP/SSE | App Server ownership, policy, scope binding, event sanitization, host tools |
 | Agent runtime | Application-owned patched Codex 0.150.1 App Server, built from pinned open-source input | Threads, Turns, streaming, tools, Skills, approvals, queue, compaction, multi-agent, hosted-image Item projection |

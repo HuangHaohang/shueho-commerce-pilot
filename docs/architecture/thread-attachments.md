@@ -19,8 +19,6 @@ Commerce Pilot accepts tenant-owned photos and bounded document attachments with
 
 Uploaded images in the composer and conversation remain browser UI, not navigation targets. Clicking a sent image opens the same in-page, full-viewport preview used for generated images; it never opens the authenticated artifact URL in a new browser tab. Documents keep their explicit download behavior.
 
-Creative Image Studio uploads reuse the same tenant artifact root but are stored with `purpose=canvas_asset` through a dedicated authenticated BFF route. They are image-only design resources for Logo, brand marks and visual overlays; they are never accepted by the ordinary Turn attachment builder or bound to a Harness Turn. Canvas node revision writes must revalidate their ownership through Gateway metadata before an asset UUID may enter the scene graph.
-
 Native reply retry does not download an attachment through the browser and upload it under browser-reconstructed history. Gateway first verifies the selected assistant Item and source Turn through App Server, then reloads only artifacts already bound to that owned Turn, rebuilds their native `localImage` or bounded document inputs, performs the history-mode-compatible native `thread/revert` or `thread/rollback`, and rebinds the same application artifacts to the replacement `turn/start` result. Browser-supplied artifact ids and host paths are not accepted by the retry endpoint.
 
 Upload failure removes any artifacts already written for that unbound request. Turn failure removes the optimistic user message and restores the original composer files. Successful submission revokes local preview URLs and leaves attachments only in the user message.

@@ -92,22 +92,8 @@ const editorLayerSchema = z.discriminatedUnion("kind", [
   z.object({
     ...editorLayerBase,
     kind: z.literal("image"),
-    source: z.enum(["base", "canvas_asset"]),
-    assetId: z.string().uuid().optional(),
-    assetName: z.string().trim().min(1).max(160).optional(),
+    source: z.literal("base"),
     fit: z.enum(["contain", "cover"]),
-    crop: z.object({
-      x: z.number().finite().min(0).max(100),
-      y: z.number().finite().min(0).max(100),
-      width: z.number().finite().min(1).max(100),
-      height: z.number().finite().min(1).max(100),
-    }).strict().optional(),
-    filters: z.object({
-      brightness: z.number().finite().min(-1).max(1),
-      contrast: z.number().finite().min(-1).max(1),
-      saturation: z.number().finite().min(-1).max(1),
-      blur: z.number().finite().min(0).max(1),
-    }).strict().optional(),
   }).strict(),
   z.object({
     ...editorLayerBase,
@@ -127,11 +113,6 @@ const imageContentUpdateSchema = z.object({
   description: boundedText(20_000),
   textLayers: z.array(imageTextLayerSchema).max(24),
   editorLayers: z.array(editorLayerSchema).max(64).optional(),
-  design: z.object({
-    width: z.number().int().min(320).max(3_840),
-    height: z.number().int().min(320).max(3_840),
-    background: safeColor,
-  }).strict().optional(),
   complianceNotes: noteList,
 }).strict().superRefine((value, context) => {
   const ids = new Set<string>();
@@ -152,30 +133,6 @@ const imageContentUpdateSchema = z.object({
         code: z.ZodIssueCode.custom,
         path: ["editorLayers", index, "id"],
         message: "编辑图层标识重复。",
-      });
-    }
-    if (layer.kind === "image" && layer.source === "canvas_asset" && (!layer.assetId || !layer.assetName)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["editorLayers", index],
-        message: "素材图层缺少归属标识。",
-      });
-    }
-    if (layer.kind === "image" && layer.source === "base" && (layer.assetId || layer.assetName)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["editorLayers", index],
-        message: "底图副本不能携带素材标识。",
-      });
-    }
-    if (
-      layer.kind === "image" && layer.crop &&
-      (layer.crop.x + layer.crop.width > 100 || layer.crop.y + layer.crop.height > 100)
-    ) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["editorLayers", index, "crop"],
-        message: "图片裁剪窗口超出素材范围。",
       });
     }
     editorIds.add(layer.id);
@@ -214,7 +171,6 @@ export function parseCreativeCanvasContentUpdate(
   return {
     ...update,
     editorLayers: update.editorLayers ?? current.editorLayers,
-    design: update.design ?? current.design,
     image: current.image,
   };
 }

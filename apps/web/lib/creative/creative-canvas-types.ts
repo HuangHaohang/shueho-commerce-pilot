@@ -64,17 +64,8 @@ export type CreativeCanvasEditorShapeLayer = CreativeCanvasEditorLayerBase & {
 
 export type CreativeCanvasEditorImageLayer = CreativeCanvasEditorLayerBase & {
   kind: "image";
-  source: "base" | "canvas_asset";
-  assetId?: string;
-  assetName?: string;
+  source: "base";
   fit: "contain" | "cover";
-  crop?: { x: number; y: number; width: number; height: number };
-  filters?: {
-    brightness: number;
-    contrast: number;
-    saturation: number;
-    blur: number;
-  };
 };
 
 export type CreativeCanvasEditorDrawingLayer = CreativeCanvasEditorLayerBase & {
@@ -102,11 +93,6 @@ export type CreativeCanvasImageContent = {
   };
   textLayers: CreativeCanvasImageTextLayer[];
   editorLayers?: CreativeCanvasEditorLayer[];
-  design?: {
-    width: number;
-    height: number;
-    background: string;
-  };
   complianceNotes: string[];
 };
 

@@ -72,34 +72,6 @@ test("stores tenant-bound text and image attachments and creates native turn inp
   }
 });
 
-test("keeps canvas design assets separate from Harness Turn attachments", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "commerce-canvas-assets-"));
-  const store = new ThreadArtifactStore(directory);
-  try {
-    const asset = await store.save({
-      threadId,
-      scope,
-      clientRequestId,
-      purpose: "canvas_asset",
-      originalName: "brand-logo.png",
-      declaredMimeType: "image/png",
-      bytes: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=", "base64"),
-    });
-    assert.equal(asset.purpose, "canvas_asset");
-    assert.equal((await store.get(threadId, asset.id))?.purpose, "canvas_asset");
-    await assert.rejects(
-      store.buildTurnInputs(threadId, [asset.id], scope, clientRequestId),
-      /ownership or request binding/i,
-    );
-    await assert.rejects(
-      store.bindToTurn(threadId, [asset.id], "turn-attachment-1234"),
-      /Canvas assets cannot be bound/i,
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
 test("reads only checksum-verified bound CSV or JSON artifacts for product import", async () => {
   const directory = await mkdtemp(join(tmpdir(), "commerce-attachments-"));
   const store = new ThreadArtifactStore(directory);

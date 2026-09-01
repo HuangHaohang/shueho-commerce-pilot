@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   readCreativeCanvasState: vi.fn(),
@@ -9,8 +9,6 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/agent/http", () => ({
   AGENT_ID_PATTERN: /^[A-Za-z0-9_-]{8,128}$/,
-  gatewayHeaders: (initial?: HeadersInit) => new Headers(initial),
-  gatewayUrl: (path: string) => new URL(path, "http://gateway.test"),
   requireAgentThreadContext: mocks.requireAgentThreadContext,
 }));
 vi.mock("@/lib/creative/creative-canvas-repository", () => ({
@@ -54,8 +52,6 @@ describe("creative canvas node route", () => {
       revision: { ...node.revision, id: "revision-2", number: 2, origin: "user" },
     });
   });
-
-  afterEach(() => vi.unstubAllGlobals());
 
   it("edits image text layers without accepting a replacement artifact", async () => {
     const request = jsonRequest({
@@ -115,48 +111,6 @@ describe("creative canvas node route", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.saveCreativeCanvasNodeRevision).not.toHaveBeenCalled();
-  });
-
-  it("persists only an ownership-checked canvas image asset", async () => {
-    const assetId = "44444444-4444-4444-8444-444444444444";
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      artifact: { id: assetId, threadId, kind: "image", purpose: "canvas_asset" },
-    }), { status: 200, headers: { "Content-Type": "application/json" } })));
-    const response = await PATCH(jsonRequest({
-      content: {
-        kind: "image",
-        title: "商品主图",
-        description: "添加 Logo",
-        textLayers: [],
-        editorLayers: [{
-          id: "brand-logo",
-          kind: "image",
-          name: "品牌 Logo",
-          source: "canvas_asset",
-          assetId,
-          assetName: "logo.png",
-          fit: "contain",
-          x: 70,
-          y: 8,
-          width: 20,
-          height: 12,
-          rotation: 0,
-          opacity: 1,
-          visible: true,
-          locked: false,
-        }],
-        design: { width: 1000, height: 1000, background: "#ffffff" },
-        complianceNotes: [],
-      },
-    }), { params: Promise.resolve({ threadId, nodeId }) });
-
-    expect(response.status).toBe(200);
-    expect(mocks.saveCreativeCanvasNodeRevision).toHaveBeenCalledWith(
-      enterpriseContext,
-      threadId,
-      nodeId,
-      expect.objectContaining({ editorLayers: [expect.objectContaining({ assetId, source: "canvas_asset" })] }),
-    );
   });
 });
 

@@ -251,7 +251,6 @@ export function CreativeImageStudio({
               description: imageContent.description,
               textLayers: imageContent.textLayers,
               editorLayers: imageContent.editorLayers,
-              design: imageContent.design,
               complianceNotes: imageContent.complianceNotes,
             },
           }),
@@ -346,7 +345,6 @@ export function CreativeImageStudio({
           />
         ) : view === "edit" ? (
           <CreativeLayerEditor
-            threadId={threadId}
             image={activeImage}
             content={imageContent}
             loading={loadingNode}
@@ -438,19 +436,19 @@ function ImageStage({
   return (
     <div
       className={cn(
-        "relative flex min-h-0 flex-1 items-center justify-center overflow-hidden",
+        "relative flex min-h-0 flex-1 items-center justify-center overflow-auto p-5 md:p-8",
         editing && annotationMode && "cursor-crosshair",
       )}
       data-image-studio-stage
       onPointerDown={onAddAnnotation}
     >
       <div
-        className="absolute inset-5 origin-center transition-transform duration-[var(--cp-duration-fast)] md:inset-8"
+        className="relative max-h-full max-w-full origin-center transition-transform duration-[var(--cp-duration-fast)]"
         style={{ transform: `scale(${zoom})` }}
       >
         {/* Generated images are served by authenticated same-origin routes. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={image.url} alt="图片工作区当前图片" className="block size-full select-none object-contain" draggable={false} />
+        <img src={image.url} alt="图片工作区当前图片" className="block max-h-[calc(100dvh-190px)] max-w-full select-none object-contain" draggable={false} />
         {textLayers.map((layer) => (
           <div
             key={layer.id}
