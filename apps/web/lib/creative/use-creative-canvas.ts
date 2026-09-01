@@ -182,6 +182,7 @@ function editableContent(content: CreativeCanvasNodeContent) {
     title: content.title,
     description: content.description,
     textLayers: content.textLayers,
+    editorLayers: content.editorLayers,
     complianceNotes: content.complianceNotes,
   };
 }

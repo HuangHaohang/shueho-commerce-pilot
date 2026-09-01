@@ -39,6 +39,8 @@ import type {
 } from "@/lib/creative/creative-canvas-types";
 import { cn } from "@/lib/utils";
 
+import { CreativeLayerEditor } from "./creative-layer-editor";
+
 type ImageStudioView = "focused" | "canvas" | "edit";
 
 type ImageAnnotation = {
@@ -248,6 +250,7 @@ export function CreativeImageStudio({
               title: imageContent.title,
               description: imageContent.description,
               textLayers: imageContent.textLayers,
+              editorLayers: imageContent.editorLayers,
               complianceNotes: imageContent.complianceNotes,
             },
           }),
@@ -276,7 +279,7 @@ export function CreativeImageStudio({
         className="left-auto right-0 top-0 z-[120] flex h-dvh max-h-none w-full max-w-[1120px] translate-x-0 translate-y-0 flex-col rounded-none border-y-0 border-r-0 bg-[var(--cp-bg)] xl:w-[calc(100vw_-_var(--cp-sidebar-width))]"
       >
         <DialogDescription className="sr-only">
-          查看同一对话生成的图片、添加区域反馈和文字图层，并在当前 Codex thread 中生成编辑版本。
+          查看同一对话生成的图片，并通过非破坏性图层画布直接编辑；AI 底图修改保留为可选入口。
         </DialogDescription>
         <header className="flex min-h-[var(--cp-topbar-height)] shrink-0 items-center gap-3 border-b border-[var(--cp-border)] px-3 md:px-4">
           <span className="flex size-9 items-center justify-center rounded-[var(--cp-radius-control)] bg-[var(--cp-bg-subtle)] text-[var(--cp-text-muted)]">
@@ -340,8 +343,29 @@ export function CreativeImageStudio({
             onToggleSelected={toggleSelected}
             onEdit={() => setView("edit")}
           />
+        ) : view === "edit" ? (
+          <CreativeLayerEditor
+            image={activeImage}
+            content={imageContent}
+            loading={loadingNode}
+            saving={savingLayers}
+            running={running}
+            error={layerError}
+            onContentChange={setImageContent}
+            onSave={saveTextLayers}
+            onSubmitAgentInstruction={(agentInstruction) => onSubmitEdit({
+              sourceFilenames: [...selectedFilenames],
+              message: buildImageEditMessage({
+                instruction: agentInstruction,
+                preserve: "保持未指定修改的商品外观、颜色和结构不变",
+                aspectRatio: "保持原图",
+                annotations: [],
+                sourceCount: selectedFilenames.size,
+              }),
+            })}
+          />
         ) : (
-          <div className={cn("min-h-0 flex-1", view === "edit" ? "grid lg:grid-cols-[minmax(0,1fr)_340px]" : "flex flex-col")}>
+          <div className="flex min-h-0 flex-1 flex-col">
             <div className="relative flex min-h-[320px] min-w-0 flex-1 flex-col overflow-hidden bg-[#202020]">
               <ImageStage
                 image={activeImage}
@@ -349,7 +373,7 @@ export function CreativeImageStudio({
                 textLayers={imageContent?.textLayers ?? []}
                 annotations={annotations}
                 annotationMode={annotationMode}
-                editing={view === "edit"}
+                editing={false}
                 onAddAnnotation={addAnnotation}
               />
               <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/70 p-1 text-white shadow-[var(--cp-shadow-popover)]">
@@ -363,59 +387,28 @@ export function CreativeImageStudio({
                   <ZoomIn className="size-4" />
                 </StudioIconButton>
               </div>
-              {view === "focused" ? (
-                <div className="absolute right-3 top-3 flex items-center gap-2">
-                  <Button type="button" variant="subtle" size="sm" className="rounded-full bg-white/90" onClick={() => setView("canvas")}>
-                    <Images className="size-3.5" />
-                    全部版本
-                  </Button>
-                  <Button type="button" size="sm" className="rounded-full" onClick={() => setView("edit")}>
-                    <Sparkles className="size-3.5" />
-                    编辑图片
-                  </Button>
-                </div>
-              ) : null}
-            </div>
-            {view === "edit" ? (
-              <ImageEditInspector
-                images={images}
-                selectedFilenames={selectedFilenames}
-                instruction={instruction}
-                preserve={preserve}
-                aspectRatio={aspectRatio}
-                annotations={annotations}
-                annotationMode={annotationMode}
-                imageContent={imageContent}
-                loadingNode={loadingNode}
-                savingLayers={savingLayers}
-                layerError={layerError}
-                running={running}
-                submitting={submitting}
-                submitError={submitError}
-                submitStatus={submitStatus}
-                onInstructionChange={setInstruction}
-                onPreserveChange={setPreserve}
-                onAspectRatioChange={setAspectRatio}
-                onToggleSelected={toggleSelected}
-                onAnnotationModeChange={setAnnotationMode}
-                onAnnotationsChange={setAnnotations}
-                onImageContentChange={setImageContent}
-                onSaveTextLayers={saveTextLayers}
-                onSubmit={submitEdit}
-              />
-            ) : (
-              <footer className="flex min-h-14 shrink-0 items-center gap-3 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-4">
-                <span className="min-w-0 flex-1 truncate text-xs text-[var(--cp-text-muted)]">
-                  {activeImage.sourceFilenames.length
-                    ? `由 ${activeImage.sourceFilenames.length} 张图片编辑生成`
-                    : "Codex 原生图片产物"}
-                </span>
-                <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={() => setView("edit")}>
-                  <Sparkles className="size-3.5" />
-                  继续创作
+              <div className="absolute right-3 top-3 flex items-center gap-2">
+                <Button type="button" variant="subtle" size="sm" className="rounded-full bg-white/90" onClick={() => setView("canvas")}>
+                  <Images className="size-3.5" />
+                  全部版本
                 </Button>
-              </footer>
-            )}
+                <Button type="button" size="sm" className="rounded-full" onClick={() => setView("edit")}>
+                  <Sparkles className="size-3.5" />
+                  编辑图片
+                </Button>
+              </div>
+            </div>
+            <footer className="flex min-h-14 shrink-0 items-center gap-3 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-4">
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--cp-text-muted)]">
+                {activeImage.sourceFilenames.length
+                  ? `由 ${activeImage.sourceFilenames.length} 张图片编辑生成`
+                  : "Codex 原生图片产物"}
+              </span>
+              <Button type="button" variant="outline" size="sm" className="rounded-full" onClick={() => setView("edit")}>
+                <Sparkles className="size-3.5" />
+                继续创作
+              </Button>
+            </footer>
           </div>
         )}
       </DialogContent>

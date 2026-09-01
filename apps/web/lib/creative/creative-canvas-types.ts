@@ -32,6 +32,55 @@ export type CreativeCanvasImageTextLayer = {
   align: "left" | "center" | "right";
 };
 
+export type CreativeCanvasEditorLayerBase = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation: number;
+  opacity: number;
+  visible: boolean;
+  locked: boolean;
+};
+
+export type CreativeCanvasEditorTextLayer = CreativeCanvasEditorLayerBase & {
+  kind: "text";
+  text: string;
+  fontSize: number;
+  color: string;
+  align: "left" | "center" | "right";
+  fontWeight: 400 | 500 | 600 | 700;
+};
+
+export type CreativeCanvasEditorShapeLayer = CreativeCanvasEditorLayerBase & {
+  kind: "shape";
+  shape: "rectangle" | "ellipse";
+  fill: string;
+  stroke: string;
+  strokeWidth: number;
+};
+
+export type CreativeCanvasEditorImageLayer = CreativeCanvasEditorLayerBase & {
+  kind: "image";
+  source: "base";
+  fit: "contain" | "cover";
+};
+
+export type CreativeCanvasEditorDrawingLayer = CreativeCanvasEditorLayerBase & {
+  kind: "drawing";
+  points: Array<{ x: number; y: number }>;
+  stroke: string;
+  strokeWidth: number;
+};
+
+export type CreativeCanvasEditorLayer =
+  | CreativeCanvasEditorTextLayer
+  | CreativeCanvasEditorShapeLayer
+  | CreativeCanvasEditorImageLayer
+  | CreativeCanvasEditorDrawingLayer;
+
 export type CreativeCanvasImageContent = {
   kind: "image";
   title: string;
@@ -43,6 +92,7 @@ export type CreativeCanvasImageContent = {
     model: string;
   };
   textLayers: CreativeCanvasImageTextLayer[];
+  editorLayers?: CreativeCanvasEditorLayer[];
   complianceNotes: string[];
 };
 

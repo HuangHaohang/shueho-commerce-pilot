@@ -60,6 +60,24 @@ describe("creative canvas node route", () => {
         title: "商品主图第二版",
         description: "文字已调整",
         textLayers: [{ id: "headline", text: "轻量通勤", x: 8, y: 9, width: 40, fontSize: 28, align: "left" }],
+        editorLayers: [{
+          id: "headline",
+          kind: "text",
+          name: "主标题",
+          text: "轻量通勤",
+          x: 8,
+          y: 9,
+          width: 40,
+          height: 14,
+          rotation: 0,
+          opacity: 1,
+          visible: true,
+          locked: false,
+          fontSize: 28,
+          color: "#ffffff",
+          align: "left",
+          fontWeight: 600,
+        }],
         complianceNotes: [],
       },
     });
@@ -71,7 +89,11 @@ describe("creative canvas node route", () => {
       enterpriseContext,
       threadId,
       nodeId,
-      expect.objectContaining({ image: imageContent.image, textLayers: [expect.objectContaining({ text: "轻量通勤" })] }),
+      expect.objectContaining({
+        image: imageContent.image,
+        textLayers: [expect.objectContaining({ text: "轻量通勤" })],
+        editorLayers: [expect.objectContaining({ kind: "text", name: "主标题" })],
+      }),
     );
   });
 

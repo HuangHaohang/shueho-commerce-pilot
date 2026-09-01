@@ -36,6 +36,46 @@ describe("creative canvas validation", () => {
     })).toThrow();
   });
 
+  it("accepts a bounded non-destructive layer document without accepting external image sources", () => {
+    const current: CreativeCanvasImageContent = {
+      kind: "image",
+      title: "主图",
+      description: "初稿",
+      image: { artifactId: "image-1", url: "/image-1.png", filename: "image-1.png", model: "gpt-image-2" },
+      textLayers: [],
+      complianceNotes: [],
+    };
+    const baseLayer = {
+      id: "image-copy",
+      name: "底图副本",
+      x: 10,
+      y: 10,
+      width: 50,
+      height: 50,
+      rotation: 0,
+      opacity: 1,
+      visible: true,
+      locked: false,
+    };
+    const updated = parseCreativeCanvasContentUpdate(current, {
+      kind: "image",
+      title: "主图",
+      description: "图层编辑",
+      textLayers: [],
+      editorLayers: [{ ...baseLayer, kind: "image", source: "base", fit: "contain" }],
+      complianceNotes: [],
+    });
+    expect(updated.kind === "image" ? updated.editorLayers : null).toHaveLength(1);
+    expect(() => parseCreativeCanvasContentUpdate(current, {
+      kind: "image",
+      title: "主图",
+      description: "伪造外部图片",
+      textLayers: [],
+      editorLayers: [{ ...baseLayer, kind: "image", source: "https://evil.invalid/x.png", fit: "contain" }],
+      complianceNotes: [],
+    })).toThrow();
+  });
+
   it("requires table rows to match the declared columns", () => {
     expect(() => parseCreativeCanvasContentUpdate({
       kind: "table",

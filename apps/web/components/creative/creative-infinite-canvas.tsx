@@ -55,6 +55,7 @@ import type {
   GeneratedImageItem,
 } from "@/lib/agent/use-agent-thread";
 import type {
+  CreativeCanvasEditorLayer,
   CreativeCanvasImageTextLayer,
   CreativeCanvasLayout,
   CreativeCanvasNodeContent,
@@ -616,33 +617,50 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
             图片工作区
           </span>
         </button>
-        {content.textLayers.map((layer) => (
-          <ImageTextLayerEditor
-            key={layer.id}
-            layer={layer}
-            onChange={(update) => updateLayer(layer.id, update)}
-            onCommit={save}
-            onDelete={() => {
-              const updated = { ...content, textLayers: content.textLayers.filter((entry) => entry.id !== layer.id) };
-              setContent(updated);
-              void data.onSaveContent(record.id, updated);
-            }}
-          />
-        ))}
+        {content.editorLayers
+          ? content.editorLayers.filter((layer) => layer.visible).map((layer) => (
+              <CanvasEditorLayerPreview key={layer.id} layer={layer} imageUrl={content.image.url} />
+            ))
+          : content.textLayers.map((layer) => (
+              <ImageTextLayerEditor
+                key={layer.id}
+                layer={layer}
+                onChange={(update) => updateLayer(layer.id, update)}
+                onCommit={save}
+                onDelete={() => {
+                  const updated = { ...content, textLayers: content.textLayers.filter((entry) => entry.id !== layer.id) };
+                  setContent(updated);
+                  void data.onSaveContent(record.id, updated);
+                }}
+              />
+            ))}
         <Button
           type="button"
           variant="subtle"
           size="sm"
           className="nodrag nopan absolute bottom-2 left-2 h-8 rounded-[8px] px-2 text-[11px]"
-          onClick={addTextLayer}
+          onClick={() => {
+            if (content.editorLayers) {
+              navigation?.openImageStudio({
+                artifactId: content.image.artifactId,
+                url: content.image.url,
+                filename: content.image.filename,
+                model: content.image.model,
+                title: content.title,
+                nodeId: record.id,
+              });
+            } else {
+              addTextLayer();
+            }
+          }}
         >
-          <Plus className="size-3.5" />
-          添加文字
+          {content.editorLayers ? <Sparkles className="size-3.5" /> : <Plus className="size-3.5" />}
+          {content.editorLayers ? "编辑图层" : "添加文字"}
         </Button>
       </div>
       <div className="nodrag nopan flex shrink-0 items-center gap-1 border-t border-[var(--cp-border-subtle)] px-2 py-1.5">
         <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--cp-text-faint)]">
-          原生图片不可覆盖 · {content.textLayers.length} 个文字图层
+          原生图片不可覆盖 · {content.editorLayers?.length ?? content.textLayers.length} 个编辑图层
         </span>
         {data.saving ? <LoaderCircle className="size-3 animate-spin text-[var(--cp-text-faint)]" /> : <Save className="size-3 text-[var(--cp-text-faint)]" />}
       </div>
@@ -745,6 +763,53 @@ function ImageTextLayerEditor({
         />
       </div>
     </div>
+  );
+}
+
+function CanvasEditorLayerPreview({
+  layer,
+  imageUrl,
+}: {
+  layer: CreativeCanvasEditorLayer;
+  imageUrl: string;
+}) {
+  const style = {
+    left: `${layer.x}%`,
+    top: `${layer.y}%`,
+    width: `${layer.width}%`,
+    height: `${layer.height}%`,
+    transform: `rotate(${layer.rotation}deg)`,
+    opacity: layer.opacity,
+  };
+  if (layer.kind === "text") {
+    return (
+      <div
+        className="pointer-events-none absolute whitespace-pre-wrap break-words leading-tight [text-shadow:0_1px_4px_rgba(0,0,0,0.45)]"
+        style={{ ...style, color: layer.color, fontSize: `${layer.fontSize}px`, fontWeight: layer.fontWeight, textAlign: layer.align }}
+      >
+        {layer.text}
+      </div>
+    );
+  }
+  if (layer.kind === "shape") {
+    return (
+      <div
+        className={cn("pointer-events-none absolute", layer.shape === "ellipse" && "rounded-full")}
+        style={{ ...style, backgroundColor: layer.fill, border: `${layer.strokeWidth}px solid ${layer.stroke}` }}
+      />
+    );
+  }
+  if (layer.kind === "image") {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={imageUrl} alt="" className={cn("pointer-events-none absolute select-none", layer.fit === "cover" ? "object-cover" : "object-contain")} style={style} />
+    );
+  }
+  const points = layer.points.map((point) => `${point.x},${point.y}`).join(" ");
+  return (
+    <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="pointer-events-none absolute overflow-visible" style={style}>
+      <polyline points={points} fill="none" stroke={layer.stroke} strokeWidth={layer.strokeWidth / 4} strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+    </svg>
   );
 }
 
