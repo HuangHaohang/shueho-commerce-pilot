@@ -13,6 +13,7 @@ import {
   readPatchSeries,
   readUpstreamDefinition,
   renamePathWithRetry,
+  repositoryRoot,
   runtimeManifestFilename,
   sha256,
   sha256File,
@@ -210,6 +211,14 @@ test("Cargo.lock normalization is an ordered, mechanical locked-build patch", as
     .filter((line) => line.startsWith("+") && !line.startsWith("+++ ") && line !== '+version = "0.150.1"');
   assert.deepEqual(unexpectedRemovals, []);
   assert.deepEqual(unexpectedAdditions, []);
+});
+
+test("patched runtime tests receive a larger default stack without overriding operators", async () => {
+  const buildScript = await readFile(join(repositoryRoot, "scripts", "codex-runtime", "build.mjs"), "utf8");
+  assert.match(
+    buildScript,
+    /RUST_MIN_STACK: process\.env\.RUST_MIN_STACK\?\.trim\(\) \|\| "33554432"/,
+  );
 });
 
 async function createRegistry(artifacts) {

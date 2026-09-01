@@ -78,6 +78,7 @@ try {
   const cargoEnvironment = {
     ...process.env,
     CARGO_INCREMENTAL: "0",
+    RUST_MIN_STACK: process.env.RUST_MIN_STACK?.trim() || "33554432",
     ...(process.platform === "win32" ? { LIBSQLITE3_FLAGS: "SQLITE_DISABLE_INTRINSIC" } : {}),
   };
   run("cargo", ["metadata", "--locked", "--format-version", "1", "--no-deps"], {

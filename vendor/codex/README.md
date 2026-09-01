@@ -39,6 +39,8 @@ Build from the exact upstream commit with the locally installed Rust toolchain:
 npm run codex:runtime:build
 ```
 
+The focused patched-runtime tests use a 32 MiB Rust test-thread stack by default because the full `codex-core` integration harness can exceed libtest's platform default while rebuilding image-history fixtures. Set `RUST_MIN_STACK` explicitly only when a controlled build environment needs a larger value; the build never lowers an explicit operator setting.
+
 The repository build command is intentionally native-only because it executes the produced binary and its focused patched-runtime tests before writing a manifest. Cross-platform artifacts must be built and tested on a runner for that target, then registered by exact digest before installation.
 
 For Windows targets, the build normalizes every `codex-rs/state/**/*.sql` migration to CRLF before compilation. Official Windows Codex artifacts embed those CRLF bytes, and SQLx persists their SHA-384 checksums in runtime databases. This deterministic target-specific step preserves compatibility with state created by the official `@openai/codex` Windows binary; it never rewrites an existing database checksum. Linux and macOS retain the upstream LF bytes.
