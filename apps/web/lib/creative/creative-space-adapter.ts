@@ -28,7 +28,7 @@ export type CreativeChapterContent = {
   documentIds: string[];
 };
 
-export type CreativeProductEvidence = { fact: string; userValue: string; visualProof: string };
+export type CreativeProductEvidence = { fact: string; userValue: string; visualProof: string; bestUse: string[] };
 export type CreativeProductBrief = {
   oneLineExpression: string;
   keyProof: CreativeProductEvidence;
@@ -36,8 +36,36 @@ export type CreativeProductBrief = {
   routineSellingPoints: CreativeProductEvidence[];
   audienceScenes: Array<{ audience: string; scene: string; painPoint: string }>;
   expressionBoundaries: Array<{ item: string; reason: string; recommendedExpression: string }>;
+  userQuestions: Array<{ question: string; underlyingBelief: string; contentValue: string; evidenceStatus: "资料支持" | "待验证推断" }>;
+  designStory: {
+    status: "可提炼" | "资料不足";
+    storyLine: string;
+    originalIntent: string;
+    processEvidence: string[];
+    contentValue: string;
+    evidenceStatus: "资料支持" | "资料不足";
+  };
   missingInformation: string[];
   conflicts: string[];
+};
+
+export type CreativeTopicCategory = "原理" | "功能" | "使用体验" | "痛点" | "用户疑问" | "实验" | "对比" | "场景" | "反常识" | "设计逻辑" | "其他";
+export type CreativeTopic = {
+  id: string;
+  topic: string;
+  summary: string;
+  category: CreativeTopicCategory;
+  priority: "高推荐" | "普通推荐" | "探索型";
+  reason: string;
+  keyQuestion: string;
+  proofPoints: string[];
+  risks: string[];
+  source: "AI生成" | "人工创建";
+};
+export type CreativeTopicPlan = {
+  version: number; status: "进行中" | "已确认"; settings: { objective: string; platforms: string[]; quantity: number; constraints: string };
+  selectedTopicIds: string[]; topics: CreativeTopic[]; exploration?: string;
+  weeklyAdvice: { priority: string[]; tests: string[]; deferred: string[]; needs: string[] }; confirmedAt?: string;
 };
 
 export type CreativeMember = {
@@ -61,6 +89,7 @@ export type CreativeProject = {
   updatedBy: string;
   recentOutput: string | null;
   productBrief: CreativeProductBrief | null;
+  topicPlan: CreativeTopicPlan | null;
   chapters: Partial<Record<CreativeEditableChapter, CreativeChapterContent>>;
 };
 
@@ -91,9 +120,11 @@ export type CreativeSpaceSnapshot = {
 
 export interface CreativeSpaceAdapter {
   getSnapshot(): CreativeSpaceSnapshot;
+  hydrate(): CreativeSpaceSnapshot;
   createProject(input: CreateCreativeProjectInput): CreativeProject;
   updateChapter(input: { projectId: string; chapter: CreativeEditableChapter; body: string; documentIds: string[] }): CreativeProject;
   updateProductBrief(input: { projectId: string; brief: CreativeProductBrief }): CreativeProject;
+  updateTopicPlan(input: { projectId: string; plan: CreativeTopicPlan }): CreativeProject;
 }
 
 const tasks = [
@@ -138,6 +169,7 @@ const seededProjects: CreativeProject[] = [
     updatedBy: "王策",
     recentOutput: "脚本 V2",
     productBrief: null,
+    topicPlan: null,
     chapters: {
       产品确认: { body: "无吸管结构减少油液残留，清洁时可直接冲洗壶体。内容中需要用一次倒油和清洁过程，把结构差异转成用户能看到的使用价值。", documentIds: ["doc-oil-pot-manual", "doc-oil-pot-comments"] },
     },
@@ -157,6 +189,7 @@ const seededProjects: CreativeProject[] = [
     updatedBy: "陈一",
     recentOutput: "最终拍摄版脚本",
     productBrief: null,
+    topicPlan: null,
     chapters: {},
   },
   {
@@ -174,6 +207,7 @@ const seededProjects: CreativeProject[] = [
     updatedBy: "林晓",
     recentOutput: null,
     productBrief: null,
+    topicPlan: null,
     chapters: {},
   },
 ];
@@ -211,6 +245,7 @@ function copyProject(project: CreativeProject): CreativeProject {
     lead: { ...project.lead },
     members: project.members.map((member) => ({ ...member })),
     productBrief: project.productBrief ? JSON.parse(JSON.stringify(project.productBrief)) as CreativeProductBrief : null,
+    topicPlan: project.topicPlan ? JSON.parse(JSON.stringify(project.topicPlan)) as CreativeTopicPlan : null,
     chapters: Object.fromEntries(Object.entries(project.chapters).map(([chapter, content]) => [chapter, { body: content.body, documentIds: [...content.documentIds] }])) as CreativeProject["chapters"],
   };
 }
@@ -218,18 +253,35 @@ function copyProject(project: CreativeProject): CreativeProject {
 export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
   let projectsState = seededProjects.map(copyProject);
   let createdCount = 0;
+  let hasHydratedBrowserState = false;
+  const storageKey = "shueho-commerce-pilot:creative-projects";
+  const snapshot = (): CreativeSpaceSnapshot => ({
+    projects: projectsState.map(copyProject),
+    tasks: tasks.map((task) => ({ ...task })),
+    products: products.map((product) => ({ ...product })),
+    people: people.map((person) => ({ ...person })),
+    documents: documents.map((document) => ({ ...document })),
+    inspiration: inspiration.map((item) => ({ ...item })),
+  });
+  const restore = () => {
+    if (hasHydratedBrowserState || typeof window === "undefined") return;
+    hasHydratedBrowserState = true;
+    try {
+      const stored = window.localStorage.getItem(storageKey);
+      const parsed = stored ? JSON.parse(stored) : null;
+      if (Array.isArray(parsed) && parsed.every((item) => item && typeof item === "object" && typeof item.id === "string")) projectsState = parsed.map((project) => copyProject(project as CreativeProject));
+    } catch { /* Invalid local preview data falls back to the seeded project state. */ }
+  };
+  const persist = () => {
+    if (typeof window === "undefined") return;
+    hasHydratedBrowserState = true;
+    try { window.localStorage.setItem(storageKey, JSON.stringify(projectsState)); } catch { /* Local preview remains usable when storage is unavailable. */ }
+  };
+  const hydrate = () => { restore(); return snapshot(); };
 
   return {
-    getSnapshot() {
-      return {
-        projects: projectsState.map(copyProject),
-        tasks: tasks.map((task) => ({ ...task })),
-        products: products.map((product) => ({ ...product })),
-        people: people.map((person) => ({ ...person })),
-        documents: documents.map((document) => ({ ...document })),
-        inspiration: inspiration.map((item) => ({ ...item })),
-      };
-    },
+    getSnapshot() { restore(); return snapshot(); },
+    hydrate,
     createProject(input) {
       const lead = people.find((person) => person.id === input.leadId) ?? people[0];
       const memberIds = new Set([lead.id, ...input.memberIds]);
@@ -249,9 +301,11 @@ export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
         updatedBy: lead.name,
         recentOutput: null,
         productBrief: null,
+        topicPlan: null,
         chapters: {},
       };
       projectsState = [project, ...projectsState];
+      persist();
       return copyProject(project);
     },
     updateChapter(input) {
@@ -270,6 +324,7 @@ export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
         updatedBy: "当前用户",
       };
       projectsState = projectsState.map((item, index) => index === projectIndex ? nextProject : item);
+      persist();
       return copyProject(nextProject);
     },
     updateProductBrief(input) {
@@ -283,11 +338,21 @@ export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
         updatedBy: "当前用户",
       };
       projectsState = projectsState.map((item, index) => index === projectIndex ? nextProject : item);
+      persist();
+      return copyProject(nextProject);
+    },
+    updateTopicPlan(input) {
+      const projectIndex = projectsState.findIndex((project) => project.id === input.projectId);
+      if (projectIndex < 0) throw new Error("未找到要更新的内容项目。");
+      const project = projectsState[projectIndex];
+      const nextProject: CreativeProject = { ...project, topicPlan: JSON.parse(JSON.stringify(input.plan)) as CreativeTopicPlan, currentChapter: "选题", updatedAt: "刚刚", updatedBy: "当前用户" };
+      projectsState = projectsState.map((item, index) => index === projectIndex ? nextProject : item);
+      persist();
       return copyProject(nextProject);
     },
   };
 }
 
-// Phase-one in-memory boundary. Replace this adapter with an API-backed implementation
-// without changing creative-space UI component contracts.
+// Local persistence keeps the preview stable across a browser refresh. Replace this adapter
+// with an API-backed implementation without changing creative-space UI component contracts.
 export const creativeSpaceAdapter = createMockCreativeSpaceAdapter();

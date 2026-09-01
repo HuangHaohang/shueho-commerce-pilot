@@ -1,41 +1,58 @@
 "use client";
 
-import { CheckCircle2, ChevronDown, FileText, Link2, MessageSquarePlus, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { CheckCircle2, ChevronDown, FileText, LoaderCircle, Sparkles } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import type { CreativeDocument, CreativeProject } from "@/lib/creative/creative-space-adapter";
-import type { RequirementQuestion, RequirementQuestionStatus, RequirementWorkspaceState } from "@/lib/creative/requirement-brief-adapter";
+import type { CreativeProject } from "@/lib/creative/creative-space-adapter";
+import type { RequirementAnalysis, RequirementQuestion, RequirementQuestionStatus, RequirementWorkspaceState } from "@/lib/creative/requirement-brief-adapter";
+import type { ConversationMessage } from "@/lib/agent/use-agent-thread";
 import { cn } from "@/lib/utils";
 
 type RequirementBriefWorkspaceProps = {
   project: CreativeProject;
-  documents: CreativeDocument[];
   state: RequirementWorkspaceState;
-  onSupplement: (text: string) => void;
   onQuestion: (questionId: string, answer: string, status: Extract<RequirementQuestionStatus, "已补充" | "暂不确认" | "已忽略">) => void;
-  onDocuments: (documentIds: string[]) => void;
   onConfirm: () => void;
+  onRunAnalysis: (prompt: string) => Promise<boolean>;
+  onApplyAnalysis: (analysis: RequirementAnalysis, questions: Array<{ title: string; reason: string }>) => void;
+  analysisStatus: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
+  analysisError: string | null;
+  analysisMessages: ConversationMessage[];
 };
 
-export function RequirementBriefWorkspace({ project, documents, state, onSupplement, onQuestion, onDocuments, onConfirm }: RequirementBriefWorkspaceProps) {
-  const [supplement, setSupplement] = useState("");
+export function RequirementBriefWorkspace({ project, state, onQuestion, onConfirm, onRunAnalysis, onApplyAnalysis, analysisStatus, analysisError, analysisMessages }: RequirementBriefWorkspaceProps) {
   const [expanded, setExpanded] = useState(false);
-  const [linking, setLinking] = useState(false);
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
-  const linkedDocuments = documents.filter((document) => state.documentIds.includes(document.id));
+  const latestAnalysis = useMemo(() => readLatestAnalysis(analysisMessages), [analysisMessages]);
+  const [awaitingAnalysis, setAwaitingAnalysis] = useState(false);
+  const baselineRef = useRef<string | null>(null);
+  const running = analysisStatus === "connecting" || analysisStatus === "running";
 
-  function submitSupplement() { if (!supplement.trim()) return; onSupplement(supplement); setSupplement(""); }
+  useEffect(() => {
+    if (!awaitingAnalysis || !latestAnalysis || latestAnalysis.messageId === baselineRef.current) return;
+    onApplyAnalysis(latestAnalysis.analysis, latestAnalysis.questions);
+    setAwaitingAnalysis(false);
+  }, [awaitingAnalysis, latestAnalysis, onApplyAnalysis]);
+
   function submitAnswer(status: Extract<RequirementQuestionStatus, "已补充" | "暂不确认" | "已忽略">) { if (!questionId) return; onQuestion(questionId, answer, status); setQuestionId(null); setAnswer(""); }
-  function toggleDocument(id: string, checked: boolean) { onDocuments(checked ? [...state.documentIds, id] : state.documentIds.filter((value) => value !== id)); }
+  async function runUnderstanding() {
+    if (!project.productBrief) return;
+    const prompt = `请理解以下短视频需求。只使用需求方任务信息和已确认产品创作简报。\n\n需求方任务信息：\n- 任务：${project.linkedTasks.map((task) => task.name).join("、") || project.name}\n- 原始需求：${state.source.rawContent}\n- 平台：${state.source.platforms.join("、")}\n- 数量：${state.source.quantity ?? "未说明"}\n- 必须出现：${state.source.mustInclude.join("、") || "未说明"}\n\n已确认产品创作简报：\n${JSON.stringify(project.productBrief)}\n\n不要引用其他资料，不要生成选题或脚本。`;
+    baselineRef.current = latestAnalysis?.messageId ?? null;
+    if (await onRunAnalysis(prompt)) setAwaitingAnalysis(true);
+  }
 
   return (
     <section className="mx-auto max-w-[1180px] pb-10">
       <header className="border-b border-[var(--cp-border-subtle)] pb-8">
         <p className="m-0 text-xs text-[var(--cp-text-faint)]">{project.platforms.join(" · ")} · {project.products.map((product) => product.name).join("、") || "未关联产品"} · 来源：{state.source.sourceType} · 负责人：{project.lead.name}</p>
-        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="m-0 flex items-center gap-2 text-xs text-[var(--cp-text-muted)]"><span className={cn("size-1.5 rounded-full", state.status === "已确认" ? "bg-[var(--cp-success)]" : "bg-[#d86643]")} />{state.status}</p><h2 className="mb-0 mt-3 text-[30px] font-semibold leading-tight tracking-[-0.03em] text-[#315c49] md:text-[38px]">先把这次要做的事情想清楚</h2><p className="mb-0 mt-3 text-sm leading-relaxed text-[var(--cp-text-muted)]">从原始需求里整理出真正影响创作的目标、重点和限制。</p></div>{state.brief ? <span className="text-xs text-[var(--cp-text-faint)]">需求理解 V{state.brief.version} · {state.brief.confirmedAt} 确认</span> : null}</div>
+        <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><p className="m-0 flex items-center gap-2 text-xs text-[var(--cp-text-muted)]"><span className={cn("size-1.5 rounded-full", state.status === "已确认" ? "bg-[var(--cp-success)]" : "bg-[#d86643]")} />{state.status}</p><h2 className="mb-0 mt-3 text-[30px] font-semibold leading-tight tracking-[-0.03em] text-[#315c49] md:text-[38px]">先把这次要做的事情想清楚</h2><p className="mb-0 mt-3 text-sm leading-relaxed text-[var(--cp-text-muted)]">结合需求方任务与已确认产品简报，整理真正影响创作的目标、重点和限制。</p></div><div className="flex items-center gap-3">{state.brief ? <span className="text-xs text-[var(--cp-text-faint)]">需求理解 V{state.brief.version} · {state.brief.confirmedAt} 确认</span> : null}<Button type="button" disabled={running || !project.productBrief} onClick={() => void runUnderstanding()}>{running ? <LoaderCircle className="size-4 animate-spin" /> : <Sparkles className="size-4" />}{running ? "正在理解" : "AI 理解需求"}</Button></div></div>
       </header>
+
+      {!project.productBrief ? <p className="mb-0 mt-5 border-l-2 border-[var(--cp-border)] pl-4 text-sm text-[var(--cp-text-faint)]">请先在「产品确认」生成并确认产品创作简报，需求理解只使用任务信息与该简报。</p> : null}
+      {analysisError ? <p className="mb-0 mt-5 text-sm text-[var(--cp-danger)]">需求理解未完成：{analysisError}</p> : null}
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[minmax(280px,0.78fr)_minmax(0,1.4fr)]">
         <ReceivedRequirement project={project} state={state} expanded={expanded} onToggle={() => setExpanded((value) => !value)} />
@@ -47,21 +64,8 @@ export function RequirementBriefWorkspace({ project, documents, state, onSupplem
         <div className="mt-5 divide-y divide-[var(--cp-border-subtle)] border-y border-[var(--cp-border-subtle)]">{state.questions.map((question) => <QuestionRow key={question.id} question={question} open={questionId === question.id} answer={answer} onOpen={() => { setQuestionId(question.id); setAnswer(question.answer ?? ""); }} onChange={setAnswer} onSubmit={submitAnswer} />)}</div>
       </section>
 
-      <section className="mt-10 border-t border-[var(--cp-border-subtle)] pt-8" aria-labelledby="requirement-supplement-title">
-        <div className="flex items-center gap-2"><MessageSquarePlus className="size-4 text-[#315c49]" /><h3 id="requirement-supplement-title" className="m-0 text-lg font-semibold">我还想补充</h3></div><p className="mb-0 mt-2 text-sm text-[var(--cp-text-muted)]">直接写下运营要求、背景或取舍，AI 草稿会据此重新标记为待确认。</p>
-        <textarea value={supplement} onChange={(event) => setSupplement(event.target.value)} className="mt-4 min-h-28 w-full resize-y rounded-[8px] border border-[var(--cp-border)] bg-[#fffcf6] px-4 py-3 text-sm leading-7 outline-none focus:border-[#9c7651] focus:ring-2 focus:ring-[var(--cp-focus)]" placeholder="例如：这批视频最重要还是为了直播引流，不能讲得太科普。" aria-label="补充需求信息" />
-        <div className="mt-3 flex justify-end"><Button type="button" variant="outline" onClick={submitSupplement} disabled={!supplement.trim()}><Sparkles className="size-4" />补充并重新整理</Button></div>
-        {state.supplements.length ? <div className="mt-4 border-l-2 border-[#d8c08b] pl-4"><p className="m-0 text-xs font-medium text-[var(--cp-text-muted)]">已补充</p>{state.supplements.map((item, index) => <p key={`${item}-${index}`} className="mb-0 mt-2 text-sm text-[var(--cp-text-soft)]">{item}</p>)}</div> : null}
-      </section>
-
-      <section className="mt-10 border-t border-[var(--cp-border-subtle)] pt-8" aria-labelledby="requirement-documents-title">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><p className="m-0 text-xs text-[var(--cp-text-faint)]">可引用资料</p><h3 id="requirement-documents-title" className="mb-0 mt-2 text-lg font-semibold">关联已有系统文档</h3></div><Button type="button" variant="outline" onClick={() => setLinking((value) => !value)}><Link2 className="size-4" />{linking ? "收起文档" : "关联文档"}</Button></div>
-        {linking ? <div className="mt-4 divide-y divide-[var(--cp-border-subtle)] border-y border-[var(--cp-border-subtle)]">{documents.map((document) => <label key={document.id} className="flex cursor-pointer gap-3 py-4"><input type="checkbox" checked={state.documentIds.includes(document.id)} onChange={(event) => toggleDocument(document.id, event.target.checked)} className="mt-1 size-4 accent-[#315c49]" /><span><span className="text-sm font-medium">{document.title}</span><span className="ml-2 text-[11px] text-[var(--cp-text-faint)]">{document.source} · {document.updatedAt}</span><span className="mt-1 block text-xs text-[var(--cp-text-muted)]">{document.summary}</span></span></label>)}</div> : null}
-        {linkedDocuments.length ? <div className="mt-4 flex flex-wrap gap-2">{linkedDocuments.map((document) => <span key={document.id} className="inline-flex items-center gap-1.5 rounded-[var(--cp-radius-item)] bg-[#f4efe4] px-3 py-2 text-xs text-[#315c49]"><FileText className="size-3.5" />{document.title}</span>)}</div> : <p className="mb-0 mt-4 text-sm text-[var(--cp-text-faint)]">尚未关联额外资料；来源任务附件仍保留在原始需求中。</p>}
-      </section>
-
       <section className="mt-10 border-t border-[var(--cp-border-subtle)] pt-8" aria-labelledby="requirement-brief-title">
-        {state.brief ? <ConfirmedBrief brief={state.brief} documents={documents} historyCount={state.briefHistory.length} /> : <div className="flex flex-col gap-5 bg-[#f4efe4] px-5 py-6 sm:flex-row sm:items-center sm:justify-between"><div><p className="m-0 text-xs text-[#315c49]">正式项目上下文</p><h3 id="requirement-brief-title" className="mb-0 mt-2 text-xl font-semibold text-[#222a25]">确认这版需求理解</h3><p className="mb-0 mt-2 max-w-[620px] text-sm leading-relaxed text-[var(--cp-text-muted)]">确认后会生成 Requirement Brief，后续阶段默认读取该版本；以后仍可修改并形成新版本。</p></div><Button type="button" className="shrink-0 bg-[#315c49] hover:bg-[#2f5746]" onClick={onConfirm}><CheckCircle2 className="size-4" />确认这版需求理解</Button></div>}
+        {state.brief && state.status === "已确认" ? <ConfirmedBrief brief={state.brief} historyCount={state.briefHistory.length} /> : <div className="flex flex-col gap-5 bg-[#f4efe4] px-5 py-6 sm:flex-row sm:items-center sm:justify-between"><div><p className="m-0 text-xs text-[#315c49]">正式项目上下文</p><h3 id="requirement-brief-title" className="mb-0 mt-2 text-xl font-semibold text-[#222a25]">{state.brief ? "确认更新后的需求理解" : "确认这版需求理解"}</h3><p className="mb-0 mt-2 max-w-[620px] text-sm leading-relaxed text-[var(--cp-text-muted)]">确认后会生成 Requirement Brief，后续阶段默认读取该版本；以后仍可修改并形成新版本。</p></div><Button type="button" className="shrink-0 bg-[#315c49] hover:bg-[#2f5746]" onClick={onConfirm}><CheckCircle2 className="size-4" />{state.brief ? "确认更新版本" : "确认这版需求理解"}</Button></div>}
       </section>
     </section>
   );
@@ -80,6 +84,23 @@ function Insight({ title, note, children }: { title: string; note?: string; chil
 
 function QuestionRow({ question, open, answer, onOpen, onChange, onSubmit }: { question: RequirementQuestion; open: boolean; answer: string; onOpen: () => void; onChange: (value: string) => void; onSubmit: (status: Extract<RequirementQuestionStatus, "已补充" | "暂不确认" | "已忽略">) => void }) { const resolved = question.status !== "待确认"; return <div className="py-5"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="m-0 text-sm font-semibold">{question.title}</p><p className="mb-0 mt-2 max-w-[760px] text-sm leading-6 text-[var(--cp-text-muted)]">{question.reason}</p>{question.answer ? <p className="mb-0 mt-2 text-xs text-[#315c49]">已记录：{question.answer}</p> : null}</div><button type="button" className="w-fit text-xs font-medium text-[#315c49] disabled:text-[var(--cp-text-faint)]" disabled={resolved} onClick={onOpen}>{resolved ? question.status : "处理此项"}</button></div>{open ? <div className="mt-4 bg-[var(--cp-bg-subtle)] p-4"><textarea value={answer} onChange={(event) => onChange(event.target.value)} className="min-h-20 w-full resize-y border-0 bg-transparent text-sm leading-6 outline-none placeholder:text-[var(--cp-text-faint)]" placeholder="补充你已经确认的信息（可选）" /><div className="mt-3 flex flex-wrap justify-end gap-2"><Button type="button" variant="ghost" size="sm" onClick={() => onSubmit("已忽略")}>忽略本项</Button><Button type="button" variant="outline" size="sm" onClick={() => onSubmit("暂不确认")}>暂不确认</Button><Button type="button" size="sm" onClick={() => onSubmit("已补充")}>保存补充</Button></div></div> : null}</div>; }
 
-function ConfirmedBrief({ brief, documents, historyCount }: { brief: NonNullable<RequirementWorkspaceState["brief"]>; documents: CreativeDocument[]; historyCount: number }) { const linked = documents.filter((document) => brief.documentIds.includes(document.id)); return <div className="border border-[#d8c08b] bg-[#fffcf6] px-5 py-6"><p className="m-0 flex items-center gap-2 text-xs text-[#315c49]"><CheckCircle2 className="size-3.5" />已确认创作简报 · 需求理解 V{brief.version}</p><h3 className="mb-0 mt-2 text-xl font-semibold">后续创作将默认读取这一版</h3><div className="mt-6 grid gap-x-10 gap-y-6 md:grid-cols-2"><BriefLine title="内容目标" value={brief.analysis.purpose} /><BriefLine title="核心认知" value={brief.analysis.keyMessage.join("；")} /><BriefLine title="目标用户" value={brief.analysis.audience.text} /><BriefLine title="核心问题" value={brief.analysis.userQuestions.join("；")} /><BriefLine title="必讲内容" value={brief.analysis.mustInclude.map((item) => item.text).join("；")} /><BriefLine title="限制与风险" value={brief.analysis.constraints.map((item) => item.text).join("；")} /><BriefLine title="可引用资料" value={linked.map((item) => item.title).join("；") || "来源任务附件"} /></div><p className="mb-0 mt-6 text-xs text-[var(--cp-text-faint)]">{brief.confirmedBy} 于 {brief.confirmedAt} 确认 · 基于 {brief.sourceVersion} · 已保留 {historyCount} 个版本</p></div>; }
+function ConfirmedBrief({ brief, historyCount }: { brief: NonNullable<RequirementWorkspaceState["brief"]>; historyCount: number }) { return <div className="border border-[#d8c08b] bg-[#fffcf6] px-5 py-6"><p className="m-0 flex items-center gap-2 text-xs text-[#315c49]"><CheckCircle2 className="size-3.5" />已确认创作简报 · 需求理解 V{brief.version}</p><h3 className="mb-0 mt-2 text-xl font-semibold">后续创作将默认读取这一版</h3><div className="mt-6 grid gap-x-10 gap-y-6 md:grid-cols-2"><BriefLine title="内容目标" value={brief.analysis.purpose} /><BriefLine title="核心认知" value={brief.analysis.keyMessage.join("；")} /><BriefLine title="目标用户" value={brief.analysis.audience.text} /><BriefLine title="核心问题" value={brief.analysis.userQuestions.join("；")} /><BriefLine title="必讲内容" value={brief.analysis.mustInclude.map((item) => item.text).join("；")} /><BriefLine title="限制与风险" value={brief.analysis.constraints.map((item) => item.text).join("；")} /></div><p className="mb-0 mt-6 text-xs text-[var(--cp-text-faint)]">{brief.confirmedBy} 于 {brief.confirmedAt} 确认 · 基于 {brief.sourceVersion} · 已保留 {historyCount} 个版本</p></div>; }
 
 function BriefLine({ title, value }: { title: string; value: string }) { return <div><p className="m-0 text-xs text-[var(--cp-text-faint)]">{title}</p><p className="mb-0 mt-2 text-sm leading-6 text-[var(--cp-text-soft)]">{value}</p></div>; }
+
+function readLatestAnalysis(messages: ConversationMessage[]): { messageId: string; analysis: RequirementAnalysis; questions: Array<{ title: string; reason: string }> } | null {
+  for (const message of [...messages].reverse()) {
+    if (message.role !== "assistant" || message.status !== "completed") continue;
+    try {
+      const value = JSON.parse(message.content) as Record<string, unknown>;
+      if (typeof value.purpose !== "string" || !Array.isArray(value.keyMessage) || !isRecord(value.audience)) continue;
+      const sourceItems = (input: unknown): RequirementAnalysis["mustInclude"] => Array.isArray(input) ? input.filter((item): item is { text: string; source: "原始需求" | "产品简报" | "AI推断" } => isRecord(item) && typeof item.text === "string" && (item.source === "原始需求" || item.source === "产品简报" || item.source === "AI推断")) : [];
+      const questions = Array.isArray(value.clarifyingQuestions) ? value.clarifyingQuestions.filter((item): item is { title: string; reason: string } => isRecord(item) && typeof item.title === "string" && typeof item.reason === "string") : [];
+      return { messageId: message.id, analysis: { purpose: value.purpose, keyMessage: readStrings(value.keyMessage), audience: { text: typeof value.audience.text === "string" ? value.audience.text : "目标人群信息不足，需确认。", inferred: value.audience.inferred !== false }, userQuestions: readStrings(value.userQuestions), mustInclude: sourceItems(value.mustInclude), constraints: sourceItems(value.constraints) }, questions };
+    } catch { /* Ignore messages produced by other workflows. */ }
+  }
+  return null;
+}
+
+function readStrings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
+function isRecord(value: unknown): value is Record<string, unknown> { return Boolean(value && typeof value === "object" && !Array.isArray(value)); }

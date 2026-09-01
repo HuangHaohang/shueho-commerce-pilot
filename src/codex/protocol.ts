@@ -1,7 +1,8 @@
-export type JsonPrimitive = string | number | boolean | null;
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
+import type { RequestId } from "./generated/RequestId.js";
+import type { ServerRequest } from "./generated/ServerRequest.js";
+import type { CommerceInsightMethod, CreativeMethod } from "./managed-workflows.js";
 
-export type JsonRpcId = string | number;
+export type JsonRpcId = RequestId;
 
 export type JsonRpcError = {
   code: number;
@@ -15,14 +16,7 @@ export type JsonRpcResponse = {
   error?: JsonRpcError;
 };
 
-export type JsonRpcNotification = {
-  method: string;
-  params?: unknown;
-};
-
-export type JsonRpcRequest = JsonRpcNotification & {
-  id: JsonRpcId;
-};
+export type JsonRpcRequest = ServerRequest;
 
 export type AppServerEvent =
   | {
@@ -73,7 +67,19 @@ export type TurnStartInput = {
   message?: string;
   model?: string;
   effort?: string;
-  workflow?: "commerce-copywriting" | "product-insight";
+  workflow?:
+    | "commerce-copywriting"
+    | "commerce-creative-project"
+    | "commerce-market-research"
+    | "commerce-product-insight"
+    | "commerce-product-onboarding";
+  creativeMethod?: CreativeMethod;
+  insightMethod?: CommerceInsightMethod;
   skillName?: string;
   attachmentIds?: string[];
+  externalDataApprovalMode?: "always_ask" | "task" | "policy";
+  productIds?: string[];
+  productContextMode?: "auto" | "selected" | "none";
+  /** Server-generated product-context snapshot id; never accepted from a browser request body. */
+  productContextSetId?: string;
 };

@@ -403,6 +403,27 @@ export function CommerceWorkbenchShell({
         }
       : null,
   });
+  const [productInsightProjectId, setProductInsightProjectId] = useState<string | null>(null);
+  const requirementUnderstandingThread = useAgentThread({
+    model: selectedModel,
+    effort: supportsReasoningControl(selectedModel) ? reasoningEffort : undefined,
+    runtimeHealth: healthQuery.data
+      ? {
+          available:
+            healthQuery.data.ok === true &&
+            healthQuery.data.codex?.running === true &&
+            healthQuery.data.codex?.initialized === true,
+          observedAt: healthQuery.dataUpdatedAt,
+          instanceId: healthQuery.data.instanceId,
+          maxTurnDurationMs: healthQuery.data.runtimePolicy?.maxTurnDurationMs ?? 600_000,
+        }
+      : null,
+  });
+  const topicPlanningThread = useAgentThread({
+    model: selectedModel,
+    effort: supportsReasoningControl(selectedModel) ? reasoningEffort : undefined,
+    runtimeHealth: healthQuery.data ? { available: healthQuery.data.ok === true && healthQuery.data.codex?.running === true && healthQuery.data.codex?.initialized === true, observedAt: healthQuery.dataUpdatedAt, instanceId: healthQuery.data.instanceId, maxTurnDurationMs: healthQuery.data.runtimePolicy?.maxTurnDurationMs ?? 600_000 } : null,
+  });
   const hasActiveThread = Boolean(agentThread.threadId || agentThread.messages.length);
   const navigationLocked = agentThread.status === "connecting" && !agentThread.threadId;
   const deletingThreadIds = useMemo(
@@ -658,7 +679,7 @@ export function CommerceWorkbenchShell({
     setActiveView("creative");
   }
 
-  async function runProductInsight(prompt: string, attachments: PendingAttachmentUpload[]) {
+  async function runProductInsight(projectId: string, prompt: string, attachments: PendingAttachmentUpload[]) {
     if (!isAuthenticated) {
       openAuthDialog("login");
       return false;
@@ -666,7 +687,27 @@ export function CommerceWorkbenchShell({
     if (productInsightThread.status === "connecting" || productInsightThread.status === "running" || productInsightThread.compacting) {
       return false;
     }
-    return productInsightThread.submit(prompt, { workflow: "product-insight", attachments });
+    setProductInsightProjectId(projectId);
+    const submitted = await productInsightThread.submit(prompt, { workflow: "product-insight", attachments });
+    if (!submitted) setProductInsightProjectId(null);
+    return submitted;
+  }
+
+  async function runRequirementUnderstanding(prompt: string) {
+    if (!isAuthenticated) {
+      openAuthDialog("login");
+      return false;
+    }
+    if (requirementUnderstandingThread.status === "connecting" || requirementUnderstandingThread.status === "running" || requirementUnderstandingThread.compacting) {
+      return false;
+    }
+    return requirementUnderstandingThread.submit(prompt, { workflow: "requirement-understanding" });
+  }
+
+  async function runTopicPlanning(prompt: string) {
+    if (!isAuthenticated) { openAuthDialog("login"); return false; }
+    if (topicPlanningThread.status === "connecting" || topicPlanningThread.status === "running" || topicPlanningThread.compacting) return false;
+    return topicPlanningThread.submit(prompt, { workflow: "topic-planning" });
   }
 
   async function executeCopywritingRecipe(goal: string) {
@@ -835,7 +876,11 @@ export function CommerceWorkbenchShell({
           <CreativeSpaceWorkspace
             onOpenCopywriting={openCopywriting}
             onRunProductInsight={runProductInsight}
-            productInsight={{ status: productInsightThread.status, error: productInsightThread.error, messages: productInsightThread.messages }}
+            productInsight={{ status: productInsightThread.status, error: productInsightThread.error, messages: productInsightThread.messages, projectId: productInsightProjectId }}
+            onRunRequirementUnderstanding={runRequirementUnderstanding}
+            requirementUnderstanding={{ status: requirementUnderstandingThread.status, error: requirementUnderstandingThread.error, messages: requirementUnderstandingThread.messages }}
+            onRunTopicPlanning={runTopicPlanning}
+            topicPlanning={{ status: topicPlanningThread.status, error: topicPlanningThread.error, messages: topicPlanningThread.messages }}
           />
         ) : activeView === "copywriting" && !agentThread.threadId ? (
           <CopywritingWorkspace

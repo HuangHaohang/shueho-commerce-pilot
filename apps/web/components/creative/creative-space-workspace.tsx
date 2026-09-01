@@ -24,8 +24,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { MyCreativeDashboardPage } from "@/components/creative/my-creative-dashboard";
-import { ProductConfirmationWorkspace } from "@/components/creative/product-confirmation-workspace";
+import { ProductConfirmationWorkspace, readLatestProductBrief } from "@/components/creative/product-confirmation-workspace";
 import { RequirementBriefWorkspace } from "@/components/creative/requirement-brief-workspace";
+import { TopicPlanningWorkspace } from "@/components/creative/topic-planning-workspace";
 import type { ConversationMessage, PendingAttachmentUpload } from "@/lib/agent/use-agent-thread";
 import {
   creativeProjectChapters,
@@ -57,13 +58,34 @@ const sectionItems: Array<{ id: CreativeSection; label: string }> = [
   { id: "toolbox", label: "AI 工具箱" },
 ];
 
-export function CreativeSpaceWorkspace({ onOpenCopywriting, onRunProductInsight, productInsight }: {
+export function CreativeSpaceWorkspace({ onOpenCopywriting, onRunProductInsight, productInsight, onRunRequirementUnderstanding, requirementUnderstanding, onRunTopicPlanning, topicPlanning }: {
   onOpenCopywriting: () => void;
-  onRunProductInsight: (prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>;
-  productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] };
+  onRunProductInsight: (projectId: string, prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>;
+  productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[]; projectId: string | null };
+  onRunRequirementUnderstanding: (prompt: string) => Promise<boolean>;
+  requirementUnderstanding: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] };
+  onRunTopicPlanning: (prompt: string) => Promise<boolean>;
+  topicPlanning: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] };
 }) {
   const [snapshot, setSnapshot] = useState<CreativeSpaceSnapshot>(() => creativeSpaceAdapter.getSnapshot());
   const [route, setRoute] = useState<CreativeRoute>({ kind: "section", section: "my-work" });
+  const appliedProductBriefRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setSnapshot(creativeSpaceAdapter.hydrate());
+  }, []);
+
+  useEffect(() => {
+    if (!productInsight.projectId) return;
+    const generated = readLatestProductBrief(productInsight.messages);
+    const applicationId = generated ? `${productInsight.projectId}:${generated.messageId}` : null;
+    if (!generated || productInsight.status !== "completed" || applicationId === appliedProductBriefRef.current) return;
+    try {
+      creativeSpaceAdapter.updateProductBrief({ projectId: productInsight.projectId, brief: generated.brief });
+      appliedProductBriefRef.current = applicationId;
+      setSnapshot(creativeSpaceAdapter.getSnapshot());
+    } catch { /* The project may have been deleted while the model was running. */ }
+  }, [productInsight.messages, productInsight.projectId, productInsight.status]);
 
   const activeSection: CreativeSection =
     route.kind === "section" ? route.section : route.kind === "project" || route.kind === "create-project" ? "projects" : "my-work";
@@ -105,6 +127,11 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting, onRunProductInsight,
 
   function updateProductBrief(input: { projectId: string; brief: import("@/lib/creative/creative-space-adapter").CreativeProductBrief }) {
     creativeSpaceAdapter.updateProductBrief(input);
+    setSnapshot(creativeSpaceAdapter.getSnapshot());
+  }
+
+  function updateTopicPlan(input: { projectId: string; plan: import("@/lib/creative/creative-space-adapter").CreativeTopicPlan }) {
+    creativeSpaceAdapter.updateTopicPlan(input);
     setSnapshot(creativeSpaceAdapter.getSnapshot());
   }
 
@@ -173,8 +200,13 @@ export function CreativeSpaceWorkspace({ onOpenCopywriting, onRunProductInsight,
             onBack={() => openSection(route.returnSection)}
             onSaveChapter={updateChapter}
             onSaveProductBrief={updateProductBrief}
+            onSaveTopicPlan={updateTopicPlan}
             onRunProductInsight={onRunProductInsight}
             productInsight={productInsight}
+            onRunRequirementUnderstanding={onRunRequirementUnderstanding}
+            requirementUnderstanding={requirementUnderstanding}
+            onRunTopicPlanning={onRunTopicPlanning}
+            topicPlanning={topicPlanning}
           />
         ) : null}
         {route.kind === "section" && route.section === "inspiration" ? (
@@ -369,7 +401,7 @@ function ProjectCreateForm({ snapshot, initialTaskId, onCancel, onCreate }: { sn
   );
 }
 
-function ContentProjectWorkspace({ project, documents, initialChapter = "概览", backLabel, onBack, onSaveChapter, onSaveProductBrief, onRunProductInsight, productInsight }: { project: CreativeProject; documents: CreativeDocument[]; initialChapter?: CreativeProjectChapter; backLabel: string; onBack: () => void; onSaveChapter: (input: { projectId: string; chapter: Exclude<CreativeProjectChapter, "概览">; body: string; documentIds: string[] }) => void; onSaveProductBrief: (input: { projectId: string; brief: import("@/lib/creative/creative-space-adapter").CreativeProductBrief }) => void; onRunProductInsight: (prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>; productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] } }) {
+function ContentProjectWorkspace({ project, documents, initialChapter = "概览", backLabel, onBack, onSaveChapter, onSaveProductBrief, onSaveTopicPlan, onRunProductInsight, productInsight, onRunRequirementUnderstanding, requirementUnderstanding, onRunTopicPlanning, topicPlanning }: { project: CreativeProject; documents: CreativeDocument[]; initialChapter?: CreativeProjectChapter; backLabel: string; onBack: () => void; onSaveChapter: (input: { projectId: string; chapter: Exclude<CreativeProjectChapter, "概览">; body: string; documentIds: string[] }) => void; onSaveProductBrief: (input: { projectId: string; brief: import("@/lib/creative/creative-space-adapter").CreativeProductBrief }) => void; onSaveTopicPlan: (input: { projectId: string; plan: import("@/lib/creative/creative-space-adapter").CreativeTopicPlan }) => void; onRunProductInsight: (projectId: string, prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>; productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[]; projectId: string | null }; onRunRequirementUnderstanding: (prompt: string) => Promise<boolean>; requirementUnderstanding: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] }; onRunTopicPlanning: (prompt: string) => Promise<boolean>; topicPlanning: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] } }) {
   const [chapter, setChapter] = useState<CreativeProjectChapter>(initialChapter);
   const [, setRequirementRevision] = useState(0);
   const requirement = requirementBriefAdapter.get(project);
@@ -412,16 +444,16 @@ function ContentProjectWorkspace({ project, documents, initialChapter = "概览"
       </nav>
 
       <div className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
-        {chapter === "概览" ? <ProjectOverview project={project} /> : chapter === "产品确认" ? <ProductConfirmationWorkspace project={project} documents={documents} saved={project.chapters["产品确认"] ?? { body: "", documentIds: [] }} onSave={onSaveChapter} onSaveBrief={onSaveProductBrief} onRunAnalysis={onRunProductInsight} analysisStatus={productInsight.status} analysisError={productInsight.error} analysisMessages={productInsight.messages} /> : <><ProductBriefContext brief={project.productBrief} />{chapter === "需求" ? <RequirementBriefWorkspace project={project} documents={documents} state={requirement} onSupplement={(text) => { requirementBriefAdapter.addSupplement({ project, text }); refreshRequirement(); }} onQuestion={(questionId, answer, status) => { requirementBriefAdapter.answerQuestion({ project, questionId, answer, status }); refreshRequirement(); }} onDocuments={(documentIds) => { requirementBriefAdapter.updateDocuments({ project, documentIds, documents }); refreshRequirement(); }} onConfirm={() => { requirementBriefAdapter.confirm(project); refreshRequirement(); }} /> : <ChapterWorkspace key={`${project.id}-${chapter}`} chapter={chapter} project={project} documents={documents} onSave={onSaveChapter} />}</>}
+        {chapter === "概览" ? <ProjectOverview project={project} /> : chapter === "产品确认" ? <ProductConfirmationWorkspace project={project} documents={documents} saved={project.chapters["产品确认"] ?? { body: "", documentIds: [] }} onSave={onSaveChapter} onSaveBrief={onSaveProductBrief} onRunAnalysis={onRunProductInsight} analysisStatus={productInsight.status} analysisError={productInsight.error} analysisMessages={productInsight.messages} /> : <><ProductBriefContext brief={project.productBrief} onOpenProduct={() => setChapter("产品确认")} />{chapter === "需求" ? <RequirementBriefWorkspace project={project} state={requirement} onQuestion={(questionId, answer, status) => { requirementBriefAdapter.answerQuestion({ project, questionId, answer, status }); refreshRequirement(); }} onConfirm={() => { requirementBriefAdapter.confirm(project); refreshRequirement(); }} onRunAnalysis={onRunRequirementUnderstanding} onApplyAnalysis={(analysis, questions) => { requirementBriefAdapter.applyAnalysis({ project, analysis, questions }); refreshRequirement(); }} analysisStatus={requirementUnderstanding.status} analysisError={requirementUnderstanding.error} analysisMessages={requirementUnderstanding.messages} /> : chapter === "选题" ? <TopicPlanningWorkspace project={project} onSave={(plan) => onSaveTopicPlan({ projectId: project.id, plan })} onRun={onRunTopicPlanning} ai={topicPlanning} onContinueToExpression={() => setChapter("表现形式")} /> : <ChapterWorkspace key={`${project.id}-${chapter}`} chapter={chapter} project={project} documents={documents} onSave={onSaveChapter} />}</>}
       </div>
     </article>
   );
 }
 
-function ProductBriefContext({ brief }: { brief: CreativeProject["productBrief"] }) {
-  if (!brief) return <div className="mb-8 border-l-2 border-[var(--cp-border)] px-4 py-3 text-sm text-[var(--cp-text-faint)]">尚未关联产品创作简报。请先在「产品确认」生成，后续环节的 AI 才能读取产品上下文。</div>;
+function ProductBriefContext({ brief, onOpenProduct }: { brief: CreativeProject["productBrief"]; onOpenProduct: () => void }) {
+  if (!brief) return <aside className="mb-8 flex flex-col gap-4 border border-dashed border-[var(--cp-border)] bg-[var(--cp-bg-subtle)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between"><div><p className="m-0 text-[11px] font-semibold tracking-[0.1em] text-[var(--cp-text-faint)]">产品创作简报</p><p className="mb-0 mt-1.5 text-sm text-[var(--cp-text-muted)]">当前项目尚未关联简报；需求 AI 不会在缺少产品事实的情况下推断卖点或结构。</p></div><Button type="button" variant="outline" className="shrink-0" onClick={onOpenProduct}>前往产品确认</Button></aside>;
   const points = brief.coreSellingPoints.slice(0, 3).map((point) => point.fact).join(" · ");
-  return <aside className="mb-8 border-y border-[var(--cp-border-subtle)] bg-[var(--cp-bg-subtle)] px-5 py-4"><p className="m-0 text-[11px] font-semibold tracking-[0.1em] text-[var(--cp-text-faint)]">已关联 · 产品创作简报</p><p className="mb-0 mt-1.5 text-sm font-semibold leading-relaxed text-[var(--cp-text)]">{brief.oneLineExpression}</p>{points ? <p className="mb-0 mt-1.5 text-xs leading-relaxed text-[var(--cp-text-muted)]">核心事实：{points}</p> : null}</aside>;
+  return <aside className="mb-8 border border-[#d8c08b] bg-[#fffcf6] px-5 py-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><p className="m-0 text-[11px] font-semibold tracking-[0.1em] text-[#315c49]">已关联 · 产品创作简报</p><p className="mb-0 mt-1.5 text-sm font-semibold leading-relaxed text-[var(--cp-text)]">{brief.oneLineExpression}</p>{points ? <p className="mb-0 mt-2 text-xs leading-relaxed text-[var(--cp-text-muted)]">核心事实：{points}</p> : null}</div><Button type="button" variant="ghost" size="sm" className="shrink-0" onClick={onOpenProduct}>查看简报</Button></div></aside>;
 }
 
 function ProjectOverview({ project }: { project: CreativeProject }) {

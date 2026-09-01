@@ -16,13 +16,14 @@ export type RequirementSource = {
   attachments: string[];
 };
 
+export type RequirementInsightSource = "原始需求" | "产品简报" | "AI推断" | "人工补充";
 export type RequirementAnalysis = {
   purpose: string;
   keyMessage: string[];
   audience: { text: string; inferred: boolean };
   userQuestions: string[];
-  mustInclude: Array<{ text: string; source: "原始需求" | "AI建议" | "人工补充" }>;
-  constraints: Array<{ text: string; source: "原始需求" | "AI建议" | "人工补充" }>;
+  mustInclude: Array<{ text: string; source: RequirementInsightSource }>;
+  constraints: Array<{ text: string; source: RequirementInsightSource }>;
 };
 
 export type RequirementQuestion = {
@@ -59,6 +60,7 @@ export interface RequirementBriefAdapter {
   addSupplement(input: { project: CreativeProject; text: string }): RequirementWorkspaceState;
   answerQuestion(input: { project: CreativeProject; questionId: string; answer: string; status: Extract<RequirementQuestionStatus, "已补充" | "暂不确认" | "已忽略"> }): RequirementWorkspaceState;
   updateDocuments(input: { project: CreativeProject; documentIds: string[]; documents: CreativeDocument[] }): RequirementWorkspaceState;
+  applyAnalysis(input: { project: CreativeProject; analysis: RequirementAnalysis; questions: Array<{ title: string; reason: string }> }): RequirementWorkspaceState;
   confirm(project: CreativeProject): RequirementWorkspaceState;
 }
 
@@ -89,10 +91,10 @@ function makeState(project: CreativeProject): RequirementWorkspaceState {
     keyMessage: ["无吸管不是少了一个零件，而是另一种喷油结构设计。"],
     audience: { text: "对喷油壶结构存在疑惑、担心无吸管影响使用的厨房用户。", inferred: true },
     userQuestions: ["没有吸管真的能喷油吗？", "油怎么进入喷油结构？", "和普通喷油壶有什么区别？", "会不会喷不均匀？"],
-    mustInclude: [{ text: "无吸管的真实工作方式", source: "原始需求" }, { text: "垂直喷油的实际使用效果", source: "原始需求" }, { text: "与普通结构的差异，但避免贬低式比较", source: "AI建议" }],
-    constraints: [{ text: "不要错误描述工作原理", source: "AI建议" }, { text: "不要使用未经证实的绝对化比较", source: "AI建议" }, { text: "视频应围绕核心产品展开", source: "原始需求" }],
+    mustInclude: [{ text: "无吸管的真实工作方式", source: "原始需求" }, { text: "垂直喷油的实际使用效果", source: "原始需求" }, { text: "与普通结构的差异，但避免贬低式比较", source: "AI推断" }],
+    constraints: [{ text: "不要错误描述工作原理", source: "AI推断" }, { text: "不要使用未经证实的绝对化比较", source: "AI推断" }, { text: "视频应围绕核心产品展开", source: "原始需求" }],
   } : {
-    purpose: `先把「${project.name}」的真实使用价值讲清楚，再进入具体创作表达。`, keyMessage: [project.coreDirection], audience: { text: "与当前产品使用场景相关、仍有疑问的目标用户。", inferred: true }, userQuestions: ["这个产品在什么场景下最有用？", "它和已有选择有什么不同？"], mustInclude: source.mustInclude.map((text) => ({ text, source: "原始需求" })), constraints: [{ text: "不使用未经确认的效果承诺", source: "AI建议" }],
+    purpose: `先把「${project.name}」的真实使用价值讲清楚，再进入具体创作表达。`, keyMessage: [project.coreDirection], audience: { text: "与当前产品使用场景相关、仍有疑问的目标用户。", inferred: true }, userQuestions: ["这个产品在什么场景下最有用？", "它和已有选择有什么不同？"], mustInclude: source.mustInclude.map((text) => ({ text, source: "原始需求" })), constraints: [{ text: "不使用未经确认的效果承诺", source: "AI推断" }],
   };
   return { projectId: project.id, status: "待确认", source, analysis, questions: [{ id: "priority", title: "核心目标还需要排序", reason: "当前既要解释结构，也要突出使用效果，需要确认哪一个是第一重点。", status: "待确认", answer: null }, { id: "audience", title: "用户人群未明确", reason: "当前人群来自 AI 推测，后续脚本的语言和场景会受影响。", status: "待确认", answer: null }, { id: "proof", title: "缺少证明素材", reason: "如要说明结构差异，需要确认是否具备剖面、工厂或实际演示素材。", status: "待确认", answer: null }], supplements: [], documentIds: [], brief: null, briefHistory: [] };
 }
@@ -115,6 +117,15 @@ export function createMockRequirementBriefAdapter(): RequirementBriefAdapter {
     updateDocuments({ project, documentIds, documents }) {
       const allowed = new Set(documents.map((document) => document.id)); const current = getState(project);
       return store({ ...current, status: current.brief ? "已更新待重新确认" : current.status, documentIds: documentIds.filter((id) => allowed.has(id)) });
+    },
+    applyAnalysis({ project, analysis, questions }) {
+      const current = getState(project);
+      return store({
+        ...current,
+        status: current.brief ? "已更新待重新确认" : "待确认",
+        analysis: copyAnalysis(analysis),
+        questions: questions.map((question, index) => ({ id: `ai-question-${index}`, ...question, status: "待确认", answer: null })),
+      });
     },
     confirm(project) {
       const current = getState(project); const version = current.briefHistory.length + 1;
