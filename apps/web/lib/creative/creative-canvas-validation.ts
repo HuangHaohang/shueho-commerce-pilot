@@ -58,61 +58,11 @@ const imageTextLayerSchema = z.object({
   align: z.enum(["left", "center", "right"]),
 }).strict();
 
-const editorLayerBase = {
-  id: safeId,
-  name: z.string().trim().min(1).max(120),
-  x: z.number().finite().min(-100).max(200),
-  y: z.number().finite().min(-100).max(200),
-  width: z.number().finite().min(1).max(200),
-  height: z.number().finite().min(1).max(200),
-  rotation: z.number().finite().min(-360).max(360),
-  opacity: z.number().finite().min(0).max(1),
-  visible: z.boolean(),
-  locked: z.boolean(),
-};
-const safeColor = z.string().regex(/^#[0-9a-f]{6}$/i);
-const editorLayerSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...editorLayerBase,
-    kind: z.literal("text"),
-    text: boundedText(2_000),
-    fontSize: z.number().finite().min(8).max(240),
-    color: safeColor,
-    align: z.enum(["left", "center", "right"]),
-    fontWeight: z.union([z.literal(400), z.literal(500), z.literal(600), z.literal(700)]),
-  }).strict(),
-  z.object({
-    ...editorLayerBase,
-    kind: z.literal("shape"),
-    shape: z.enum(["rectangle", "ellipse"]),
-    fill: safeColor,
-    stroke: safeColor,
-    strokeWidth: z.number().finite().min(0).max(40),
-  }).strict(),
-  z.object({
-    ...editorLayerBase,
-    kind: z.literal("image"),
-    source: z.literal("base"),
-    fit: z.enum(["contain", "cover"]),
-  }).strict(),
-  z.object({
-    ...editorLayerBase,
-    kind: z.literal("drawing"),
-    points: z.array(z.object({
-      x: z.number().finite().min(0).max(100),
-      y: z.number().finite().min(0).max(100),
-    }).strict()).min(2).max(1_500),
-    stroke: safeColor,
-    strokeWidth: z.number().finite().min(1).max(80),
-  }).strict(),
-]);
-
 const imageContentUpdateSchema = z.object({
   kind: z.literal("image"),
   title: z.string().trim().min(1).max(240),
   description: boundedText(20_000),
   textLayers: z.array(imageTextLayerSchema).max(24),
-  editorLayers: z.array(editorLayerSchema).max(64).optional(),
   complianceNotes: noteList,
 }).strict().superRefine((value, context) => {
   const ids = new Set<string>();
@@ -125,17 +75,6 @@ const imageContentUpdateSchema = z.object({
       });
     }
     ids.add(layer.id);
-  }
-  const editorIds = new Set<string>();
-  for (const [index, layer] of (value.editorLayers ?? []).entries()) {
-    if (editorIds.has(layer.id)) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["editorLayers", index, "id"],
-        message: "编辑图层标识重复。",
-      });
-    }
-    editorIds.add(layer.id);
   }
 });
 
@@ -168,11 +107,7 @@ export function parseCreativeCanvasContentUpdate(
   if (current.kind === "document") return documentContentSchema.parse(value);
   if (current.kind === "table") return tableContentSchema.parse(value);
   const update = imageContentUpdateSchema.parse(value);
-  return {
-    ...update,
-    editorLayers: update.editorLayers ?? current.editorLayers,
-    image: current.image,
-  };
+  return { ...update, image: current.image };
 }
 
 export function parseCreativeCanvasLayout(value: unknown): CreativeCanvasLayout {
