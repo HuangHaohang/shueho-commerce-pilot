@@ -4,6 +4,7 @@ import { CheckCircle2, ChevronDown, FileText, LoaderCircle, Sparkles } from "luc
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { ProjectAiRevision } from "@/components/creative/project-ai-copilot";
 import type { CreativeProject } from "@/lib/creative/creative-space-adapter";
 import type { RequirementAnalysis, RequirementQuestion, RequirementQuestionStatus, RequirementWorkspaceState } from "@/lib/creative/requirement-brief-adapter";
 import type { ConversationMessage } from "@/lib/agent/use-agent-thread";
@@ -19,15 +20,17 @@ type RequirementBriefWorkspaceProps = {
   analysisStatus: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
   analysisError: string | null;
   analysisMessages: ConversationMessage[];
+  revision?: ProjectAiRevision | null;
 };
 
-export function RequirementBriefWorkspace({ project, state, onQuestion, onConfirm, onRunAnalysis, onApplyAnalysis, analysisStatus, analysisError, analysisMessages }: RequirementBriefWorkspaceProps) {
+export function RequirementBriefWorkspace({ project, state, onQuestion, onConfirm, onRunAnalysis, onApplyAnalysis, analysisStatus, analysisError, analysisMessages, revision }: RequirementBriefWorkspaceProps) {
   const [expanded, setExpanded] = useState(false);
   const [questionId, setQuestionId] = useState<string | null>(null);
   const [answer, setAnswer] = useState("");
   const latestAnalysis = useMemo(() => readLatestAnalysis(analysisMessages), [analysisMessages]);
   const [awaitingAnalysis, setAwaitingAnalysis] = useState(false);
   const baselineRef = useRef<string | null>(null);
+  const appliedRevisionRef = useRef<string | null>(null);
   const running = analysisStatus === "connecting" || analysisStatus === "running";
 
   useEffect(() => {
@@ -37,12 +40,18 @@ export function RequirementBriefWorkspace({ project, state, onQuestion, onConfir
   }, [awaitingAnalysis, latestAnalysis, onApplyAnalysis]);
 
   function submitAnswer(status: Extract<RequirementQuestionStatus, "已补充" | "暂不确认" | "已忽略">) { if (!questionId) return; onQuestion(questionId, answer, status); setQuestionId(null); setAnswer(""); }
-  async function runUnderstanding() {
+  async function runUnderstanding(instruction = "") {
     if (!project.productBrief) return;
-    const prompt = `请理解以下短视频需求。只使用需求方任务信息和已确认产品创作简报。\n\n需求方任务信息：\n- 任务：${project.linkedTasks.map((task) => task.name).join("、") || project.name}\n- 原始需求：${state.source.rawContent}\n- 平台：${state.source.platforms.join("、")}\n- 数量：${state.source.quantity ?? "未说明"}\n- 必须出现：${state.source.mustInclude.join("、") || "未说明"}\n\n已确认产品创作简报：\n${JSON.stringify(project.productBrief)}\n\n不要引用其他资料，不要生成选题或脚本。`;
+    const prompt = `请理解以下短视频需求。只使用需求方任务信息和已确认产品创作简报。\n\n需求方任务信息：\n- 任务：${project.linkedTasks.map((task) => task.name).join("、") || project.name}\n- 原始需求：${state.source.rawContent}\n- 平台：${state.source.platforms.join("、")}\n- 数量：${state.source.quantity ?? "未说明"}\n- 必须出现：${state.source.mustInclude.join("、") || "未说明"}\n\n已确认产品创作简报：\n${JSON.stringify(project.productBrief)}\n\n用户本次调整要求：${instruction || "无"}\n\n不要引用其他资料，不要生成选题或脚本。`;
     baselineRef.current = latestAnalysis?.messageId ?? null;
     if (await onRunAnalysis(prompt)) setAwaitingAnalysis(true);
   }
+
+  useEffect(() => {
+    if (!revision || revision.chapter !== "需求" || revision.id === appliedRevisionRef.current || running) return;
+    appliedRevisionRef.current = revision.id;
+    void runUnderstanding(revision.instruction);
+  }, [revision, running]);
 
   return (
     <section className="mx-auto max-w-[1180px] pb-10">

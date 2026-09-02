@@ -27,6 +27,7 @@ import { MyCreativeDashboardPage } from "@/components/creative/my-creative-dashb
 import { ProductConfirmationWorkspace, readLatestProductBrief } from "@/components/creative/product-confirmation-workspace";
 import { RequirementBriefWorkspace } from "@/components/creative/requirement-brief-workspace";
 import { TopicPlanningWorkspace } from "@/components/creative/topic-planning-workspace";
+import { ProjectAiCopilot, type ProjectAiRevision } from "@/components/creative/project-ai-copilot";
 import type { ConversationMessage, PendingAttachmentUpload } from "@/lib/agent/use-agent-thread";
 import {
   creativeProjectChapters,
@@ -404,8 +405,10 @@ function ProjectCreateForm({ snapshot, initialTaskId, onCancel, onCreate }: { sn
 function ContentProjectWorkspace({ project, documents, initialChapter = "概览", backLabel, onBack, onSaveChapter, onSaveProductBrief, onSaveTopicPlan, onRunProductInsight, productInsight, onRunRequirementUnderstanding, requirementUnderstanding, onRunTopicPlanning, topicPlanning }: { project: CreativeProject; documents: CreativeDocument[]; initialChapter?: CreativeProjectChapter; backLabel: string; onBack: () => void; onSaveChapter: (input: { projectId: string; chapter: Exclude<CreativeProjectChapter, "概览">; body: string; documentIds: string[] }) => void; onSaveProductBrief: (input: { projectId: string; brief: import("@/lib/creative/creative-space-adapter").CreativeProductBrief }) => void; onSaveTopicPlan: (input: { projectId: string; plan: import("@/lib/creative/creative-space-adapter").CreativeTopicPlan }) => void; onRunProductInsight: (projectId: string, prompt: string, attachments: PendingAttachmentUpload[]) => Promise<boolean>; productInsight: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[]; projectId: string | null }; onRunRequirementUnderstanding: (prompt: string) => Promise<boolean>; requirementUnderstanding: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] }; onRunTopicPlanning: (prompt: string) => Promise<boolean>; topicPlanning: { status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed"; error: string | null; messages: ConversationMessage[] } }) {
   const [chapter, setChapter] = useState<CreativeProjectChapter>(initialChapter);
   const [, setRequirementRevision] = useState(0);
+  const [aiRevision, setAiRevision] = useState<ProjectAiRevision | null>(null);
   const requirement = requirementBriefAdapter.get(project);
   const refreshRequirement = () => setRequirementRevision((value) => value + 1);
+  const activeAi = chapter === "产品确认" ? productInsight : chapter === "需求" ? requirementUnderstanding : chapter === "选题" ? topicPlanning : { status: "idle" as const, error: null };
   return (
     <article className="min-h-full">
       <div className="w-full px-5 pt-8 md:px-8 md:pt-10 xl:px-10">
@@ -425,7 +428,7 @@ function ContentProjectWorkspace({ project, documents, initialChapter = "概览"
 
       <nav className="sticky top-0 z-10 border-y border-[var(--cp-border-subtle)] bg-[rgba(255,255,255,0.96)]" aria-label="项目创作章节">
         <div className="cp-hidden-scrollbar flex w-full gap-6 overflow-x-auto px-5 md:px-8 xl:px-10">
-          {creativeProjectChapters.map((item) => (
+          {creativeProjectChapters.filter((item) => item !== "表现形式").map((item) => (
             <button
               key={item}
               type="button"
@@ -444,7 +447,10 @@ function ContentProjectWorkspace({ project, documents, initialChapter = "概览"
       </nav>
 
       <div className="w-full px-5 py-10 md:px-8 md:py-12 xl:px-10">
-        {chapter === "概览" ? <ProjectOverview project={project} /> : chapter === "产品确认" ? <ProductConfirmationWorkspace project={project} documents={documents} saved={project.chapters["产品确认"] ?? { body: "", documentIds: [] }} onSave={onSaveChapter} onSaveBrief={onSaveProductBrief} onRunAnalysis={onRunProductInsight} analysisStatus={productInsight.status} analysisError={productInsight.error} analysisMessages={productInsight.messages} /> : <><ProductBriefContext brief={project.productBrief} onOpenProduct={() => setChapter("产品确认")} />{chapter === "需求" ? <RequirementBriefWorkspace project={project} state={requirement} onQuestion={(questionId, answer, status) => { requirementBriefAdapter.answerQuestion({ project, questionId, answer, status }); refreshRequirement(); }} onConfirm={() => { requirementBriefAdapter.confirm(project); refreshRequirement(); }} onRunAnalysis={onRunRequirementUnderstanding} onApplyAnalysis={(analysis, questions) => { requirementBriefAdapter.applyAnalysis({ project, analysis, questions }); refreshRequirement(); }} analysisStatus={requirementUnderstanding.status} analysisError={requirementUnderstanding.error} analysisMessages={requirementUnderstanding.messages} /> : chapter === "选题" ? <TopicPlanningWorkspace project={project} onSave={(plan) => onSaveTopicPlan({ projectId: project.id, plan })} onRun={onRunTopicPlanning} ai={topicPlanning} onContinueToExpression={() => setChapter("表现形式")} /> : <ChapterWorkspace key={`${project.id}-${chapter}`} chapter={chapter} project={project} documents={documents} onSave={onSaveChapter} />}</>}
+        <div className="grid items-start gap-8 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <div className="min-w-0">{chapter === "概览" ? <ProjectOverview project={project} /> : chapter === "产品确认" ? <ProductConfirmationWorkspace project={project} documents={documents} saved={project.chapters["产品确认"] ?? { body: "", documentIds: [] }} onSave={onSaveChapter} onSaveBrief={onSaveProductBrief} onRunAnalysis={onRunProductInsight} analysisStatus={productInsight.status} analysisError={productInsight.error} analysisMessages={productInsight.messages} revision={aiRevision} /> : <><ProductBriefContext brief={project.productBrief} onOpenProduct={() => setChapter("产品确认")} />{chapter === "需求" ? <RequirementBriefWorkspace project={project} state={requirement} onQuestion={(questionId, answer, status) => { requirementBriefAdapter.answerQuestion({ project, questionId, answer, status }); refreshRequirement(); }} onConfirm={() => { requirementBriefAdapter.confirm(project); refreshRequirement(); }} onRunAnalysis={onRunRequirementUnderstanding} onApplyAnalysis={(analysis, questions) => { requirementBriefAdapter.applyAnalysis({ project, analysis, questions }); refreshRequirement(); }} analysisStatus={requirementUnderstanding.status} analysisError={requirementUnderstanding.error} analysisMessages={requirementUnderstanding.messages} revision={aiRevision} /> : chapter === "选题" ? <TopicPlanningWorkspace project={project} onSave={(plan) => onSaveTopicPlan({ projectId: project.id, plan })} onRun={onRunTopicPlanning} ai={topicPlanning} onContinueToScript={() => setChapter("脚本")} revision={aiRevision} /> : <ChapterWorkspace key={`${project.id}-${chapter}`} chapter={chapter} project={project} documents={documents} onSave={onSaveChapter} />}</>}</div>
+          <ProjectAiCopilot project={project} chapter={chapter} running={activeAi.status === "connecting" || activeAi.status === "running"} error={activeAi.error} onApply={setAiRevision} />
+        </div>
       </div>
     </article>
   );

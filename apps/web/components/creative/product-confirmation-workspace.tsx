@@ -4,6 +4,7 @@ import { Check, ChevronDown, FileUp, Link2, LoaderCircle, Pencil, Save, Search, 
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import type { ProjectAiRevision } from "@/components/creative/project-ai-copilot";
 import type { ConversationMessage, PendingAttachmentUpload } from "@/lib/agent/use-agent-thread";
 import type { CreativeChapterContent, CreativeDocument, CreativeProductBrief, CreativeProductEvidence, CreativeProject } from "@/lib/creative/creative-space-adapter";
 
@@ -14,7 +15,7 @@ type UserQuestion = CreativeProductBrief["userQuestions"][number];
 type DesignStory = CreativeProductBrief["designStory"];
 type ProductInsightResult = CreativeProductBrief;
 
-export function ProductConfirmationWorkspace({ project, documents, saved, onSave, onSaveBrief, onRunAnalysis, analysisStatus, analysisError, analysisMessages }: {
+export function ProductConfirmationWorkspace({ project, documents, saved, onSave, onSaveBrief, onRunAnalysis, analysisStatus, analysisError, analysisMessages, revision }: {
   project: CreativeProject;
   documents: CreativeDocument[];
   saved: CreativeChapterContent;
@@ -24,6 +25,7 @@ export function ProductConfirmationWorkspace({ project, documents, saved, onSave
   analysisStatus: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
   analysisError: string | null;
   analysisMessages: ConversationMessage[];
+  revision?: ProjectAiRevision | null;
 }) {
   const [body, setBody] = useState(saved.body);
   const [documentIds, setDocumentIds] = useState(saved.documentIds);
@@ -35,6 +37,7 @@ export function ProductConfirmationWorkspace({ project, documents, saved, onSave
   const [editingBrief, setEditingBrief] = useState(false);
   const [draftBrief, setDraftBrief] = useState<ProductInsightResult | null>(null);
   const resultBaselineRef = useRef<string | null>(null);
+  const appliedRevisionRef = useRef<string | null>(null);
   // The persisted project brief is the source of truth after a user edits it.
   // A fresh model result is only a temporary preview until the save effect stores it.
   const result = project.productBrief ?? latestResult?.brief;
@@ -55,14 +58,20 @@ export function ProductConfirmationWorkspace({ project, documents, saved, onSave
     setFiles((current) => [...current, ...next]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }
-  async function runAnalysis() {
+  async function runAnalysis(instruction = "") {
     saveSnapshot();
     const sourceSummary = selectedDocuments.length ? selectedDocuments.map((document) => `- ${document.title}（${document.source}，${document.summary}）`).join("\n") : "未关联系统文档。";
-    const prompt = `请基于以下资料生成「短视频创作产品简报」。\n\n项目：${project.name}\n关联产品：${project.products.map((product) => product.name).join("、") || "尚未关联，请标记缺失"}\n关联任务：${project.linkedTasks.map((task) => task.name).join("、") || "无"}\n\n已确认的产品事实快照：\n${body.trim() || "尚未填写，请标记缺失。"}\n\n已关联系统文档：\n${sourceSummary}\n\n上传附件是本次补充资料。只输出短视频创作直接可用的信息：一句核心表达、一个关键可拍证据、核心卖点、常规卖点、用户最可能产生的疑问、目标人群与场景、表达边界、缺失与冲突。每类最多 3 条。不要输出竞品分析、内容机会、选题方向、长篇产品介绍。严格区分事实、资料支持的推断、待确认项，禁止补充未提供的产品结论。`;
+    const prompt = `请基于以下资料生成「短视频创作产品简报」。\n\n项目：${project.name}\n关联产品：${project.products.map((product) => product.name).join("、") || "尚未关联，请标记缺失"}\n关联任务：${project.linkedTasks.map((task) => task.name).join("、") || "无"}\n\n已确认的产品事实快照：\n${body.trim() || "尚未填写，请标记缺失。"}\n\n已关联系统文档：\n${sourceSummary}\n\n用户本次调整要求：${instruction || "无"}\n\n上传附件是本次补充资料。只输出短视频创作直接可用的信息：一句核心表达、一个关键可拍证据、核心卖点、常规卖点、用户最可能产生的疑问、目标人群与场景、表达边界、缺失与冲突。每类最多 3 条。不要输出竞品分析、内容机会、选题方向、长篇产品介绍。严格区分事实、资料支持的推断、待确认项，禁止补充未提供的产品结论。`;
     resultBaselineRef.current = latestResult?.messageId ?? null;
     const submitted = await onRunAnalysis(project.id, prompt, files);
     if (submitted) { files.forEach((file) => URL.revokeObjectURL(file.url)); setFiles([]); setAwaitingResult(true); }
   }
+
+  useEffect(() => {
+    if (!revision || revision.chapter !== "产品确认" || revision.id === appliedRevisionRef.current || running) return;
+    appliedRevisionRef.current = revision.id;
+    void runAnalysis(revision.instruction);
+  }, [revision, running]);
 
   return <section className="w-full">
     <p className="m-0 text-xs text-[var(--cp-text-faint)]">产品事实快照 · 需求理解和后续 AI 只读取已确认资料</p>

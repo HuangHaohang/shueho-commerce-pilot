@@ -707,7 +707,7 @@ export function CommerceWorkbenchShell({
   async function runTopicPlanning(prompt: string) {
     if (!isAuthenticated) { openAuthDialog("login"); return false; }
     if (topicPlanningThread.status === "connecting" || topicPlanningThread.status === "running" || topicPlanningThread.compacting) return false;
-    return topicPlanningThread.submit(prompt, { workflow: "topic-planning" });
+    return topicPlanningThread.submit(prompt, { workflow: "commerce-creative-project" });
   }
 
   async function executeCopywritingRecipe(goal: string) {

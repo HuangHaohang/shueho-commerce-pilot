@@ -50,6 +50,20 @@ export type CreativeProductBrief = {
 };
 
 export type CreativeTopicCategory = "原理" | "功能" | "使用体验" | "痛点" | "用户疑问" | "实验" | "对比" | "场景" | "反常识" | "设计逻辑" | "其他";
+export type CreativeTopicOpportunity = "用户疑问" | "使用痛点" | "场景任务" | "认知差" | "实验验证" | "购买决策";
+export type CreativeTopicEvidence = {
+  productFacts: string[];
+  userSignals: string[];
+  proofPlan: string[];
+};
+export type CreativeTopicValueAssessment = {
+  userRelevance?: number;
+  productRelevance?: number;
+  informationValue?: number;
+  evidenceStrength?: number;
+  objectiveFit?: number;
+};
+export type CreativeExpressionFormId = "口播讲解" | "团队轻剧情" | "产品演示" | "情景演绎" | "实验对比" | "Vlog记录" | "混剪" | "直播切片" | "图文快剪" | "美食菜谱" | "问题答疑";
 export type CreativeTopic = {
   id: string;
   topic: string;
@@ -61,10 +75,14 @@ export type CreativeTopic = {
   proofPoints: string[];
   risks: string[];
   source: "AI生成" | "人工创建";
+  opportunitySources?: CreativeTopicOpportunity[];
+  evidence?: CreativeTopicEvidence;
+  valueAssessment?: CreativeTopicValueAssessment;
 };
 export type CreativeTopicPlan = {
   version: number; status: "进行中" | "已确认"; settings: { objective: string; platforms: string[]; quantity: number; constraints: string };
   selectedTopicIds: string[]; topics: CreativeTopic[]; exploration?: string;
+  expressionFormIds?: Record<string, CreativeExpressionFormId>;
   weeklyAdvice: { priority: string[]; tests: string[]; deferred: string[]; needs: string[] }; confirmedAt?: string;
 };
 
