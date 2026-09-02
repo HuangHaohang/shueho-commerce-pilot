@@ -268,11 +268,45 @@ function copyProject(project: CreativeProject): CreativeProject {
   };
 }
 
+function parseProjects(value: string | null): CreativeProject[] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => item && typeof item === "object" && typeof item.id === "string") ? parsed as CreativeProject[] : null;
+  } catch { return null; }
+}
+
+function parseBackups(value: string | null): CreativeProject[][] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is CreativeProject[] => Array.isArray(item) && item.every((project) => project && typeof project === "object" && typeof project.id === "string")) : [];
+  } catch { return []; }
+}
+
+function mergeProjectSnapshots(seed: CreativeProject[], snapshots: CreativeProject[][]): CreativeProject[] {
+  const records = new Map<string, CreativeProject>();
+  for (const project of seed) records.set(project.id, copyProject(project));
+  for (const snapshot of snapshots) for (const incoming of snapshot) {
+    const current = records.get(incoming.id);
+    if (!current) { records.set(incoming.id, copyProject(incoming)); continue; }
+    records.set(incoming.id, {
+      ...current,
+      ...incoming,
+      productBrief: incoming.productBrief ?? current.productBrief,
+      topicPlan: incoming.topicPlan ?? current.topicPlan,
+      chapters: { ...current.chapters, ...incoming.chapters },
+    });
+  }
+  return [...records.values()];
+}
+
 export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
   let projectsState = seededProjects.map(copyProject);
   let createdCount = 0;
   let hasHydratedBrowserState = false;
   const storageKey = "shueho-commerce-pilot:creative-projects";
+  const backupStorageKey = "shueho-commerce-pilot:creative-projects:backups";
   const snapshot = (): CreativeSpaceSnapshot => ({
     projects: projectsState.map(copyProject),
     tasks: tasks.map((task) => ({ ...task })),
@@ -285,15 +319,23 @@ export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
     if (hasHydratedBrowserState || typeof window === "undefined") return;
     hasHydratedBrowserState = true;
     try {
-      const stored = window.localStorage.getItem(storageKey);
-      const parsed = stored ? JSON.parse(stored) : null;
-      if (Array.isArray(parsed) && parsed.every((item) => item && typeof item === "object" && typeof item.id === "string")) projectsState = parsed.map((project) => copyProject(project as CreativeProject));
+      const stored = parseProjects(window.localStorage.getItem(storageKey));
+      const backups = parseBackups(window.localStorage.getItem(backupStorageKey));
+      const candidates = [...backups, ...(stored ? [stored] : [])];
+      if (candidates.length) projectsState = mergeProjectSnapshots(projectsState, candidates).map(copyProject);
     } catch { /* Invalid local preview data falls back to the seeded project state. */ }
   };
   const persist = () => {
     if (typeof window === "undefined") return;
     hasHydratedBrowserState = true;
-    try { window.localStorage.setItem(storageKey, JSON.stringify(projectsState)); } catch { /* Local preview remains usable when storage is unavailable. */ }
+    try {
+      const current = window.localStorage.getItem(storageKey);
+      const previous = parseProjects(current);
+      const backups = parseBackups(window.localStorage.getItem(backupStorageKey));
+      const nextBackups = previous ? [...backups, previous].slice(-5) : backups;
+      window.localStorage.setItem(backupStorageKey, JSON.stringify(nextBackups));
+      window.localStorage.setItem(storageKey, JSON.stringify(projectsState));
+    } catch { /* Local preview remains usable when storage is unavailable. */ }
   };
   const hydrate = () => { restore(); return snapshot(); };
 
