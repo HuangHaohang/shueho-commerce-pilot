@@ -3,6 +3,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { requireBoundedContentLength } from "@/lib/http/content-length";
 
 const MAX_API_BODY_BYTES = 64 * 1024;
+const MAX_AGENT_TURN_BODY_BYTES = 256 * 1024;
 const MAX_ATTACHMENT_BODY_BYTES = 5 * 1024 * 1024 + 256 * 1024;
 const MAX_PRODUCT_IMPORT_BODY_BYTES = 5 * 1024 * 1024 + 256 * 1024;
 const MAX_EXTERNAL_DATA_CONTROL_BODY_BYTES = 6 * 1024 * 1024 + 256 * 1024;
@@ -32,6 +33,8 @@ export function middleware(request: NextRequest) {
       ? MAX_PRODUCT_IMPORT_BODY_BYTES
     : /^\/api\/agent\/threads\/[^/]+\/attachments$/.test(request.nextUrl.pathname)
       ? MAX_ATTACHMENT_BODY_BYTES
+      : /^\/api\/agent\/threads\/[^/]+\/turns$/.test(request.nextUrl.pathname)
+        ? MAX_AGENT_TURN_BODY_BYTES
       : MAX_API_BODY_BYTES;
   if (Number.isFinite(contentLength) && contentLength > maximumBytes) {
     return NextResponse.json(

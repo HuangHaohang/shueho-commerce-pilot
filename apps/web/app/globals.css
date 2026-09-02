@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "@xyflow/react/dist/style.css";
 @import "../../../designs/references/tokens.css";
 
 @theme inline {
@@ -50,36 +49,12 @@
   scrollbar-color: rgba(13, 13, 13, 0.22) transparent;
 }
 
-.react-flow {
-  --xy-background-color: var(--cp-bg);
-  --xy-node-border: 0;
-  --xy-node-border-radius: var(--cp-radius-panel);
-  --xy-node-background-color: transparent;
-  --xy-node-boxshadow-hover: none;
-  --xy-node-boxshadow-selected: none;
-  --xy-minimap-background-color: var(--cp-surface);
-  --xy-controls-button-background-color: var(--cp-surface);
-  --xy-controls-button-background-color-hover: var(--cp-surface-hover);
-  --xy-controls-button-color: var(--cp-text-muted);
-  --xy-controls-button-color-hover: var(--cp-text);
-  --xy-controls-button-border-color: var(--cp-border);
+.cp-hidden-scrollbar {
+  scrollbar-width: none;
 }
 
-.react-flow__node {
-  border: 0;
-  background: transparent;
-  padding: 0;
-  box-shadow: none;
-}
-
-.react-flow__node:focus-visible {
-  outline: 2px solid var(--cp-focus);
-  outline-offset: 3px;
-}
-
-.react-flow__minimap {
-  overflow: hidden;
-  border-radius: var(--cp-radius-control);
+.cp-hidden-scrollbar::-webkit-scrollbar {
+  display: none;
 }
 
 html,
@@ -140,13 +115,6 @@ button {
 [data-conversation-input]:focus,
 [data-conversation-input]:focus-visible {
   box-shadow: none;
-  outline: none;
-}
-
-[data-product-search-input]:focus,
-[data-product-search-input]:focus-visible,
-[data-product-form-input]:focus,
-[data-product-form-input]:focus-visible {
   outline: none;
 }
 

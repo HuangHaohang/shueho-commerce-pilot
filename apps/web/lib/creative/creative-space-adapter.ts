@@ -1,0 +1,457 @@
+export const creativeProjectChapters = [
+  "概览",
+  "产品确认",
+  "需求",
+  "选题",
+  "表现形式",
+  "脚本",
+  "拍摄",
+  "剪辑",
+  "成片",
+  "数据",
+  "复盘",
+] as const;
+
+export type CreativeProjectChapter = (typeof creativeProjectChapters)[number];
+export type CreativeEditableChapter = Exclude<CreativeProjectChapter, "概览">;
+
+export type CreativeDocument = {
+  id: string;
+  title: string;
+  source: "资料库" | "商品资料" | "历史项目";
+  updatedAt: string;
+  summary: string;
+};
+
+export type CreativeChapterContent = {
+  body: string;
+  documentIds: string[];
+};
+
+export type CreativeProductEvidence = { fact: string; userValue: string; visualProof: string; bestUse: string[] };
+export type CreativeProductBrief = {
+  oneLineExpression: string;
+  keyProof: CreativeProductEvidence;
+  coreSellingPoints: CreativeProductEvidence[];
+  routineSellingPoints: CreativeProductEvidence[];
+  audienceScenes: Array<{ audience: string; scene: string; painPoint: string }>;
+  expressionBoundaries: Array<{ item: string; reason: string; recommendedExpression: string }>;
+  userQuestions: Array<{ question: string; underlyingBelief: string; contentValue: string; evidenceStatus: "资料支持" | "待验证推断" }>;
+  designStory: {
+    status: "可提炼" | "资料不足";
+    storyLine: string;
+    originalIntent: string;
+    processEvidence: string[];
+    contentValue: string;
+    evidenceStatus: "资料支持" | "资料不足";
+  };
+  missingInformation: string[];
+  conflicts: string[];
+};
+
+export type CreativeTopicCategory = "原理" | "功能" | "使用体验" | "痛点" | "用户疑问" | "实验" | "对比" | "场景" | "反常识" | "设计逻辑" | "其他";
+export type CreativeTopicOpportunity = "用户疑问" | "使用痛点" | "场景任务" | "认知差" | "实验验证" | "购买决策";
+export type CreativeTopicEvidence = {
+  productFacts: string[];
+  userSignals: string[];
+  proofPlan: string[];
+};
+export type CreativeTopicValueAssessment = {
+  userRelevance?: number;
+  productRelevance?: number;
+  informationValue?: number;
+  evidenceStrength?: number;
+  objectiveFit?: number;
+};
+export type CreativeExpressionFormId = "口播讲解" | "团队轻剧情" | "产品演示" | "情景演绎" | "实验对比" | "Vlog记录" | "混剪" | "直播切片" | "图文快剪" | "美食菜谱" | "问题答疑";
+export type CreativeTopic = {
+  id: string;
+  topic: string;
+  summary: string;
+  category: CreativeTopicCategory;
+  priority: "高推荐" | "普通推荐" | "探索型";
+  reason: string;
+  keyQuestion: string;
+  proofPoints: string[];
+  risks: string[];
+  source: "AI生成" | "人工创建";
+  opportunitySources?: CreativeTopicOpportunity[];
+  evidence?: CreativeTopicEvidence;
+  valueAssessment?: CreativeTopicValueAssessment;
+};
+export type CreativeTopicPlan = {
+  version: number; status: "进行中" | "已确认"; settings: { objective: string; platforms: string[]; quantity: number; constraints: string };
+  selectedTopicIds: string[]; topics: CreativeTopic[]; exploration?: string;
+  expressionFormIds?: Record<string, CreativeExpressionFormId>;
+  weeklyAdvice: { priority: string[]; tests: string[]; deferred: string[]; needs: string[] }; confirmedAt?: string;
+};
+
+export type CreativeMember = {
+  id: string;
+  name: string;
+  role: "项目负责人" | "策划" | "拍摄" | "剪辑" | "审核" | "需求";
+};
+
+export type CreativeProject = {
+  id: string;
+  name: string;
+  coreDirection: string;
+  linkedTasks: Array<{ id: string; name: string }>;
+  products: Array<{ id: string; name: string }>;
+  platforms: string[];
+  contentGoal: string;
+  lead: CreativeMember;
+  members: CreativeMember[];
+  currentChapter: CreativeProjectChapter;
+  updatedAt: string;
+  updatedBy: string;
+  recentOutput: string | null;
+  productBrief: CreativeProductBrief | null;
+  topicPlan: CreativeTopicPlan | null;
+  chapters: Partial<Record<CreativeEditableChapter, CreativeChapterContent>>;
+};
+
+export type CreateCreativeProjectInput = {
+  name: string;
+  linkedTaskIds: string[];
+  productIds: string[];
+  platforms: string[];
+  contentGoal: string;
+  leadId: string;
+  memberIds: string[];
+};
+
+export type CreativeSpaceSnapshot = {
+  projects: CreativeProject[];
+  tasks: Array<{ id: string; name: string }>;
+  products: Array<{ id: string; name: string }>;
+  people: CreativeMember[];
+  documents: CreativeDocument[];
+  inspiration: Array<{
+    id: string;
+    type: "灵感" | "参考视频" | "案例" | "用户评论";
+    title: string;
+    note: string;
+    source: string;
+  }>;
+};
+
+export interface CreativeSpaceAdapter {
+  getSnapshot(): CreativeSpaceSnapshot;
+  hydrate(): CreativeSpaceSnapshot;
+  createProject(input: CreateCreativeProjectInput): CreativeProject;
+  updateChapter(input: { projectId: string; chapter: CreativeEditableChapter; body: string; documentIds: string[] }): CreativeProject;
+  updateProductBrief(input: { projectId: string; brief: CreativeProductBrief }): CreativeProject;
+  updateTopicPlan(input: { projectId: string; plan: CreativeTopicPlan }): CreativeProject;
+}
+
+const tasks = [
+  { id: "task-knife-launch", name: "小王子迷你刀新品内容测试" },
+  { id: "task-oil-pot", name: "厨房小工具短视频选题周" },
+] as const;
+
+const products = [
+  { id: "product-oil-pot", name: "垂直喷油壶" },
+  { id: "product-mini-knife", name: "小王子迷你刀" },
+  { id: "product-lunch-bag", name: "轻量保温午餐包" },
+] as const;
+
+const documents: CreativeDocument[] = [
+  { id: "doc-oil-pot-manual", title: "垂直喷油壶｜产品结构与使用说明", source: "商品资料", updatedAt: "今天 09:20", summary: "无吸管结构、注油方式、清洁步骤与适用油品。" },
+  { id: "doc-oil-pot-comments", title: "垂直喷油壶｜用户问题与评论摘录", source: "资料库", updatedAt: "昨天", summary: "围绕倒油、残油、清洁和喷洒均匀度的真实问题。" },
+  { id: "doc-oil-pot-review", title: "喷油壶内容测试｜上轮复盘", source: "历史项目", updatedAt: "8 月 22 日", summary: "反常识开场和真实演示的完播表现与修改建议。" },
+  { id: "doc-kitchen-shot", title: "厨房小工具｜低成本拍摄场景清单", source: "资料库", updatedAt: "8 月 20 日", summary: "家庭厨房、办公茶水间和桌面俯拍的可用场景。" },
+];
+
+const people: CreativeMember[] = [
+  { id: "member-lin", name: "林晓", role: "项目负责人" },
+  { id: "member-wang", name: "王策", role: "策划" },
+  { id: "member-chen", name: "陈一", role: "拍摄" },
+  { id: "member-zhou", name: "周宁", role: "剪辑" },
+  { id: "member-yu", name: "余安", role: "审核" },
+];
+
+const seededProjects: CreativeProject[] = [
+  {
+    id: "project-oil-pot-no-straw",
+    name: "垂直喷油壶｜为什么没有吸管",
+    coreDirection: "用一次真实倒油演示，解释无吸管结构如何减少残油和清洁负担。",
+    linkedTasks: [tasks[1]],
+    products: [products[0]],
+    platforms: ["抖音", "小红书"],
+    contentGoal: "降低用户对无吸管结构的疑虑，让产品差异点变成购买理由。",
+    lead: people[0],
+    members: [people[0], people[1], people[2], people[3]],
+    currentChapter: "脚本",
+    updatedAt: "今天 10:42",
+    updatedBy: "王策",
+    recentOutput: "脚本 V2",
+    productBrief: null,
+    topicPlan: null,
+    chapters: {
+      产品确认: { body: "无吸管结构减少油液残留，清洁时可直接冲洗壶体。内容中需要用一次倒油和清洁过程，把结构差异转成用户能看到的使用价值。", documentIds: ["doc-oil-pot-manual", "doc-oil-pot-comments"] },
+    },
+  },
+  {
+    id: "project-mini-knife-pov-fruit",
+    name: "小王子迷你刀｜第一视角水果使用场景",
+    coreDirection: "从办公室临时切水果的第一视角，呈现小尺寸刀具的便携和顺手。",
+    linkedTasks: [tasks[0]],
+    products: [products[1]],
+    platforms: ["抖音", "视频号"],
+    contentGoal: "完成一条可在办公室场景低成本拍摄的使用型短视频。",
+    lead: people[1],
+    members: [people[1], people[2], people[3], people[4]],
+    currentChapter: "拍摄",
+    updatedAt: "昨天 18:16",
+    updatedBy: "陈一",
+    recentOutput: "最终拍摄版脚本",
+    productBrief: null,
+    topicPlan: null,
+    chapters: {},
+  },
+  {
+    id: "project-lunch-bag-commute",
+    name: "轻量保温午餐包｜通勤不显笨重",
+    coreDirection: "用地铁通勤和办公桌收纳对比，回应保温包体积大、不好搭配的问题。",
+    linkedTasks: [],
+    products: [products[2]],
+    platforms: ["小红书"],
+    contentGoal: "形成一套以通勤轻便为核心的图文与短视频表达方向。",
+    lead: people[0],
+    members: [people[0], people[1], people[3]],
+    currentChapter: "选题",
+    updatedAt: "8 月 24 日",
+    updatedBy: "林晓",
+    recentOutput: null,
+    productBrief: null,
+    topicPlan: null,
+    chapters: {},
+  },
+];
+
+const inspiration: CreativeSpaceSnapshot["inspiration"] = [
+  {
+    id: "inspiration-1",
+    type: "参考视频",
+    title: "第一视角切水果：动作比口播更快建立理解",
+    note: "开头 2 秒直接落刀，随后才补充产品差异。",
+    source: "团队案例库",
+  },
+  {
+    id: "inspiration-2",
+    type: "用户评论",
+    title: "“没有吸管会不会倒不干净？”",
+    note: "适合作为喷油壶内容的真实问题起点。",
+    source: "商品评论",
+  },
+  {
+    id: "inspiration-3",
+    type: "案例",
+    title: "把结构缺失解释成清洁优势",
+    note: "先承认反常识，再用可见过程建立可信度。",
+    source: "历史复盘",
+  },
+];
+
+function copyProject(project: CreativeProject): CreativeProject {
+  return {
+    ...project,
+    linkedTasks: project.linkedTasks.map((task) => ({ ...task })),
+    products: project.products.map((product) => ({ ...product })),
+    platforms: [...project.platforms],
+    lead: { ...project.lead },
+    members: project.members.map((member) => ({ ...member })),
+    productBrief: project.productBrief ? JSON.parse(JSON.stringify(project.productBrief)) as CreativeProductBrief : null,
+    topicPlan: project.topicPlan ? JSON.parse(JSON.stringify(project.topicPlan)) as CreativeTopicPlan : null,
+    chapters: Object.fromEntries(Object.entries(project.chapters).map(([chapter, content]) => [chapter, { body: content.body, documentIds: [...content.documentIds] }])) as CreativeProject["chapters"],
+  };
+}
+
+function parseProjects(value: string | null): CreativeProject[] | null {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) && parsed.every((item) => item && typeof item === "object" && typeof item.id === "string") ? parsed as CreativeProject[] : null;
+  } catch { return null; }
+}
+
+function parseBackups(value: string | null): CreativeProject[][] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is CreativeProject[] => Array.isArray(item) && item.every((project) => project && typeof project === "object" && typeof project.id === "string")) : [];
+  } catch { return []; }
+}
+
+function mergeProjectSnapshots(seed: CreativeProject[], snapshots: CreativeProject[][]): CreativeProject[] {
+  const records = new Map<string, CreativeProject>();
+  for (const project of seed) records.set(project.id, copyProject(project));
+  for (const snapshot of snapshots) for (const incoming of snapshot) {
+    const current = records.get(incoming.id);
+    if (!current) { records.set(incoming.id, copyProject(incoming)); continue; }
+    records.set(incoming.id, {
+      ...current,
+      ...incoming,
+      productBrief: incoming.productBrief ?? current.productBrief,
+      topicPlan: incoming.topicPlan ?? current.topicPlan,
+      chapters: { ...current.chapters, ...incoming.chapters },
+    });
+  }
+  return [...records.values()];
+}
+
+function recoverMissingProductBrief(project: CreativeProject): CreativeProject {
+  if (project.productBrief || project.id !== "project-oil-pot-no-straw") return project;
+  const snapshot = project.chapters["产品确认"]?.body ?? "";
+  if (!/无吸管|喷油壶|喷嘴/.test(snapshot)) return project;
+  return {
+    ...project,
+    productBrief: {
+      oneLineExpression: "把喷嘴移到下方，不用吸管也能垂直喷出圆形油雾。",
+      keyProof: { fact: "喷嘴位于壶体下方，依靠重力与按压出油，无需从底部抽油。", userValue: "减少吸管残油和清洁死角，垂直握持即可完成喷油。", visualProof: "连续展示倒油、垂直喷油和拆洗过程。", bestUse: ["原理揭秘", "使用演示"] },
+      coreSellingPoints: [
+        { fact: "下置喷嘴通过重力与按压出油，无需吸管。", userValue: "减少残油与清洁负担。", visualProof: "拆开结构并连续喷油。", bestUse: ["疑问答疑", "原理揭秘"] },
+        { fact: "垂直握持即可喷出圆形油雾。", userValue: "做菜时单手操作更顺手。", visualProof: "煎蛋、烤盘等连续喷油动作。", bestUse: ["产品演示", "场景任务"] },
+        { fact: "3D 立体壶身设计可覆盖圆形锅底。", userValue: "喷洒覆盖更贴合日常烹饪。", visualProof: "俯拍锅底覆盖范围。", bestUse: ["使用演示"] },
+      ],
+      routineSellingPoints: [
+        { fact: "标称单次出油约 0.5g。", userValue: "便于按份量控制用油。", visualProof: "固定次数喷洒与用油记录。", bestUse: ["使用体验"] },
+        { fact: "壶盖、油仓、上盖与底座可拆分清洁。", userValue: "日常清洗更方便。", visualProof: "连续拆洗与擦干。", bestUse: ["问题答疑"] },
+      ],
+      audienceScenes: [
+        { audience: "日常做饭、关注控油的厨房用户", scene: "煎蛋、烤盘或空气炸锅前喷油", painPoint: "担心喷油不均、残油和清洁麻烦。" },
+        { audience: "小厨房与轻量烹饪用户", scene: "需要单手快速完成喷油", painPoint: "希望操作直观、收纳与清洁简单。" },
+      ],
+      expressionBoundaries: [
+        { item: "低液位喷油效果", reason: "现有资料未包含完整实测结果。", recommendedExpression: "以实际拍摄结果为准，不预先承诺效果。" },
+        { item: "与其他喷油壶的比较", reason: "没有统一条件下的对比资料。", recommendedExpression: "仅解释本产品结构与使用方式，不贬损竞品。" },
+      ],
+      userQuestions: [
+        { question: "没有吸管，油怎么从瓶底到喷嘴？", underlyingBelief: "用户默认喷油壶需要通过吸管抽油。", contentValue: "用下置喷嘴和重力出油过程解释结构差异。", evidenceStatus: "资料支持" },
+        { question: "喷嘴在下面，会不会滴油或喷到手上？", underlyingBelief: "用户担心下置结构影响日常操作。", contentValue: "在真实倒油、组装和喷油过程中回应疑虑。", evidenceStatus: "待验证推断" },
+        { question: "没有吸管后怎么清洗？", underlyingBelief: "用户关注油壶内部残油和清洁死角。", contentValue: "展示可拆分部件与清洗过程。", evidenceStatus: "资料支持" },
+      ],
+      designStory: { status: "资料不足", storyLine: "现有资料可说明结构变化，但缺少完整设计过程。", originalIntent: "待补充设计初衷或研发记录。", processEvidence: [], contentValue: "可先讲清结构如何改变使用过程，不虚构设计故事。", evidenceStatus: "资料不足" },
+      missingInformation: ["低液位状态下的实际喷油表现", "统一条件下的对比素材", "完整设计研发背景"],
+      conflicts: [],
+    },
+  };
+}
+
+export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
+  let projectsState = seededProjects.map(copyProject);
+  let createdCount = 0;
+  let hasHydratedBrowserState = false;
+  const storageKey = "shueho-commerce-pilot:creative-projects";
+  const backupStorageKey = "shueho-commerce-pilot:creative-projects:backups";
+  const snapshot = (): CreativeSpaceSnapshot => ({
+    projects: projectsState.map(copyProject),
+    tasks: tasks.map((task) => ({ ...task })),
+    products: products.map((product) => ({ ...product })),
+    people: people.map((person) => ({ ...person })),
+    documents: documents.map((document) => ({ ...document })),
+    inspiration: inspiration.map((item) => ({ ...item })),
+  });
+  const restore = () => {
+    if (hasHydratedBrowserState || typeof window === "undefined") return;
+    hasHydratedBrowserState = true;
+    try {
+      const stored = parseProjects(window.localStorage.getItem(storageKey));
+      const backups = parseBackups(window.localStorage.getItem(backupStorageKey));
+      const candidates = [...backups, ...(stored ? [stored] : [])];
+      if (candidates.length) projectsState = mergeProjectSnapshots(projectsState, candidates).map(recoverMissingProductBrief).map(copyProject);
+      else projectsState = projectsState.map(recoverMissingProductBrief);
+    } catch { /* Invalid local preview data falls back to the seeded project state. */ }
+  };
+  const persist = () => {
+    if (typeof window === "undefined") return;
+    hasHydratedBrowserState = true;
+    try {
+      const current = window.localStorage.getItem(storageKey);
+      const previous = parseProjects(current);
+      const backups = parseBackups(window.localStorage.getItem(backupStorageKey));
+      const nextBackups = previous ? [...backups, previous].slice(-5) : backups;
+      window.localStorage.setItem(backupStorageKey, JSON.stringify(nextBackups));
+      window.localStorage.setItem(storageKey, JSON.stringify(projectsState));
+    } catch { /* Local preview remains usable when storage is unavailable. */ }
+  };
+  const hydrate = () => { restore(); return snapshot(); };
+
+  return {
+    getSnapshot() { restore(); return snapshot(); },
+    hydrate,
+    createProject(input) {
+      const lead = people.find((person) => person.id === input.leadId) ?? people[0];
+      const memberIds = new Set([lead.id, ...input.memberIds]);
+      const members = people.filter((person) => memberIds.has(person.id));
+      const project: CreativeProject = {
+        id: `mock-project-${Date.now()}-${createdCount++}`,
+        name: input.name.trim(),
+        coreDirection: input.contentGoal.trim() || "核心内容方向将在需求与选题章节中继续明确。",
+        linkedTasks: tasks.filter((task) => input.linkedTaskIds.includes(task.id)),
+        products: products.filter((product) => input.productIds.includes(product.id)),
+        platforms: [...input.platforms],
+        contentGoal: input.contentGoal.trim(),
+        lead,
+        members,
+        currentChapter: "概览",
+        updatedAt: "刚刚",
+        updatedBy: lead.name,
+        recentOutput: null,
+        productBrief: null,
+        topicPlan: null,
+        chapters: {},
+      };
+      projectsState = [project, ...projectsState];
+      persist();
+      return copyProject(project);
+    },
+    updateChapter(input) {
+      const projectIndex = projectsState.findIndex((project) => project.id === input.projectId);
+      if (projectIndex < 0) throw new Error("未找到要编辑的内容项目。");
+      const project = projectsState[projectIndex];
+      const allowedDocumentIds = new Set(documents.map((document) => document.id));
+      const nextProject: CreativeProject = {
+        ...project,
+        chapters: {
+          ...project.chapters,
+          [input.chapter]: { body: input.body.trim(), documentIds: input.documentIds.filter((id) => allowedDocumentIds.has(id)) },
+        },
+        currentChapter: input.chapter,
+        updatedAt: "刚刚",
+        updatedBy: "当前用户",
+      };
+      projectsState = projectsState.map((item, index) => index === projectIndex ? nextProject : item);
+      persist();
+      return copyProject(nextProject);
+    },
+    updateProductBrief(input) {
+      const projectIndex = projectsState.findIndex((project) => project.id === input.projectId);
+      if (projectIndex < 0) throw new Error("未找到要更新的内容项目。");
+      const project = projectsState[projectIndex];
+      const nextProject: CreativeProject = {
+        ...project,
+        productBrief: JSON.parse(JSON.stringify(input.brief)) as CreativeProductBrief,
+        updatedAt: "刚刚",
+        updatedBy: "当前用户",
+      };
+      projectsState = projectsState.map((item, index) => index === projectIndex ? nextProject : item);
+      persist();
+      return copyProject(nextProject);
+    },
+    updateTopicPlan(input) {
+      const projectIndex = projectsState.findIndex((project) => project.id === input.projectId);
+      if (projectIndex < 0) throw new Error("未找到要更新的内容项目。");
+      const project = projectsState[projectIndex];
+      const nextProject: CreativeProject = { ...project, topicPlan: JSON.parse(JSON.stringify(input.plan)) as CreativeTopicPlan, currentChapter: "选题", updatedAt: "刚刚", updatedBy: "当前用户" };
+      projectsState = projectsState.map((item, index) => index === projectIndex ? nextProject : item);
+      persist();
+      return copyProject(nextProject);
+    },
+  };
+}
+
+// Local persistence keeps the preview stable across a browser refresh. Replace this adapter
+// with an API-backed implementation without changing creative-space UI component contracts.
+export const creativeSpaceAdapter = createMockCreativeSpaceAdapter();

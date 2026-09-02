@@ -64,7 +64,7 @@ export function CopywritingWorkspace({
         </div>
       </header>
 
-      <section className="mx-auto flex min-h-0 w-full max-w-[760px] flex-1 flex-col justify-center px-5 py-16 md:px-8">
+      <section className="flex min-h-0 w-full flex-1 flex-col justify-center px-5 py-16 md:px-8 xl:px-10">
         <div className="text-center">
           <span className="mx-auto flex size-11 items-center justify-center rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-muted)] text-[var(--cp-text-soft)]">
             <Sparkles className="size-5" strokeWidth={1.8} />
