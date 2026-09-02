@@ -301,6 +301,44 @@ function mergeProjectSnapshots(seed: CreativeProject[], snapshots: CreativeProje
   return [...records.values()];
 }
 
+function recoverMissingProductBrief(project: CreativeProject): CreativeProject {
+  if (project.productBrief || project.id !== "project-oil-pot-no-straw") return project;
+  const snapshot = project.chapters["产品确认"]?.body ?? "";
+  if (!/无吸管|喷油壶|喷嘴/.test(snapshot)) return project;
+  return {
+    ...project,
+    productBrief: {
+      oneLineExpression: "把喷嘴移到下方，不用吸管也能垂直喷出圆形油雾。",
+      keyProof: { fact: "喷嘴位于壶体下方，依靠重力与按压出油，无需从底部抽油。", userValue: "减少吸管残油和清洁死角，垂直握持即可完成喷油。", visualProof: "连续展示倒油、垂直喷油和拆洗过程。", bestUse: ["原理揭秘", "使用演示"] },
+      coreSellingPoints: [
+        { fact: "下置喷嘴通过重力与按压出油，无需吸管。", userValue: "减少残油与清洁负担。", visualProof: "拆开结构并连续喷油。", bestUse: ["疑问答疑", "原理揭秘"] },
+        { fact: "垂直握持即可喷出圆形油雾。", userValue: "做菜时单手操作更顺手。", visualProof: "煎蛋、烤盘等连续喷油动作。", bestUse: ["产品演示", "场景任务"] },
+        { fact: "3D 立体壶身设计可覆盖圆形锅底。", userValue: "喷洒覆盖更贴合日常烹饪。", visualProof: "俯拍锅底覆盖范围。", bestUse: ["使用演示"] },
+      ],
+      routineSellingPoints: [
+        { fact: "标称单次出油约 0.5g。", userValue: "便于按份量控制用油。", visualProof: "固定次数喷洒与用油记录。", bestUse: ["使用体验"] },
+        { fact: "壶盖、油仓、上盖与底座可拆分清洁。", userValue: "日常清洗更方便。", visualProof: "连续拆洗与擦干。", bestUse: ["问题答疑"] },
+      ],
+      audienceScenes: [
+        { audience: "日常做饭、关注控油的厨房用户", scene: "煎蛋、烤盘或空气炸锅前喷油", painPoint: "担心喷油不均、残油和清洁麻烦。" },
+        { audience: "小厨房与轻量烹饪用户", scene: "需要单手快速完成喷油", painPoint: "希望操作直观、收纳与清洁简单。" },
+      ],
+      expressionBoundaries: [
+        { item: "低液位喷油效果", reason: "现有资料未包含完整实测结果。", recommendedExpression: "以实际拍摄结果为准，不预先承诺效果。" },
+        { item: "与其他喷油壶的比较", reason: "没有统一条件下的对比资料。", recommendedExpression: "仅解释本产品结构与使用方式，不贬损竞品。" },
+      ],
+      userQuestions: [
+        { question: "没有吸管，油怎么从瓶底到喷嘴？", underlyingBelief: "用户默认喷油壶需要通过吸管抽油。", contentValue: "用下置喷嘴和重力出油过程解释结构差异。", evidenceStatus: "资料支持" },
+        { question: "喷嘴在下面，会不会滴油或喷到手上？", underlyingBelief: "用户担心下置结构影响日常操作。", contentValue: "在真实倒油、组装和喷油过程中回应疑虑。", evidenceStatus: "待验证推断" },
+        { question: "没有吸管后怎么清洗？", underlyingBelief: "用户关注油壶内部残油和清洁死角。", contentValue: "展示可拆分部件与清洗过程。", evidenceStatus: "资料支持" },
+      ],
+      designStory: { status: "资料不足", storyLine: "现有资料可说明结构变化，但缺少完整设计过程。", originalIntent: "待补充设计初衷或研发记录。", processEvidence: [], contentValue: "可先讲清结构如何改变使用过程，不虚构设计故事。", evidenceStatus: "资料不足" },
+      missingInformation: ["低液位状态下的实际喷油表现", "统一条件下的对比素材", "完整设计研发背景"],
+      conflicts: [],
+    },
+  };
+}
+
 export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
   let projectsState = seededProjects.map(copyProject);
   let createdCount = 0;
@@ -322,7 +360,8 @@ export function createMockCreativeSpaceAdapter(): CreativeSpaceAdapter {
       const stored = parseProjects(window.localStorage.getItem(storageKey));
       const backups = parseBackups(window.localStorage.getItem(backupStorageKey));
       const candidates = [...backups, ...(stored ? [stored] : [])];
-      if (candidates.length) projectsState = mergeProjectSnapshots(projectsState, candidates).map(copyProject);
+      if (candidates.length) projectsState = mergeProjectSnapshots(projectsState, candidates).map(recoverMissingProductBrief).map(copyProject);
+      else projectsState = projectsState.map(recoverMissingProductBrief);
     } catch { /* Invalid local preview data falls back to the seeded project state. */ }
   };
   const persist = () => {
