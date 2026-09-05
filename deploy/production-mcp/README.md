@@ -4,7 +4,7 @@ This deployment publishes the Commerce Pilot business-tool MCP boundary. Commerc
 
 See [the server244 runbook](../../docs/deployment/public-mcp-server244.md) for the installed topology, configuration, validation and rollback.
 
-Build both artifacts from one reviewed commit:
+Build the application, operator-job and proxy artifacts from one reviewed commit:
 
 ```sh
 docker build --target runtime -f deploy/production-mcp/Dockerfile \

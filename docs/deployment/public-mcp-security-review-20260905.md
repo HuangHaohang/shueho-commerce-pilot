@@ -8,6 +8,8 @@ The application dependency lock updates `fast-uri` to 3.1.7 and `qs` to 6.16.0. 
 
 Trivy also identified vulnerable `brace-expansion`, `ip-address`, `pacote`, `picomatch`, `sigstore` and `tar` copies under `/usr/local/lib/node_modules/npm/`. Runtime services invoke Node directly; the Dockerfile removes the bundled npm, npx, Yarn and Corepack tools. Package managers remain only in the trusted, non-listening build/operator-job target. The runtime scan must confirm those paths are absent; do not suppress their findings with this exception.
 
+The original Nginx image also included `libuuid` through an unused image-filter/X11 dependency chain. The required fixed APK was unavailable in that base's configured repository. The derived proxy image instead removes all unused optional dynamic modules and asserts that `libuuid` is absent. Re-scan that artifact; do not silently ignore the original proxy findings.
+
 ## Time-limited system-package exceptions
 
 The Debian 12.15 base currently reports the following HIGH advisories without a fixed package version in the scanner data. They remain recorded in the scan; no global ignore file is used.

@@ -1,5 +1,7 @@
 FROM nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
 ARG COMMERCE_SOURCE_COMMIT=uncommitted
 LABEL org.opencontainers.image.revision=$COMMERCE_SOURCE_COMMIT
-# Fixed Alpine package for the util-linux source-family advisories.
-RUN apk add --no-cache 'libuuid=2.42.3-r0'
+# This HTTP/TLS proxy does not load optional transformation or scripting modules.
+# Removing image-filter also removes its unused X11/libuuid dependency chain.
+RUN apk del --no-network nginx-module-acme nginx-module-geoip nginx-module-image-filter nginx-module-njs nginx-module-xslt && \
+    ! apk info -e libuuid
