@@ -33,6 +33,9 @@ ARG COMMERCE_SOURCE_COMMIT=uncommitted
 LABEL org.opencontainers.image.revision=$COMMERCE_SOURCE_COMMIT
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+# Runtime services invoke Node directly. Package managers remain in jobs only.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* && \
+    rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack
 COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist ./dist

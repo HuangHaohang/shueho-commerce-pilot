@@ -81,3 +81,5 @@ Enterprise approval policy is preserved on migration. With `always_ask`, paid MC
 Retain the previous image, release directory, protected configuration and a restorable database snapshot. To roll back application code, select the previous release's `COMMERCE_MCP_IMAGE` and run `docker compose up -d --wait`; keep the same project name and volumes. Do not run `docker compose down -v`, replay paid calls, downgrade append-only schemas, rotate the shared existing Cloudflare Tunnel token or alter other application routes.
 
 Monitor the model/SSH launch services, container health, raw-call `unknown` states, index outbox failures, TLS certificate expiry, token expiry, disk capacity and backup restoration. Renewal of a client token does not authorize changing its workspace or scopes. Renew private service certificates before their expiry and read back TLS verification after replacement.
+
+The [2026-09-05 image reachability review](public-mcp-security-review-20260905.md) records the exact limited system-package exceptions and their 2026-09-19 expiry. Application dependency advisories and bundled package-manager findings must be fixed, not hidden by that review.
