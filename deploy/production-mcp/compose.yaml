@@ -98,7 +98,7 @@ services:
       retries: 10
 
   internal-tls:
-    image: nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: ${COMMERCE_PROXY_IMAGE:?Set a release proxy image}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -129,7 +129,7 @@ services:
       retries: 10
 
   edge:
-    image: nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: ${COMMERCE_PROXY_IMAGE:?Set a release proxy image}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -147,7 +147,7 @@ services:
   # Only this small proxy shares the host network, to reach the SSH loopback
   # listener. It exposes a dedicated Unix socket, never a host TCP listener.
   model-relay:
-    image: nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: ${COMMERCE_PROXY_IMAGE:?Set a release proxy image}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -162,7 +162,7 @@ services:
     logging: *logging
 
   model-client:
-    image: nginx:stable-alpine@sha256:dc5069ad14f19660b141b21236140b91656bf89bbc3e2417c70ae650cd66104c
+    image: ${COMMERCE_PROXY_IMAGE:?Set a release proxy image}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true

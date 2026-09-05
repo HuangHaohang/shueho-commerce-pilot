@@ -13,6 +13,9 @@ docker build --target runtime -f deploy/production-mcp/Dockerfile \
 docker build --target jobs -f deploy/production-mcp/Dockerfile \
   --build-arg COMMERCE_SOURCE_COMMIT="$RELEASE_COMMIT" \
   -t "commerce-pilot-mcp-jobs:$RELEASE_COMMIT" .
+docker build -f deploy/production-mcp/Dockerfile.proxy \
+  --build-arg COMMERCE_SOURCE_COMMIT="$RELEASE_COMMIT" \
+  -t "commerce-pilot-mcp-proxy:$RELEASE_COMMIT" .
 ```
 
 Runtime images have no migration credentials. The jobs target is for bounded operator jobs only. Supply job-only environment files and the private CA through protected mounts; do not use the jobs image as a long-running application.

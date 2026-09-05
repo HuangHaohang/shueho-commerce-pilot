@@ -38,6 +38,8 @@ PostgreSQL certificates validate the internal database names against a dedicated
 
 Nginx, PostgreSQL, pgvector and Elasticsearch images are digest-pinned. App and job artifacts are tagged with the full source commit and include `org.opencontainers.image.revision`. Release archives contain reviewed Git files only; environment files, runtime directories, database snapshots, model weights and client credentials are excluded.
 
+`COMMERCE_PROXY_IMAGE` selects the release-tagged proxy image built from the pinned Nginx base; it upgrades Alpine `libuuid` to the explicit fixed package version in `Dockerfile.proxy`. Use the same source commit for the app, jobs and proxy artifacts.
+
 ## Protected configuration contract
 
 `COMMERCE_CONFIG_DIR` contains these operator-provisioned files; the repository does not contain their values:
