@@ -205,6 +205,8 @@ Public responses use stateless Streamable HTTP SSE with native SDK keepalive com
 
 ## Audit And Data Minimization
 
+All credential-bearing business dispatch inside the warehouse uses `JustOneApiClient`. The native/public MCP schema remains unchanged: tokens, quota counters, proxy choices and raw-call ids are never caller arguments. Each admitted logical call sends at most one provider HTTP request; confirmed quota/permission feedback only changes which token is eligible for the next admitted call. PostgreSQL stores per-token/interface counters and scoped immutable attempt receipts. See [Token Quota Operation](../deployment/justoneapi-tokens.md).
+
 An operator may enable [dedicated JustOneAPI subscription egress](../deployment/justoneapi-proxy.md) only inside the independent external-data service. Public/internal MCP and Harness contracts do not accept node, subscription, proxy or retry arguments. Required proxy mode fails closed, and node switching never authorizes replaying a dispatched paid call.
 
 Audit events record action, tenant/workspace/user, endpoint id, platform, source, call id, parameter keys, pricing state, business code, result size and outcome. They do not record:

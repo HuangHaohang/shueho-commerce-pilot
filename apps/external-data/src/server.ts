@@ -9,6 +9,7 @@ import { LocalModelClient } from "./local-model-client.js";
 import { createExternalDataMcpServer } from "./mcp-server.js";
 import { ExternalDataPipeline } from "./pipeline.js";
 import { closeJustOneApiProxyPool, getJustOneApiProxyPool, justOneApiProxyStatus } from "./justoneapi-proxy-runtime.js";
+import { getJustOneApiClient } from "./justoneapi-runtime.js";
 import { drainIndexOutbox, ensureSearchIndex, searchIndexHealth } from "./search-index.js";
 
 const pipeline = new ExternalDataPipeline();
@@ -20,6 +21,7 @@ await database.query("SELECT 1");
 await ensureSearchIndex();
 await models.warmup();
 await getJustOneApiProxyPool();
+await getJustOneApiClient().initialize();
 
 const server = createServer(async (request, response) => {
   try {
@@ -28,10 +30,11 @@ const server = createServer(async (request, response) => {
     if (request.headers.origin) return sendJson(response, 403, { error: "Browser origins are not allowed." });
     const url = new URL(request.url ?? "/", `http://${host}`);
     if (request.method === "GET" && url.pathname === "/health") {
-      const [modelHealth, searchHealth, catalogHealth] = await Promise.all([
+      const [modelHealth, searchHealth, catalogHealth, tokenHealth] = await Promise.all([
         models.health().catch((error) => ({ ok: false, error: safeMessage(error) })),
         searchIndexHealth().catch((error) => ({ status: "unavailable", error: safeMessage(error) })),
         providerCatalogHealth().catch((error) => ({ totalEndpoints: 0, callableEndpoints: 0, error: safeMessage(error) })),
+        getJustOneApiClient().status().catch(() => ({ tokens: 0, activeTokens: 0, endpoints: 0, availablePairs: 0 })),
       ]);
       const healthy = modelHealth.ok !== false && searchHealth.status !== "unavailable" && Number(catalogHealth.callableEndpoints) > 0;
       // Stored evidence remains readable during an egress outage. Paid calls fail closed in the adapter.
@@ -41,6 +44,9 @@ const server = createServer(async (request, response) => {
         service: "shueho-external-data",
         providerConfigured: pipeline.providerConfigured,
         justOneApiProxy: proxyHealth,
+        justOneApiTokens: tokenHealth,
+        providerCallsReady: pipeline.providerConfigured && tokenHealth.availablePairs > 0 &&
+          (proxyHealth.mode === "off" || proxyHealth.healthyNodes > 0),
         postgres: "connected",
         localModels: modelHealth,
         elasticsearch: searchHealth,

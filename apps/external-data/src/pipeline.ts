@@ -4,7 +4,8 @@ import { config } from "./config.js";
 import { sha256Json } from "./canonical.js";
 import { getEndpoint, validateEndpointParams } from "./endpoint-registry.js";
 import { buildEnrichmentQueryText, enrichCandidates } from "./enrichment.js";
-import { JustOneApiRestClient, JustOneApiRestError } from "./justoneapi-rest-client.js";
+import { JustOneApiError } from "./justoneapi-errors.js";
+import { getJustOneApiClient } from "./justoneapi-runtime.js";
 import { LocalModelClient } from "./local-model-client.js";
 import { buildProviderTransportRequest } from "./transport-request.js";
 import { unwrapProviderPayload } from "./normalizers.js";
@@ -29,7 +30,7 @@ import {
 
 export class ExternalDataPipeline {
   constructor(
-    private readonly provider = new JustOneApiRestClient(),
+    private readonly provider = getJustOneApiClient(),
     private readonly models = new LocalModelClient(),
   ) {}
 
@@ -62,9 +63,13 @@ export class ExternalDataPipeline {
     if (prepared.reused) return this.resumeProcessingOrLoad(scope, prepared);
     let providerResult: ProviderCallResult;
     try {
-      providerResult = await this.provider.call(prepared.endpoint, prepared.transportRequest);
+      providerResult = await this.provider.call(prepared.endpoint, prepared.transportRequest, {
+        rawCallId: prepared.rawCallId,tenantId: scope.tenantId,workspaceId: scope.workspaceId,
+        userId: scope.userId,
+        apiPath: prepared.endpoint.apiPath,requestSha256: prepared.transportRequest.requestSha256,
+      });
     } catch (error) {
-      if (error instanceof JustOneApiRestError && !error.uncertain) {
+      if (error instanceof JustOneApiError && !error.uncertain) {
         await markWarehouseCallBusinessFailed(scope, prepared, safeMessage(error));
         return loadCompactResearchResult(scope, prepared.researchRequestId);
       } else {

@@ -10,7 +10,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { config } from "./config.js";
 import { JustOneApiProxyPool, openProxyTunnel, type ProxyNode } from "./justoneapi-proxy-pool.js";
-import { JustOneApiRestClient } from "./justoneapi-rest-client.js";
+import { createTransportTestClient } from "./justoneapi-transport-test-support.js";
 import { buildProviderTransportRequest } from "./transport-request.js";
 import type { ProviderEndpoint } from "./types.js";
 
@@ -97,7 +97,7 @@ async function environment(handler?: (request: IncomingMessage, response: Server
   config.justOneApi.baseUrl = target.origin;
   config.justOneApi.token = "private-test-provider-token";
   config.justOneApi.proxy.mode = "off";
-  const client = new JustOneApiRestClient(pool);
+  const client = createTransportTestClient(pool);
   return { client, pool, nodes, paid, connects, disabled, target };
 }
 
@@ -206,7 +206,7 @@ describe("JustOneAPI HTTP/TLS proxy boundary", () => {
       .rejects.toMatchObject({ code: "INVALID_PARAMETER", uncertain: false });
     config.justOneApi.proxy.mode = "required";
     config.justOneApi.proxy.nodesFile = join(fixtureDirectory, "does-not-exist.json");
-    await expect(new JustOneApiRestClient().call(endpoint, buildProviderTransportRequest(endpoint, {})))
+    await expect(createTransportTestClient().call(endpoint, buildProviderTransportRequest(endpoint, {})))
       .rejects.toMatchObject({ code: "PROXY_UNAVAILABLE", uncertain: false });
     expect(fixture.paid).toHaveLength(0);
   });

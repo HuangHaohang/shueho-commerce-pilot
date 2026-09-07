@@ -42,6 +42,8 @@ Nginx, PostgreSQL, pgvector and Elasticsearch images are digest-pinned. App and 
 
 ## Protected configuration contract
 
+The [unified JustOneAPI client](justoneapi-tokens.md) additionally requires the protected token-file overlay, migrations `030`–`032` and a validated quota import. Token/endpoint budgets are independent of provider prices, Commerce policy and MCP client credentials. Startup and readback must confirm the intended pool and initialized allowances before admitting new provider calls.
+
 The optional [JustOneAPI proxy overlay](justoneapi-proxy.md) adds protected subscription egress exclusively to the warehouse REST adapter. It does not alter public MCP, the Mac retrieval tunnel or other service routing; activate it only after importing and verifying the same immutable listener revision for warehouse and Mihomo.
 
 `COMMERCE_CONFIG_DIR` contains these operator-provisioned files; the repository does not contain their values:

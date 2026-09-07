@@ -1,0 +1,6 @@
+services:
+  warehouse:
+    environment:
+      JUSTONEAPI_TOKENS_FILE: /run/justoneapi/tokens.json
+    volumes:
+      - ${COMMERCE_JUSTONEAPI_TOKENS_FILE:?Set a protected service token file}:/run/justoneapi/tokens.json:ro

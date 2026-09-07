@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { getEndpoint, listPlatforms, searchEndpoints } from "./endpoint-registry.js";
 import { hybridBusinessSearch } from "./hybrid-search.js";
-import { JustOneApiRestError } from "./justoneapi-rest-client.js";
+import { JustOneApiError } from "./justoneapi-errors.js";
 import { LocalModelError } from "./local-model-client.js";
 import { readMarketplaceOptions, readMarketplaceResearchPlatforms } from "./market-options.js";
 import {
@@ -682,7 +682,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
         }
         return toolSuccess(result);
       } catch (error) {
-        if (workflowExecutionId && workflowStepId && error instanceof JustOneApiRestError && error.uncertain) {
+        if (workflowExecutionId && workflowStepId && error instanceof JustOneApiError && error.uncertain) {
           await markMarketplaceWorkflowStepUnknown(scope, {
             executionId: workflowExecutionId,
             stepId: workflowStepId,
@@ -700,7 +700,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
             message: safeToolMessage(error),
           }).catch(() => undefined);
         }
-        if (error instanceof JustOneApiRestError && error.uncertain) throw error;
+        if (error instanceof JustOneApiError && error.uncertain) throw error;
         return toolSuccess({
           success: false,
           provider_completed: false,

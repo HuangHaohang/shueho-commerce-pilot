@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { config } from "./config.js";
-import { JustOneApiRestClient } from "./justoneapi-rest-client.js";
+import { createTransportTestClient } from "./justoneapi-transport-test-support.js";
 import { buildProviderTransportRequest } from "./transport-request.js";
 import type { ProviderEndpoint } from "./types.js";
 
@@ -38,7 +38,7 @@ afterEach(() => {
   config.justOneApi.token = originalToken;
 });
 
-describe("JustOneApiRestClient", () => {
+describe("JustOneApiHttpTransport", () => {
   it("returns exact bytes for non-JSON HTTP responses instead of discarding them", async () => {
     const body = Buffer.from([0x66, 0x61, 0x69, 0x6c, 0xff]);
     const server = createServer((_request, response) => {
@@ -51,7 +51,7 @@ describe("JustOneApiRestClient", () => {
       if (!address || typeof address === "string") throw new Error("test server did not bind");
       config.justOneApi.baseUrl = `http://127.0.0.1:${address.port}`;
       config.justOneApi.token = "test-token";
-      const result = await new JustOneApiRestClient().call(endpoint, buildProviderTransportRequest(endpoint, { keyword: "蘑菇勺" }));
+      const result = await createTransportTestClient().call(endpoint, buildProviderTransportRequest(endpoint, { keyword: "蘑菇勺" }));
       expect(result.state).toBe("business_failed");
       expect(result.payload).toBeNull();
       expect(Buffer.from(result.rawBytes)).toEqual(body);
@@ -93,7 +93,7 @@ describe("JustOneApiRestClient", () => {
         },
       };
       const request = buildProviderTransportRequest(postEndpoint, { keyword: "通勤包", currentPage: 1 });
-      const result = await new JustOneApiRestClient().call(postEndpoint, request);
+      const result = await createTransportTestClient().call(postEndpoint, request);
       expect(result.state).toBe("succeeded");
       expect(captured).toMatchObject({
         method: "POST",

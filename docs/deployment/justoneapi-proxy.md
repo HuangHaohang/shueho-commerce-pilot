@@ -5,7 +5,7 @@ Commerce Pilot remains built on the open-source Codex Harness. This feature belo
 ## Traffic and payment boundary
 
 ```text
-Governed paid call -> JustOneApiRestClient
+Governed paid call -> JustOneApiClient
   -> per-request healthy-node shuffle bag
   -> that node's fixed internal HTTP CONNECT listener
   -> verified TLS to the configured JustOneAPI origin
@@ -86,10 +86,14 @@ docker compose --env-file /path/to/release.env \
   -f deploy/production-mcp/compose.justoneapi-proxy.yaml up -d justoneapi-egress warehouse
 ```
 
-The sidecar runs non-root with read-only root, no capabilities, bounded resources and only the dedicated config mount. No ports are published. Only warehouse joins its internal listener network; a separate sidecar egress network keeps listeners isolated from edge/BFF. Warehouse retains other-service egress; only `JustOneApiRestClient` opts into the pool. The overlay does not modify the Mac's existing sing-box or unrelated services.
+The sidecar runs non-root with read-only root, no capabilities, bounded resources and only the dedicated config mount. No ports are published. Only warehouse joins its internal listener network; a separate sidecar egress network keeps listeners isolated from edge/BFF. Warehouse retains other-service egress; only `JustOneApiClient` opts into the pool. The overlay does not modify the Mac's existing sing-box or unrelated services.
 
 ## Acceptance
 
 Run the repository validation matrix plus `justoneapi-proxy-*` tests. Real socket tests use a local TLS origin and independent CONNECT servers to verify node rotation, safe pre-dispatch switching, no direct fallback, unrelated HTTP isolation, no token in CONNECT, certificate verification, origin/header restrictions, no redirects, and exactly one GET/POST after received requests disconnect or response bodies time out. Import tests cover strict fields, fixed routing, immutable receipts and permissions. No paid JustOneAPI request is needed.
 
 References: [Mihomo listeners](https://wiki.metacubex.one/en/config/inbound/listeners/), [Mihomo HTTP listeners](https://wiki.metacubex.one/en/config/inbound/listeners/http/), [Node HTTPS](https://nodejs.org/api/https.html), [Node HTTP CONNECT](https://nodejs.org/api/http.html#event-connect).
+
+## Application-built Linux proxy image
+
+When the deployment registry cannot serve the official image, `Dockerfile.justoneapi-proxy` builds a scratch image from the official `v1.19.30` linux-amd64 archive. The Docker build verifies compressed SHA-256 `cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84` before extraction and includes only the executable, its upstream GPL license and the CA bundle from the pinned certificate stage. It has no shell or package manager. The build context must contain only `mihomo.gz` and `LICENSE.mihomo`; never include token, subscription or environment files. The official source remains https://github.com/MetaCubeX/mihomo/tree/v1.19.30. Tag it with the reviewed Commerce commit and use its verified image digest in the release environment.

@@ -6,7 +6,7 @@ services:
       JUSTONEAPI_PROXY_MODE: required
       JUSTONEAPI_PROXY_NODES_FILE: /run/justoneapi-proxy/nodes.json
     volumes:
-      - ${COMMERCE_JUSTONEAPI_PROXY_REVISION_DIR:?Set a protected immutable proxy revision}:/run/justoneapi-proxy:ro
+      - ${COMMERCE_JUSTONEAPI_PROXY_REVISION_DIR:?Set a protected immutable proxy revision}/nodes.json:/run/justoneapi-proxy/nodes.json:ro
     networks:
       justoneapi-proxy: {}
     depends_on:

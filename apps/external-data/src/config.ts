@@ -14,6 +14,7 @@ const envSchema = z.object({
   EXTERNAL_DATA_ELASTICSEARCH_INDEX: z.string().regex(/^[a-z0-9_-]+$/).default("commerce-business-products-v1"),
   JUSTONEAPI_API_BASE_URL: z.string().url().default("https://api.justoneapi.com"),
   JUSTONEAPI_API_TOKEN: z.string().default(""),
+  JUSTONEAPI_TOKENS_FILE: z.string().min(1).optional(),
   JUSTONEAPI_API_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(180_000).default(120_000),
   JUSTONEAPI_API_MAX_RESPONSE_BYTES: z.coerce.number().int().min(65_536).max(67_108_864).default(67_108_864),
   JUSTONEAPI_PROXY_MODE: z.enum(["off", "required"]).default("off"),
@@ -52,8 +53,8 @@ if (parsed.NODE_ENV === "production") {
   if (parsed.LOCAL_MODEL_INTERNAL_TOKEN.length < 32) {
     throw new Error("LOCAL_MODEL_INTERNAL_TOKEN must contain at least 32 characters in production.");
   }
-  if (!parsed.JUSTONEAPI_API_TOKEN) {
-    throw new Error("JUSTONEAPI_API_TOKEN is required in production.");
+  if (!parsed.JUSTONEAPI_API_TOKEN && !parsed.JUSTONEAPI_TOKENS_FILE) {
+    throw new Error("A JustOneAPI token or protected token file is required in production.");
   }
 }
 
@@ -70,6 +71,7 @@ export const config = {
   justOneApi: {
     baseUrl: parsed.JUSTONEAPI_API_BASE_URL.replace(/\/$/, ""),
     token: parsed.JUSTONEAPI_API_TOKEN,
+    tokensFile: parsed.JUSTONEAPI_TOKENS_FILE,
     timeoutMs: parsed.JUSTONEAPI_API_TIMEOUT_MS,
     maxResponseBytes: parsed.JUSTONEAPI_API_MAX_RESPONSE_BYTES,
     proxy: {

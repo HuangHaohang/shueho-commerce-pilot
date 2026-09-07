@@ -52,7 +52,7 @@ When a Harness Turn explicitly selects first-party catalog products, the control
 
 Harness never searches this endpoint directory. `preflight_social_content_research` and `preflight_marketplace_product_research` receive business constraints plus the current workspace allowlist, then deterministically select only endpoints whose database request schemas satisfy the hard capability. Exact-window social discovery requires keyword/source/start/end fields; interaction-ranked discovery requires a platform endpoint with a declared high-interaction sort; marketplace research requires keyword, seller type, price filters and a database-declared default sort. A missing capability fails before reservation, approval or provider dispatch.
 
-`JustOneApiRestClient` has no endpoint-specific URL branches. It receives one prepared transport request from the database contract, always injects the service-owned Token into the URL, supports GET query and POST query/form requests, preserves the Token-free request query/body/content type in the immutable raw row, and applies the common `code=0` billing result semantics. Provider date parameters declared as `yyyy-MM-dd HH:mm:ss` are deterministically normalized in `Asia/Shanghai` before validation.
+`JustOneApiClient` has no endpoint-specific URL branches. It receives one prepared transport request from the database contract, always injects the service-owned Token into the URL, supports GET query and POST query/form requests, preserves the Token-free request query/body/content type in the immutable raw row, and applies the common `code=0` billing result semantics. Provider date parameters declared as `yyyy-MM-dd HH:mm:ss` are deterministically normalized in `Asia/Shanghai` before validation.
 
 `business_product` holds stable `platform + item_id` identity and first/last-seen state. `business_product_observation` retains query-specific price, sales bucket, shop and relevance at each observation time, so later searches never overwrite market history.
 
@@ -119,7 +119,7 @@ Workflow evidence exposes a stable `evidence_id` and research receipt plus kind,
 
 ## Reliability And Security
 
-`JUSTONEAPI_PROXY_MODE=required` enables a server-owned subscription egress pool exclusively in `JustOneApiRestClient`. Immutable node/listener revisions provide per-request shuffled round-robin selection, TLS-only health probes, failure cooldown and recovery. CONNECT/TLS failover finishes before any paid HTTP bytes; post-dispatch errors preserve the existing non-replay contract. Missing/all-down pools fail closed. Safe aggregate health is independent of stored-evidence readiness. See [configuration, deployment and validation](../deployment/justoneapi-proxy.md).
+`JUSTONEAPI_PROXY_MODE=required` enables a server-owned subscription egress pool exclusively in `JustOneApiClient`. Immutable node/listener revisions provide per-request shuffled round-robin selection, TLS-only health probes, failure cooldown and recovery. CONNECT/TLS failover finishes before any paid HTTP bytes; post-dispatch errors preserve the existing non-replay contract. Missing/all-down pools fail closed. Safe aggregate health is independent of stored-evidence readiness. See [configuration, deployment and validation](../deployment/justoneapi-proxy.md).
 
 - The paid REST call is dispatched at most once. A transport timeout after dispatch becomes `unknown` and is never retried automatically.
 - Free plan creation is idempotent by Harness call id or public MCP idempotency key. A lost plan-execution response may read back only the execution bound to that same source call id; another caller cannot replay or take over an executing plan.
@@ -169,4 +169,4 @@ An operator can re-run only the local processing stage for a confirmed raw call:
 npm run external-data:repair:research -- --research-request-id=<warehouse-research-uuid>
 ```
 
-The command fails unless that exact stored request exists; it never falls through to `JustOneApiRestClient.call`.
+The command fails unless that exact stored request exists; it never falls through to `JustOneApiClient.call`.
