@@ -5,6 +5,7 @@ export function requiresExternalDataApproval(
   policy: {
     approvalMode: ExternalDataApprovalMode;
     perCallAutoApprovalMicros: number | null;
+    monthlySpendLimitMicros?: number | null;
   },
   requested: ExternalDataApprovalMode,
   priceMicros: number | null,
@@ -17,8 +18,10 @@ export function requiresExternalDataApproval(
   };
   if (rank[policy.approvalMode] < rank[requested]) return true;
   if (requested === "task") return false;
-  const ceiling = policy.perCallAutoApprovalMicros;
-  return priceMicros === null || ceiling === null || priceMicros > ceiling;
+  // With no independent per-call cap, a finite monthly budget bounds policy
+  // automation; the reservation path checks its remaining balance atomically.
+  const ceiling = policy.perCallAutoApprovalMicros ?? policy.monthlySpendLimitMicros;
+  return priceMicros === null || ceiling == null || priceMicros > ceiling;
 }
 
 export function approvalModeAfterTaskBoundary(

@@ -311,6 +311,50 @@ try {
   assert(governance.policy.perTurnCallLimit === 1, "per-Turn call limit readback failed");
   assert(governance.policy.retentionDays === null, "permanent metadata retention readback failed");
 
+  await updateExternalDataPolicy(context, {
+    ...governance.policy,
+    approvalMode: "policy",
+    monthlySpendLimitMicros: 1_500_000,
+    perCallAutoApprovalMicros: null,
+  });
+  const budgetInput = (callId: string) => ({
+    source: "external_mcp" as const, callId, endpointId: "taobao.policy_v1", platform: "taobao",
+    parameterHash: "90".repeat(32), parameterKeys: ["item_id"], requestedApprovalMode: "policy" as const,
+  });
+  const contenders = ["call-budget-concurrent-a", "call-budget-concurrent-b"];
+  const reservations = await Promise.allSettled(contenders.map((id) => reserveExternalDataCall(scope, budgetInput(id))));
+  const winners = reservations.flatMap((result, index) => result.status === "fulfilled" ? [{ reservation: result.value, callId: contenders[index]! }] : []);
+  assert(winners.length === 1, "concurrent reservations overspent the same monthly balance");
+  const loser = reservations.find((result) => result.status === "rejected");
+  assert(loser?.status === "rejected" && loser.reason?.code === "EXTERNAL_DATA_SPEND_LIMIT", "remaining monthly budget did not reject the second reservation");
+  const winner = winners[0]!;
+  assert(!winner.reservation.requiresApproval, "monthly-budget-only policy still required per-call approval");
+  const replay = await reserveExternalDataCall(scope, budgetInput(winner.callId));
+  assert(replay.reservationId === winner.reservation.reservationId, "reservation replay charged another slot");
+  let reservedQuoteDenied = false;
+  try {
+    await quoteExternalDataPlan(scope, { planId: marketplacePlanId, planKey: marketplacePlanKey, source: "external_mcp",
+      calls: [{ endpointId: "taobao.policy_v1", platform: "taobao", count: 1 }] });
+  } catch (error) {
+    reservedQuoteDenied = error instanceof Error && "code" in error && error.code === "EXTERNAL_DATA_SPEND_LIMIT";
+  }
+  assert(reservedQuoteDenied, "free quote ignored the already reserved monetary budget");
+  await cancelExternalDataCall(scope, winner.reservation.reservationId, "upstream_unavailable");
+  const released = await reserveExternalDataCall(scope, budgetInput("call-budget-after-cancel"));
+  assert(!released.requiresApproval, "cancelling an unsent reservation did not release budget");
+  await dispatchExternalDataCall(scope, released.reservationId, { endpoint_id: "taobao.policy_v1", params: { item_id: "fixture-only" } });
+  await settleExternalDataCall(scope, released.reservationId, {
+    state: "unknown", upstreamCode: null, upstreamMessage: "fixture uncertainty", resultBytes: null, responsePayload: null,
+  });
+  await cancelExternalDataCall(scope, released.reservationId, "upstream_unavailable");
+  let uncertainBudgetDenied = false;
+  try {
+    await reserveExternalDataCall(scope, budgetInput("call-budget-after-unknown"));
+  } catch (error) {
+    uncertainBudgetDenied = error instanceof Error && "code" in error && error.code === "EXTERNAL_DATA_SPEND_LIMIT";
+  }
+  assert(uncertainBudgetDenied, "an uncertain dispatch released its reserved monthly budget");
+
   const createdToken = await createMcpAccessToken(context, {
     name: "verification",
     scopes: ["external_data.catalog.read", "external_data.call"],
@@ -351,6 +395,11 @@ try {
     noReservationPlanQuoteReadback: true,
     planStepLineageReadback: true,
     pricedPolicyReadback: true,
+    monthlyBudgetOnlyAutomation: true,
+    concurrentBudgetReservation: true,
+    reservedBudgetQuoteReadback: true,
+    unsentCancellationReleasesBudget: true,
+    uncertainDispatchHoldsBudget: true,
     taskGrantReadback: true,
     perTurnCallLimitReadback: true,
     permanentMetadataRetentionReadback: true,

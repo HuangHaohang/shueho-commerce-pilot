@@ -82,6 +82,8 @@ Only publish the Cloudflare hostname after the local ingress is healthy, unauthe
 
 Enterprise approval policy is preserved on migration. With `always_ask`, paid MCP execution returns `APPROVAL_REQUIRED`; a token does not grant automatic spending. Human approval requires the separately deployed Commerce Pilot Harness web flow, or an authorized operator can later configure a priced enterprise policy ceiling through normal governance. The MCP deployment must not weaken this policy for a smoke test.
 
+An authorized operator can enable monthly-budget-only automation by selecting `approval_mode=policy`, setting a finite `monthly_spend_limit_micros`, and leaving `per_call_auto_approval_micros` null. Deploy the monthly-budget-aware control service before activating that configuration; older control versions treat a null per-call ceiling as requiring approval. Keep the existing workspace identity, endpoint allowlists and other quotas, retain the policy audit receipt, and verify that pending and uncertain calls still occupy budget. Policy rows are read live, so changing the approved configuration itself requires no further service restart.
+
 ## Rollback and maintenance
 
 Retain the previous image, release directory, protected configuration and a restorable database snapshot. To roll back application code, select the previous release's `COMMERCE_MCP_IMAGE` and run `docker compose up -d --wait`; keep the same project name and volumes. Do not run `docker compose down -v`, replay paid calls, downgrade append-only schemas, rotate the shared existing Cloudflare Tunnel token or alter other application routes.

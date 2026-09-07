@@ -32,7 +32,7 @@ describe("external data approval policy", () => {
     )).toBe(false);
   });
 
-  it("requires a priced rate card and per-call ceiling for policy automation", () => {
+  it("requires a priced rate card and a finite enterprise budget for policy automation", () => {
     expect(requiresExternalDataApproval(
       { approvalMode: "policy", perCallAutoApprovalMicros: null },
       "policy",
@@ -53,6 +53,16 @@ describe("external data approval policy", () => {
       "policy",
       2_000_000,
     )).toBe(false);
+  });
+
+  it("automates priced calls under a monthly budget without an independent per-call cap", () => {
+    const policy = { approvalMode: "policy" as const, perCallAutoApprovalMicros: null, monthlySpendLimitMicros: 500_000_000 };
+    expect(requiresExternalDataApproval(policy, "policy", 500_000_000)).toBe(false);
+    expect(requiresExternalDataApproval(policy, "policy", 500_000_001)).toBe(true);
+    expect(requiresExternalDataApproval(policy, "policy", null)).toBe(true);
+    expect(requiresExternalDataApproval({ ...policy, monthlySpendLimitMicros: null }, "policy", 1)).toBe(true);
+    expect(requiresExternalDataApproval({ ...policy, perCallAutoApprovalMicros: 200_000 }, "policy", 200_001)).toBe(true);
+    expect(requiresExternalDataApproval(policy, "always_ask", 1)).toBe(true);
   });
 
   it("ends a task-scoped grant at the next task boundary", () => {

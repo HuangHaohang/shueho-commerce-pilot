@@ -748,6 +748,7 @@ export async function reserveExternalDataCall(
       {
         approvalMode: policy.approval_mode,
         perCallAutoApprovalMicros: nullableNumber(policy.per_call_auto_approval_micros),
+        monthlySpendLimitMicros: nullableNumber(policy.monthly_spend_limit_micros),
       },
       input.requestedApprovalMode,
       price,
@@ -945,8 +946,8 @@ export async function settleExternalDataCall(
             upstream_code = $6,
             upstream_message = $7,
             result_bytes = $8,
-            vendor_cost_micros = CASE WHEN $5 = 'succeeded' THEN vendor_cost_micros ELSE NULL END,
-            billable_amount_micros = CASE WHEN $5 = 'succeeded' THEN billable_amount_micros ELSE NULL END,
+            vendor_cost_micros = CASE WHEN $5 IN ('succeeded', 'unknown') THEN vendor_cost_micros ELSE NULL END,
+            billable_amount_micros = CASE WHEN $5 IN ('succeeded', 'unknown') THEN billable_amount_micros ELSE NULL END,
             completed_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $1 AND tenant_id = $2 AND workspace_id = $3 AND user_id = $4
@@ -1144,16 +1145,24 @@ async function readPeriodUsage(
     [scope.tenantId],
   );
   const periodStart = billingPeriodStart(contract.rows[0]?.billing_anchor_day ?? 1);
-  const result = await client.query<{ calls_used: string; spend_used_micros: string }>(
+  const result = await client.query<{ calls_used: string; spend_used_micros: string; unresolved_amounts: string }>(
     `
       SELECT
-        count(*) FILTER (WHERE state IN ('dispatched', 'succeeded', 'business_failed', 'unknown'))::text AS calls_used,
-        COALESCE(sum(billable_amount_micros) FILTER (WHERE state = 'succeeded'), 0)::text AS spend_used_micros
+        count(*) FILTER (WHERE state IN ('reserved', 'dispatched', 'succeeded', 'business_failed', 'unknown'))::text AS calls_used,
+        COALESCE(sum(billable_amount_micros) FILTER (WHERE state IN ('reserved', 'dispatched', 'succeeded', 'unknown')), 0)::text AS spend_used_micros,
+        count(*) FILTER (WHERE state = 'unknown' AND billable_amount_micros IS NULL)::text AS unresolved_amounts
       FROM commerce_external_data_call
       WHERE tenant_id = $1 AND workspace_id = $2 AND created_at >= $3
     `,
     [scope.tenantId, scope.workspaceId, periodStart],
   );
+  if (policy.monthly_spend_limit_micros !== null && parseCount(result.rows[0]?.unresolved_amounts) > 0) {
+    throw new ExternalDataGovernanceError(
+      "存在结果未确定且预留金额缺失的历史调用，请先核对后再使用月预算。",
+      "EXTERNAL_DATA_UNCERTAIN_BUDGET",
+      409,
+    );
+  }
   return {
     callsUsed: parseCount(result.rows[0]?.calls_used),
     spendUsedMicros: parseCount(result.rows[0]?.spend_used_micros),

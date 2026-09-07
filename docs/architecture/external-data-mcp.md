@@ -117,9 +117,11 @@ The composer exposes three application-defined modes:
 |---|---|---|
 | `always_ask` | Ask before each paid external call | Holds the App Server tool call until an application approval is answered |
 | `task` | User preauthorizes the current task | Dispatches without another per-call prompt when workspace maximum automation permits task grants; resets to `always_ask` when leaving or starting another task |
-| `policy` | Follow enterprise automation policy | Requires enterprise policy mode, an active official/provider or workspace price, and a per-call price at or below the configured ceiling |
+| `policy` | Follow enterprise automation policy | Requires enterprise policy mode and an active official/provider or workspace price; an optional per-call ceiling applies, or a finite monthly spend budget bounds automation when no per-call ceiling is set |
 
 Every mode still enforces user RBAC, workspace status, platform and endpoint allowlists, monthly call limit, monetary budget, and vendor availability. None grants computer control, host filesystem access, arbitrary internet access, or unregistered tools.
+
+With `per_call_auto_approval_micros = NULL` and a finite `monthly_spend_limit_micros`, policy-mode calls do not require an independent single-call price limit. Admission still reserves the priced amount against the remaining monthly balance under the workspace policy-row lock. Reserved, dispatched and uncertain calls continue to occupy budget until cancellation or confirmed settlement; concurrent reservations cannot each spend the same balance. Unpriced calls and policy configurations without either monetary bound still require approval. This does not change the client's explicit `always_ask` choice.
 
 When a workspace configures a monetary budget, every callable endpoint must have an active official provider price or a workspace rate-card override. An unpriced endpoint is rejected rather than allowed to bypass the configured spend ceiling. Workspaces without a monetary budget may still explicitly approve an unpriced call, which remains visible as an operational exception.
 
