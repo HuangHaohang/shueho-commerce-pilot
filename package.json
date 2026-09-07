@@ -42,6 +42,8 @@
     "external-data:import-catalog": "npm --workspace @shueho-commerce-pilot/external-data run import:catalog",
     "external-data:import-market-profiles": "npm --workspace @shueho-commerce-pilot/external-data run import:market-profiles",
     "external-data:import-business-workflows": "npm --workspace @shueho-commerce-pilot/external-data run import:business-workflows",
+    "external-data:proxy:import": "npm --workspace @shueho-commerce-pilot/external-data run proxy:import --",
+    "external-data:proxy:verify": "npm --workspace @shueho-commerce-pilot/external-data run proxy:verify --",
     "external-data:dev": "npm --workspace @shueho-commerce-pilot/external-data run dev",
     "external-data:start": "npm --workspace @shueho-commerce-pilot/external-data run start",
     "external-data:check": "npm --workspace @shueho-commerce-pilot/external-data run check",

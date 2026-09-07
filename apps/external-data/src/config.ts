@@ -16,6 +16,12 @@ const envSchema = z.object({
   JUSTONEAPI_API_TOKEN: z.string().default(""),
   JUSTONEAPI_API_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(180_000).default(120_000),
   JUSTONEAPI_API_MAX_RESPONSE_BYTES: z.coerce.number().int().min(65_536).max(67_108_864).default(67_108_864),
+  JUSTONEAPI_PROXY_MODE: z.enum(["off", "required"]).default("off"),
+  JUSTONEAPI_PROXY_NODES_FILE: z.string().min(1).optional(),
+  JUSTONEAPI_PROXY_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(500).max(15_000).default(5_000),
+  JUSTONEAPI_PROXY_HEALTH_INTERVAL_MS: z.coerce.number().int().min(10_000).max(300_000).default(60_000),
+  JUSTONEAPI_PROXY_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(900_000).default(60_000),
+  JUSTONEAPI_PROXY_MAX_CONNECT_ATTEMPTS: z.coerce.number().int().min(1).max(8).default(3),
   LOCAL_RETRIEVAL_MODEL_URL: z.string().url().default("http://127.0.0.1:8792"),
   LOCAL_MODEL_INTERNAL_TOKEN: z.string().default(""),
   LOCAL_RETRIEVAL_MODEL_TIMEOUT_MS: z.coerce.number().int().min(30_000).max(300_000).default(180_000),
@@ -31,6 +37,10 @@ const envSchema = z.object({
 });
 
 const parsed = envSchema.parse(process.env);
+if (parsed.JUSTONEAPI_PROXY_MODE === "required" &&
+    (!parsed.JUSTONEAPI_PROXY_NODES_FILE || !parsed.JUSTONEAPI_API_BASE_URL.startsWith("https://"))) {
+  throw new Error("Required JustOneAPI proxy mode needs a protected node manifest and an HTTPS provider URL.");
+}
 
 if (parsed.LOCAL_EMBEDDING_DIMENSIONS !== 1024) {
   throw new Error("This warehouse schema is fixed to LOCAL_EMBEDDING_DIMENSIONS=1024.");
@@ -62,6 +72,14 @@ export const config = {
     token: parsed.JUSTONEAPI_API_TOKEN,
     timeoutMs: parsed.JUSTONEAPI_API_TIMEOUT_MS,
     maxResponseBytes: parsed.JUSTONEAPI_API_MAX_RESPONSE_BYTES,
+    proxy: {
+      mode: parsed.JUSTONEAPI_PROXY_MODE,
+      nodesFile: parsed.JUSTONEAPI_PROXY_NODES_FILE,
+      connectTimeoutMs: parsed.JUSTONEAPI_PROXY_CONNECT_TIMEOUT_MS,
+      healthIntervalMs: parsed.JUSTONEAPI_PROXY_HEALTH_INTERVAL_MS,
+      cooldownMs: parsed.JUSTONEAPI_PROXY_COOLDOWN_MS,
+      maxConnectAttempts: parsed.JUSTONEAPI_PROXY_MAX_CONNECT_ATTEMPTS,
+    },
   },
   localModels: {
     url: parsed.LOCAL_RETRIEVAL_MODEL_URL.replace(/\/$/, ""),

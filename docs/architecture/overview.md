@@ -60,6 +60,7 @@ Codex Harness business-level commerce_data plan/execute tools or external Commer
   -> application authorization / approval / quota / audit / billing
   -> SHUEHO External Data MCP
   -> service-owned JustOneAPI REST client
+  -> optional application-owned healthy-node proxy pool and isolated Mihomo listeners
   -> JustOneAPI REST API
   -> independent raw, normalized and business warehouse
 ```
@@ -67,6 +68,8 @@ Codex Harness business-level commerce_data plan/execute tools or external Commer
 Keyword product research is a bounded workflow inside that service, not an Agent loop. Harness first creates a free immutable plan using database market-language metadata; Commerce Pilot quotes the full call graph without reserving quota. Paid execution accepts only the plan id. The service runs discovery, selects a diversified quality-promoted representative set, materializes target-specific detail/price/review steps from SQL, and the Gateway applies authorization, approval and settlement separately to every actual paid request.
 
 Inbound Commerce Pilot identities are never passed through as JustOneAPI credentials. See [External Data MCP And Governance](./external-data-mcp.md).
+
+Only the independent JustOneAPI adapter may opt into the dedicated proxy pool. Each paid request uses a fixed node and a fresh verified TLS tunnel; failures can switch nodes only before HTTP dispatch. Harness tools, model providers, MCP, databases and local-model traffic keep their existing routing. See [JustOneAPI Dedicated Egress](../deployment/justoneapi-proxy.md).
 
 The browser never connects directly to App Server and never supplies `cwd`, provider identity, tool definitions, sandbox policy, developer instructions, Skill paths, host paths, Hook commands, or Enterprise scope headers.
 

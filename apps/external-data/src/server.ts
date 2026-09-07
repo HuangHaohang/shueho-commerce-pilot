@@ -8,6 +8,7 @@ import { providerCatalogHealth } from "./endpoint-registry.js";
 import { LocalModelClient } from "./local-model-client.js";
 import { createExternalDataMcpServer } from "./mcp-server.js";
 import { ExternalDataPipeline } from "./pipeline.js";
+import { closeJustOneApiProxyPool, getJustOneApiProxyPool, justOneApiProxyStatus } from "./justoneapi-proxy-runtime.js";
 import { drainIndexOutbox, ensureSearchIndex, searchIndexHealth } from "./search-index.js";
 
 const pipeline = new ExternalDataPipeline();
@@ -18,6 +19,7 @@ if (config.internalToken.length < 32) {
 await database.query("SELECT 1");
 await ensureSearchIndex();
 await models.warmup();
+await getJustOneApiProxyPool();
 
 const server = createServer(async (request, response) => {
   try {
@@ -32,10 +34,13 @@ const server = createServer(async (request, response) => {
         providerCatalogHealth().catch((error) => ({ totalEndpoints: 0, callableEndpoints: 0, error: safeMessage(error) })),
       ]);
       const healthy = modelHealth.ok !== false && searchHealth.status !== "unavailable" && Number(catalogHealth.callableEndpoints) > 0;
+      // Stored evidence remains readable during an egress outage. Paid calls fail closed in the adapter.
+      const proxyHealth = justOneApiProxyStatus();
       return sendJson(response, healthy ? 200 : 503, {
         ok: healthy,
         service: "shueho-external-data",
         providerConfigured: pipeline.providerConfigured,
+        justOneApiProxy: proxyHealth,
         postgres: "connected",
         localModels: modelHealth,
         elasticsearch: searchHealth,
@@ -83,6 +88,7 @@ process.on("SIGTERM", shutdown);
 async function shutdown(): Promise<void> {
   clearInterval(indexTimer);
   server.close();
+  await closeJustOneApiProxyPool();
   await database.end().catch(() => undefined);
   process.exit(0);
 }

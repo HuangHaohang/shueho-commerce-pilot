@@ -119,6 +119,8 @@ Workflow evidence exposes a stable `evidence_id` and research receipt plus kind,
 
 ## Reliability And Security
 
+`JUSTONEAPI_PROXY_MODE=required` enables a server-owned subscription egress pool exclusively in `JustOneApiRestClient`. Immutable node/listener revisions provide per-request shuffled round-robin selection, TLS-only health probes, failure cooldown and recovery. CONNECT/TLS failover finishes before any paid HTTP bytes; post-dispatch errors preserve the existing non-replay contract. Missing/all-down pools fail closed. Safe aggregate health is independent of stored-evidence readiness. See [configuration, deployment and validation](../deployment/justoneapi-proxy.md).
+
 - The paid REST call is dispatched at most once. A transport timeout after dispatch becomes `unknown` and is never retried automatically.
 - Free plan creation is idempotent by Harness call id or public MCP idempotency key. A lost plan-execution response may read back only the execution bound to that same source call id; another caller cannot replay or take over an executing plan.
 - PostgreSQL, Elasticsearch and both local models are warmed before the internal MCP listener accepts traffic. A known pre-dispatch model/configuration failure is non-billable; it is not misclassified as an uncertain provider result.

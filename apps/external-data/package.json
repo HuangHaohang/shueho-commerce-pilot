@@ -11,6 +11,8 @@
     "import:catalog": "tsx src/import-justoneapi-catalog.ts",
     "import:market-profiles": "tsx src/import-market-profiles.ts",
     "import:business-workflows": "tsx src/import-business-workflows.ts",
+    "proxy:import": "tsx src/import-justoneapi-proxy.ts",
+    "proxy:verify": "tsx src/probe-justoneapi-proxy.ts",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
     "evaluate": "tsx src/evaluate.ts",
@@ -26,6 +28,7 @@
     "dotenv": "^17.2.2",
     "opencc-js": "^1.4.2",
     "pg": "^8.23.0",
+    "yaml": "2.9.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

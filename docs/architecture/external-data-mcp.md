@@ -205,6 +205,8 @@ Public responses use stateless Streamable HTTP SSE with native SDK keepalive com
 
 ## Audit And Data Minimization
 
+An operator may enable [dedicated JustOneAPI subscription egress](../deployment/justoneapi-proxy.md) only inside the independent external-data service. Public/internal MCP and Harness contracts do not accept node, subscription, proxy or retry arguments. Required proxy mode fails closed, and node switching never authorizes replaying a dispatched paid call.
+
 Audit events record action, tenant/workspace/user, endpoint id, platform, source, call id, parameter keys, pricing state, business code, result size and outcome. They do not record:
 
 - prompt or conversation bodies;

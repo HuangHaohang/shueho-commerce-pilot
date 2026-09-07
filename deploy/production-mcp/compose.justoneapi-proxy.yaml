@@ -1,0 +1,39 @@
+# Optional overlay; pass after compose.yaml. Select one immutable config revision for both services.
+services:
+  warehouse:
+    group_add: ["65532"]
+    environment:
+      JUSTONEAPI_PROXY_MODE: required
+      JUSTONEAPI_PROXY_NODES_FILE: /run/justoneapi-proxy/nodes.json
+    volumes:
+      - ${COMMERCE_JUSTONEAPI_PROXY_REVISION_DIR:?Set a protected immutable proxy revision}:/run/justoneapi-proxy:ro
+    networks:
+      justoneapi-proxy: {}
+    depends_on:
+      justoneapi-egress:
+        condition: service_started
+
+  justoneapi-egress:
+    image: ${COMMERCE_JUSTONEAPI_PROXY_IMAGE:?Set an official digest-pinned Mihomo image}
+    restart: unless-stopped
+    user: "65532:65532"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    command: ["-d", "/tmp/mihomo", "-f", "/run/justoneapi-proxy/mihomo.yaml"]
+    volumes:
+      - ${COMMERCE_JUSTONEAPI_PROXY_REVISION_DIR}:/run/justoneapi-proxy:ro
+    networks: [justoneapi-proxy, justoneapi-proxy-egress]
+    # No published ports, TUN, host networking, controller or host/developer directory.
+    logging:
+      driver: json-file
+      options: { max-size: "5m", max-file: "2" }
+
+networks:
+  justoneapi-proxy:
+    internal: true
+  justoneapi-proxy-egress: {}

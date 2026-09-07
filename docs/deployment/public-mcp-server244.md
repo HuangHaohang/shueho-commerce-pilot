@@ -42,6 +42,8 @@ Nginx, PostgreSQL, pgvector and Elasticsearch images are digest-pinned. App and 
 
 ## Protected configuration contract
 
+The optional [JustOneAPI proxy overlay](justoneapi-proxy.md) adds protected subscription egress exclusively to the warehouse REST adapter. It does not alter public MCP, the Mac retrieval tunnel or other service routing; activate it only after importing and verifying the same immutable listener revision for warehouse and Mihomo.
+
 `COMMERCE_CONFIG_DIR` contains these operator-provisioned files; the repository does not contain their values:
 
 | File | Contents and audience |
