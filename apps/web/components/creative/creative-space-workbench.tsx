@@ -48,6 +48,7 @@ import { CreativeInfiniteCanvas } from "./creative-infinite-canvas";
 import {
   CreativeImageStudio,
   type ImageEditSubmission,
+  type ImageEditComposerRenderConfig,
 } from "./creative-image-studio";
 
 export type CreativeSpaceWorkbenchProps = {
@@ -61,6 +62,7 @@ export type CreativeSpaceWorkbenchProps = {
   onSelectProject: (project: AgentThreadSummary) => void;
   onBackToWorkbench: () => void;
   onSubmitImageEdit: (submission: ImageEditSubmission) => Promise<boolean>;
+  renderImageEditComposer: (config: ImageEditComposerRenderConfig) => ReactNode;
 };
 
 type CreativeMobileView = "projects" | "canvas" | "conversation";
@@ -94,6 +96,7 @@ function CreativeSpaceWorkbenchBody({
   onSelectProject,
   onBackToWorkbench,
   onSubmitImageEdit,
+  renderImageEditComposer,
 }: CreativeSpaceWorkbenchProps) {
   const [mobileView, setMobileView] = useState<CreativeMobileView>("conversation");
   const navigation = useCreativeCanvasNavigation();
@@ -149,6 +152,7 @@ function CreativeSpaceWorkbenchBody({
             running={projectRunning}
             onClose={navigation.closeImageStudio}
             onSubmitEdit={onSubmitImageEdit}
+            renderComposer={renderImageEditComposer}
           />
         ) : null}
       </div>

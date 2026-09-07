@@ -35,6 +35,7 @@ describe("CreativeSpaceWorkbench", () => {
         onSelectProject={vi.fn()}
         onBackToWorkbench={vi.fn()}
         onSubmitImageEdit={vi.fn()}
+        renderImageEditComposer={() => <div>共享 AgentComposer</div>}
       />,
     );
 
@@ -110,6 +111,7 @@ describe("CreativeSpaceWorkbench", () => {
         onSelectProject={vi.fn()}
         onBackToWorkbench={vi.fn()}
         onSubmitImageEdit={vi.fn()}
+        renderImageEditComposer={() => <div>共享 AgentComposer</div>}
       />,
     );
 

@@ -1,8 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { renderToStaticMarkup } from "react-dom/server";
+import type { ReactNode } from "react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { GeneratedImageItem } from "@/lib/agent/use-agent-thread";
 
-import { buildImageEditMessage, imageVersionNumber } from "./creative-image-studio";
+import {
+  buildImageEditMessage,
+  CreativeImageStudio,
+  imageVersionNumber,
+  type ImageEditComposerRenderConfig,
+} from "./creative-image-studio";
+
+vi.mock("@/components/ui/dialog", () => ({
+  Dialog: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
+  DialogTitle: ({ children }: { children: ReactNode }) => <h1>{children}</h1>,
+}));
 
 function image(filename: string, sourceFilenames: string[] = []): GeneratedImageItem {
   return {
@@ -17,6 +31,49 @@ function image(filename: string, sourceFilenames: string[] = []): GeneratedImage
 }
 
 describe("creative image studio", () => {
+  it("delegates the bottom input to the shared AgentComposer renderer", () => {
+    const source = image("1788220800000-11111111-1111-4111-8111-111111111111.png");
+    const renderComposer = vi.fn((config: ImageEditComposerRenderConfig) => (
+      <section
+        data-shared-agent-composer
+        data-placeholder={config.placeholder}
+        data-submit-ready={String(config.submitReady)}
+      >
+        {config.context}
+        共享 AgentComposer
+      </section>
+    ));
+
+    const html = renderToStaticMarkup(
+      <CreativeImageStudio
+        threadId="thread-creative"
+        request={{
+          artifactId: source.id,
+          url: source.url,
+          filename: source.filename,
+          model: source.model,
+          title: "商品主图",
+          nodeId: null,
+          nonce: 1,
+        }}
+        images={[source]}
+        running={false}
+        onClose={vi.fn()}
+        onSubmitEdit={vi.fn().mockResolvedValue(true)}
+        renderComposer={renderComposer}
+      />,
+    );
+
+    expect(renderComposer).toHaveBeenCalledOnce();
+    expect(html).toContain("data-shared-agent-composer");
+    expect(html).toContain('data-placeholder="描述要修改的内容"');
+    expect(html).toContain('data-submit-ready="false"');
+    expect(html).toContain("图片修改来源");
+    expect(html).toContain("共享 AgentComposer");
+    expect(html).not.toContain("提交图片修改");
+    expect(html).not.toContain("<textarea");
+  });
+
   it("turns precise region comments into one Harness edit instruction", () => {
     const message = buildImageEditMessage({
       instruction: "移除衣架并改成暖灰影棚背景",

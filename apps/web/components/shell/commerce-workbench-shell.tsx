@@ -1322,6 +1322,52 @@ export function CommerceWorkbenchShell({
             onSelectProject={openCreativeProject}
             onBackToWorkbench={startNewTask}
             onSubmitImageEdit={submitCreativeImageEdit}
+            renderImageEditComposer={(config) => (
+              <AgentComposer
+                value={config.value}
+                placeholder={config.placeholder}
+                running={agentThread.status === "connecting" || agentThread.status === "running"}
+                canInterrupt={false}
+                interrupting={false}
+                compacting={agentThread.compacting}
+                queueSubmitting={false}
+                queuedMessages={[]}
+                queueOperationId={null}
+                models={modelsQuery.data?.agentModels ?? []}
+                modelsLoading={modelsQuery.isLoading}
+                selectedModel={selectedModel}
+                reasoningEffort={reasoningEffort}
+                productContextMode="none"
+                selectedProducts={[]}
+                skills={[]}
+                skillsLoading={false}
+                selectedSkill={null}
+                attachments={[]}
+                contentAboveInput={config.context}
+                submitReady={config.submitReady}
+                composerInputRef={config.inputRef}
+                toolVisibility={{
+                  add: false,
+                  access: false,
+                  products: false,
+                  model: true,
+                  voice: true,
+                }}
+                disabled={config.disabled}
+                onChange={config.onChange}
+                onSubmit={config.onSubmit}
+                onInterrupt={() => undefined}
+                onQueueDelete={async () => false}
+                onQueueSteer={async () => false}
+                onQueueClear={async () => undefined}
+                onModelChange={setSelectedModel}
+                onReasoningEffortChange={setReasoningEffort}
+                onProductContextModeChange={() => undefined}
+                onSelectedProductsChange={() => undefined}
+                onRemoveSelectedProduct={() => undefined}
+                onOpenProductLibrary={() => undefined}
+              />
+            )}
             conversation={(
               <div className="flex h-full min-h-0 flex-col">
                 <header className="flex min-h-[var(--cp-topbar-height)] shrink-0 items-center gap-3 border-b border-[var(--cp-border-subtle)] px-3 py-2">
@@ -2199,6 +2245,14 @@ function ConversationWorkspace({
   );
 }
 
+type AgentComposerToolVisibility = {
+  add?: boolean;
+  access?: boolean;
+  products?: boolean;
+  model?: boolean;
+  voice?: boolean;
+};
+
 function AgentComposer({
   compact = false,
   value,
@@ -2227,6 +2281,10 @@ function AgentComposer({
   selectedSkill = null,
   attachments = [],
   attachmentError = null,
+  contentAboveInput = null,
+  submitReady,
+  composerInputRef,
+  toolVisibility,
   disabled = false,
   onChange,
   onSubmit,
@@ -2274,6 +2332,10 @@ function AgentComposer({
   selectedSkill?: SkillInventoryItem | null;
   attachments?: PendingAttachmentUpload[];
   attachmentError?: string | null;
+  contentAboveInput?: ReactNode;
+  submitReady?: boolean;
+  composerInputRef?: RefObject<HTMLTextAreaElement | null>;
+  toolVisibility?: AgentComposerToolVisibility;
   disabled?: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void | Promise<void>;
@@ -2295,9 +2357,18 @@ function AgentComposer({
   onRemoveAttachment?: (id: string) => void;
 }) {
   const formRef = useRef<HTMLFormElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const localInputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = composerInputRef ?? localInputRef;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeComposerPopover, setActiveComposerPopover] = useState<ComposerPopoverId | null>(null);
+  const visibleTools = {
+    add: toolVisibility?.add ?? true,
+    access: toolVisibility?.access ?? true,
+    products: toolVisibility?.products ?? true,
+    model: toolVisibility?.model ?? true,
+    voice: toolVisibility?.voice ?? true,
+  };
+  const submissionReady = submitReady ?? Boolean(value.trim() || attachments.length);
   const productPickerBoundary = compact
     ? formRef.current?.closest<HTMLElement>("[data-creative-conversation]") ?? null
     : null;
@@ -2352,93 +2423,104 @@ function AgentComposer({
         className="relative mx-auto grid min-h-[92px] max-h-[260px] w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[auto_36px] items-end gap-x-1 gap-y-1 rounded-[24px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)]"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!disabled && (!running || canInterrupt)) void onSubmit();
+          if (submissionReady && !disabled && (!running || canInterrupt)) void onSubmit();
         }}
       >
-        <ComposerAddMenu
-          open={skillSelector.open}
-          source={skillSelector.source}
-          query={skillSelector.query}
-          plugins={plugins}
-          pluginsLoading={pluginsLoading}
-          skills={skillSelector.filteredSkills}
-          activeIndex={skillSelector.activeIndex}
-          loading={skillsLoading}
-          selectedSkill={selectedSkill}
-          onSelect={skillSelector.selectSkill}
-          onActiveIndexChange={skillSelector.setActiveIndex}
-          onOpenPlugin={onOpenPlugin}
-          onAddFiles={() => {
-            skillSelector.closeMenu();
-            fileInputRef.current?.click();
-          }}
-        />
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.xlsx,.txt,.md,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log"
-          className="hidden"
-          aria-label="选择文件和图片"
-          onChange={(event) => {
-            if (event.target.files?.length) onAddFiles(event.target.files);
-            event.target.value = "";
-          }}
-        />
-        <div className="col-start-1 row-start-2 flex items-center gap-0.5">
-          <IconTooltip label="添加">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="rounded-full"
-              aria-label="添加"
-              aria-expanded={skillSelector.open}
-              disabled={disabled || running}
-              onClick={() => {
-                setActiveComposerPopover(null);
-                skillSelector.toggleMenu();
+        {visibleTools.add ? (
+          <>
+            <ComposerAddMenu
+              open={skillSelector.open}
+              source={skillSelector.source}
+              query={skillSelector.query}
+              plugins={plugins}
+              pluginsLoading={pluginsLoading}
+              skills={skillSelector.filteredSkills}
+              activeIndex={skillSelector.activeIndex}
+              loading={skillsLoading}
+              selectedSkill={selectedSkill}
+              onSelect={skillSelector.selectSkill}
+              onActiveIndexChange={skillSelector.setActiveIndex}
+              onOpenPlugin={onOpenPlugin}
+              onAddFiles={() => {
+                skillSelector.closeMenu();
+                fileInputRef.current?.click();
               }}
-            >
-              <Plus className="size-5" />
-            </Button>
-          </IconTooltip>
-          <ExternalDataAccessControl
-            compact={compact}
-            value={externalDataApprovalMode}
-            available={externalDataAvailable}
-            showEnterpriseSettings={canManageExternalDataPolicy}
-            open={activeComposerPopover === "access"}
-            disabled={disabled || running}
-            placement="top"
-            onChange={onExternalDataApprovalModeChange}
-            onOpenChange={(nextOpen) => {
-              if (nextOpen) skillSelector.closeMenu();
-              setActiveComposerPopover((current) =>
-                nextOpen ? "access" : current === "access" ? null : current,
-              );
-            }}
-          />
-          <ProductLibraryPicker
-            open={activeComposerPopover === "products"}
-            disabled={disabled || running}
-            placement="top"
-            compact={compact}
-            collisionBoundary={productPickerBoundary}
-            mode={productContextMode}
-            selectedProducts={selectedProducts}
-            onOpenChange={(nextOpen) => {
-              if (nextOpen) skillSelector.closeMenu();
-              setActiveComposerPopover((current) =>
-                nextOpen ? "products" : current === "products" ? null : current,
-              );
-            }}
-            onModeChange={onProductContextModeChange}
-            onSelectedProductsChange={onSelectedProductsChange}
-            onManage={onOpenProductLibrary}
-          />
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".png,.jpg,.jpeg,.webp,.pdf,.docx,.xlsx,.txt,.md,.csv,.json,.xml,.html,.htm,.yaml,.yml,.log"
+              className="hidden"
+              aria-label="选择文件和图片"
+              onChange={(event) => {
+                if (event.target.files?.length) onAddFiles(event.target.files);
+                event.target.value = "";
+              }}
+            />
+          </>
+        ) : null}
+        <div className="col-start-1 row-start-2 flex items-center gap-0.5">
+          {visibleTools.add ? (
+            <IconTooltip label="添加">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-full"
+                aria-label="添加"
+                aria-expanded={skillSelector.open}
+                disabled={disabled || running}
+                onClick={() => {
+                  setActiveComposerPopover(null);
+                  skillSelector.toggleMenu();
+                }}
+              >
+                <Plus className="size-5" />
+              </Button>
+            </IconTooltip>
+          ) : null}
+          {visibleTools.access ? (
+            <ExternalDataAccessControl
+              compact={compact}
+              value={externalDataApprovalMode}
+              available={externalDataAvailable}
+              showEnterpriseSettings={canManageExternalDataPolicy}
+              open={activeComposerPopover === "access"}
+              disabled={disabled || running}
+              placement="top"
+              onChange={onExternalDataApprovalModeChange}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) skillSelector.closeMenu();
+                setActiveComposerPopover((current) =>
+                  nextOpen ? "access" : current === "access" ? null : current,
+                );
+              }}
+            />
+          ) : null}
+          {visibleTools.products ? (
+            <ProductLibraryPicker
+              open={activeComposerPopover === "products"}
+              disabled={disabled || running}
+              placement="top"
+              compact={compact}
+              collisionBoundary={productPickerBoundary}
+              mode={productContextMode}
+              selectedProducts={selectedProducts}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) skillSelector.closeMenu();
+                setActiveComposerPopover((current) =>
+                  nextOpen ? "products" : current === "products" ? null : current,
+                );
+              }}
+              onModeChange={onProductContextModeChange}
+              onSelectedProductsChange={onSelectedProductsChange}
+              onManage={onOpenProductLibrary}
+            />
+          ) : null}
         </div>
         <div className="col-span-3 col-start-1 row-start-1 min-w-0 px-3 pt-1">
+          {contentAboveInput ? <div className="mb-1.5">{contentAboveInput}</div> : null}
           {selectedSkill ? (
             <div className="mb-1.5 flex min-w-0">
               <SelectedSkillChip skill={selectedSkill} onRemove={onSkillClear} />
@@ -2464,9 +2546,15 @@ function AgentComposer({
             data-conversation-input
             rows={1}
             value={value}
-            onChange={(event) => skillSelector.handleChange(event.target.value, event.target.selectionStart)}
+            onChange={(event) => {
+              if (visibleTools.add) {
+                skillSelector.handleChange(event.target.value, event.target.selectionStart);
+              } else {
+                onChange(event.target.value);
+              }
+            }}
             onKeyDown={(event) => {
-              if (skillSelector.handleKeyDown(event)) return;
+              if (visibleTools.add && skillSelector.handleKeyDown(event)) return;
               if (
                 event.key === "Enter" &&
                 !event.shiftKey &&
@@ -2476,7 +2564,7 @@ function AgentComposer({
                 (!running || canInterrupt)
               ) {
                 event.preventDefault();
-                if (value.trim() || attachments.length) void onSubmit();
+                if (submissionReady) void onSubmit();
               }
             }}
             placeholder={placeholder}
@@ -2486,41 +2574,45 @@ function AgentComposer({
           />
         </div>
         <div className="col-start-3 row-start-2 flex items-center gap-1">
-          <ModelAndReasoningControl
-            compact={compact}
-            models={models}
-            loading={modelsLoading}
-            selectedModel={selectedModel}
-            reasoningEffort={reasoningEffort}
-            open={activeComposerPopover === "model"}
-            disabled={running || disabled}
-            placement="top"
-            onModelChange={onModelChange}
-            onReasoningEffortChange={onReasoningEffortChange}
-            onOpenChange={(nextOpen) => {
-              if (nextOpen) skillSelector.closeMenu();
-              setActiveComposerPopover((current) =>
-                nextOpen ? "model" : current === "model" ? null : current,
-              );
-            }}
-          />
-          <IconTooltip label="语音输入暂不可用">
-            <span className="inline-flex">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="rounded-full"
-                aria-label="语音输入暂不可用"
-                disabled
-              >
-                <Mic />
-              </Button>
-            </span>
-          </IconTooltip>
+          {visibleTools.model ? (
+            <ModelAndReasoningControl
+              compact={compact}
+              models={models}
+              loading={modelsLoading}
+              selectedModel={selectedModel}
+              reasoningEffort={reasoningEffort}
+              open={activeComposerPopover === "model"}
+              disabled={running || disabled}
+              placement="top"
+              onModelChange={onModelChange}
+              onReasoningEffortChange={onReasoningEffortChange}
+              onOpenChange={(nextOpen) => {
+                if (nextOpen) skillSelector.closeMenu();
+                setActiveComposerPopover((current) =>
+                  nextOpen ? "model" : current === "model" ? null : current,
+                );
+              }}
+            />
+          ) : null}
+          {visibleTools.voice ? (
+            <IconTooltip label="语音输入暂不可用">
+              <span className="inline-flex">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-full"
+                  aria-label="语音输入暂不可用"
+                  disabled
+                >
+                  <Mic />
+                </Button>
+              </span>
+            </IconTooltip>
+          ) : null}
           {running && canInterrupt ? (
             <>
-              {value.trim() ? (
+              {submissionReady ? (
                 <IconTooltip label={runningSubmitMode === "steer" ? "调整当前方向" : "加入任务队列"}>
                   <Button
                     type="submit"
@@ -2547,7 +2639,7 @@ function AgentComposer({
             </IconTooltip>
           ) : (
             <IconTooltip label="发送">
-              <Button type="submit" size="icon" className="rounded-full" aria-label="发送" disabled={disabled || (!value.trim() && !attachments.length)}>
+              <Button type="submit" size="icon" className="rounded-full" aria-label="发送" disabled={disabled || !submissionReady}>
                 <ArrowUp />
               </Button>
             </IconTooltip>

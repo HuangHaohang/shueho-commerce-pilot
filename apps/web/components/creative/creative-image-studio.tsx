@@ -5,16 +5,22 @@ import {
   CircleAlert,
   Image as ImageIcon,
   Images,
-  LoaderCircle,
   Maximize2,
   MessageCirclePlus,
-  SendHorizontal,
   Trash2,
   X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent,
+  type ReactNode,
+  type RefObject,
+} from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -42,6 +48,17 @@ export type ImageEditSubmission = {
   sourceFilenames: string[];
 };
 
+export type ImageEditComposerRenderConfig = {
+  value: string;
+  placeholder: string;
+  disabled: boolean;
+  submitReady: boolean;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+  context: ReactNode;
+  onChange: (value: string) => void;
+  onSubmit: () => void | Promise<void>;
+};
+
 const resizeOptions = [
   { label: "保持原图", prompt: "保持原图画幅和尺寸比例。" },
   { label: "方形 1:1", prompt: "将输出调整为方形 1:1 构图，保持主体完整且居中。" },
@@ -55,6 +72,7 @@ export function CreativeImageStudio({
   running,
   onClose,
   onSubmitEdit,
+  renderComposer,
 }: {
   threadId: string;
   request: NonNullable<ImageStudioRequest>;
@@ -62,6 +80,7 @@ export function CreativeImageStudio({
   running: boolean;
   onClose: () => void;
   onSubmitEdit: (submission: ImageEditSubmission) => Promise<boolean>;
+  renderComposer: (config: ImageEditComposerRenderConfig) => ReactNode;
 }) {
   const [view, setView] = useState<ImageStudioView>("focused");
   const [activeFilename, setActiveFilename] = useState(request.filename);
@@ -93,6 +112,12 @@ export function CreativeImageStudio({
     sourceFilenames: [],
   };
   const versionNumber = imageVersionNumber(activeImage, imageByFilename);
+  const selectedImages = images.filter((image) => selectedFilenames.has(image.filename));
+  const submitReady = Boolean(
+    instruction.trim() ||
+    annotations.some((annotation) => annotation.text.trim()) ||
+    resizeInstruction,
+  );
 
   useEffect(() => {
     setView("focused");
@@ -155,6 +180,7 @@ export function CreativeImageStudio({
   }
 
   async function submitEdit() {
+    if (running || submitting) return;
     const trimmed = instruction.trim();
     const hasAnnotationText = annotations.some((annotation) => annotation.text.trim());
     if (!trimmed && !hasAnnotationText && !resizeInstruction) {
@@ -272,21 +298,42 @@ export function CreativeImageStudio({
           )}
         </main>
 
-        <ImageEditComposer
-          forwardedRef={composerRef}
-          images={images}
-          selectedFilenames={selectedFilenames}
-          annotations={annotations}
-          value={instruction}
-          resizeInstruction={resizeInstruction}
-          running={running}
-          submitting={submitting}
-          error={submitError}
-          status={submitStatus}
-          onChange={setInstruction}
-          onAnnotationsChange={setAnnotations}
-          onSubmit={submitEdit}
-        />
+        <footer
+          className="shrink-0 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 pb-3 pt-2 md:px-5"
+          data-image-edit-composer
+        >
+          <div className="mx-auto max-w-[768px]">
+            {renderComposer({
+              value: instruction,
+              placeholder: "描述要修改的内容",
+              disabled: running || submitting,
+              submitReady,
+              inputRef: composerRef,
+              context: (
+                <ImageEditContext
+                  images={selectedImages}
+                  annotations={annotations}
+                  resizeInstruction={resizeInstruction}
+                  onAnnotationsChange={setAnnotations}
+                  onFocusInstruction={() => composerRef.current?.focus()}
+                />
+              ),
+              onChange: setInstruction,
+              onSubmit: submitEdit,
+            })}
+            {submitError ? (
+              <p className="m-0 mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-[var(--cp-danger)]" role="alert">
+                <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+                {submitError}
+              </p>
+            ) : null}
+            {submitStatus ? (
+              <p className="m-0 mt-1.5 text-center text-[11px] text-[var(--cp-text-muted)]" role="status">
+                {submitStatus}
+              </p>
+            ) : null}
+          </div>
+        </footer>
       </DialogContent>
     </Dialog>
   );
@@ -437,90 +484,70 @@ function CanvasImageView({
   );
 }
 
-const ImageEditComposer = function ImageEditComposer({
+function ImageEditContext({
   images,
-  selectedFilenames,
   annotations,
-  value,
   resizeInstruction,
-  running,
-  submitting,
-  error,
-  status,
-  onChange,
   onAnnotationsChange,
-  onSubmit,
-  forwardedRef,
+  onFocusInstruction,
 }: {
   images: readonly GeneratedImageItem[];
-  selectedFilenames: ReadonlySet<string>;
   annotations: ImageAnnotation[];
-  value: string;
   resizeInstruction: string;
-  running: boolean;
-  submitting: boolean;
-  error: string | null;
-  status: string | null;
-  onChange: (value: string) => void;
   onAnnotationsChange: (annotations: ImageAnnotation[]) => void;
-  onSubmit: () => Promise<void>;
-  forwardedRef: React.Ref<HTMLTextAreaElement>;
+  onFocusInstruction: () => void;
 }) {
-  const selectedImages = images.filter((image) => selectedFilenames.has(image.filename));
   return (
-    <footer className="shrink-0 border-t border-[var(--cp-border)] bg-[var(--cp-surface)] px-3 pb-3 pt-2 md:px-5">
-      <div className="mx-auto max-w-[760px]">
-        {annotations.length ? (
-          <div className="mb-2 space-y-1.5">
-            {annotations.map((annotation, index) => (
-              <div key={annotation.id} className="flex items-center gap-2">
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cp-text)] text-[10px] font-semibold text-white">{index + 1}</span>
-                <input
-                  className="h-8 min-w-0 flex-1 rounded-[7px] border border-[var(--cp-border)] px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                  placeholder="说明这个区域需要怎么修改"
-                  value={annotation.text}
-                  onChange={(event) => onAnnotationsChange(annotations.map((item) => item.id === annotation.id ? { ...item, text: event.target.value } : item))}
-                />
-                <button type="button" className="flex size-7 items-center justify-center rounded-full text-[var(--cp-text-faint)] hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-danger)]" aria-label={`删除评论 ${index + 1}`} onClick={() => onAnnotationsChange(annotations.filter((item) => item.id !== annotation.id))}><X className="size-3.5" /></button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        {resizeInstruction ? <div className="mb-2 rounded-[7px] bg-[var(--cp-bg-subtle)] px-2.5 py-1.5 text-[11px] text-[var(--cp-text-muted)]">{resizeInstruction}</div> : null}
-        <div className="rounded-[18px] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-soft)]">
-          {selectedImages.length ? (
-            <div className="mb-1.5 flex gap-1.5 px-1" aria-label="图片修改来源">
-              {selectedImages.map((image) => (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={image.id} src={image.url} alt="已选择的图片" className="size-10 rounded-[6px] border border-[var(--cp-border)] bg-white object-cover" />
-              ))}
-            </div>
-          ) : null}
-          <div className="flex items-end gap-2">
-            <textarea
-              ref={forwardedRef}
-              className="min-h-11 max-h-32 min-w-0 flex-1 resize-none border-0 bg-transparent px-2 py-2 text-sm leading-6 text-[var(--cp-text)] outline-none"
-              placeholder="描述要修改的内容"
-              value={value}
-              onChange={(event) => onChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  if (!running && !submitting) void onSubmit();
-                }
-              }}
-            />
-            <Button type="button" size="icon" className="size-9 shrink-0 rounded-full" disabled={running || submitting || (!value.trim() && !annotations.some((item) => item.text.trim()) && !resizeInstruction)} aria-label="提交图片修改" onClick={() => void onSubmit()}>
-              {running || submitting ? <LoaderCircle className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
-            </Button>
-          </div>
+    <div className="space-y-1.5" data-image-edit-context>
+      {annotations.map((annotation, index) => (
+        <div key={annotation.id} className="flex items-center gap-2">
+          <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cp-text)] text-[10px] font-semibold text-white">
+            {index + 1}
+          </span>
+          <input
+            className="h-8 min-w-0 flex-1 rounded-[7px] border border-[var(--cp-border)] px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
+            placeholder="说明这个区域需要怎么修改"
+            value={annotation.text}
+            onChange={(event) => onAnnotationsChange(annotations.map((item) =>
+              item.id === annotation.id ? { ...item, text: event.target.value } : item))}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
+                event.preventDefault();
+                onFocusInstruction();
+              }
+            }}
+          />
+          <button
+            type="button"
+            className="flex size-7 items-center justify-center rounded-full text-[var(--cp-text-faint)] hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-danger)]"
+            aria-label={`删除评论 ${index + 1}`}
+            onClick={() => onAnnotationsChange(annotations.filter((item) => item.id !== annotation.id))}
+          >
+            <X className="size-3.5" />
+          </button>
         </div>
-        {error ? <p className="m-0 mt-1.5 flex items-start gap-1.5 text-xs leading-5 text-[var(--cp-danger)]"><CircleAlert className="mt-0.5 size-3.5 shrink-0" />{error}</p> : null}
-        {status ? <p className="m-0 mt-1.5 text-center text-[11px] text-[var(--cp-text-muted)]">{status}</p> : null}
-      </div>
-    </footer>
+      ))}
+      {resizeInstruction ? (
+        <div className="rounded-[7px] bg-[var(--cp-bg-subtle)] px-2.5 py-1.5 text-[11px] text-[var(--cp-text-muted)]">
+          {resizeInstruction}
+        </div>
+      ) : null}
+      {images.length ? (
+        <div className="flex gap-1.5" aria-label="图片修改来源">
+          {images.map((image) => (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              key={image.id}
+              src={image.url}
+              alt="已选择的图片"
+              className="size-10 rounded-[6px] border border-[var(--cp-border)] bg-white object-cover"
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
-};
+}
 
 function IconButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick: () => void; children: React.ReactNode }) {
   return <button type="button" className="flex size-8 items-center justify-center rounded-full hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-30" aria-label={label} disabled={disabled} onClick={onClick}>{children}</button>;
