@@ -201,6 +201,8 @@ The first release uses high-entropy bearer access tokens rather than claiming OA
 
 The public MCP exposes `research_social_content` plus the same `plan_marketplace_research` / `execute_marketplace_research` split, never raw endpoint selection. Public planning requires a client-generated UUID `idempotency_key`; transport retries therefore return the same SQL plan receipt. Planning is provider-free. Execution requests policy automation; if workspace policy requires human approval, the tool returns `APPROVAL_REQUIRED` without dispatching upstream. Human approval remains available through the Commerce Pilot web Harness flow.
 
+Public responses use stateless Streamable HTTP SSE with native SDK keepalive comments every ten seconds. These transport frames carry no model history or paid-call progress and do not authorize retries or recovery. Reverse proxies must disable buffering, caching and upstream retries. See the [server244 deployment](../deployment/public-mcp-server244.md) for the private Mac inference boundary and installed configuration.
+
 ## Audit And Data Minimization
 
 Audit events record action, tenant/workspace/user, endpoint id, platform, source, call id, parameter keys, pricing state, business code, result size and outcome. They do not record:

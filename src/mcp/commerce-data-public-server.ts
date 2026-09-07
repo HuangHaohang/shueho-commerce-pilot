@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { createPublicHttpTransport } from "./public-http-transport.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
 
@@ -98,10 +98,7 @@ const httpServer = createServer(async (request, response) => {
     }
     const parsedBody = await readJsonBody(request, 1_048_576);
     const mcpServer = createCommerceDataMcpServer(principal);
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-      enableJsonResponse: true,
-    });
+    const transport = createPublicHttpTransport();
     await mcpServer.connect(transport);
     response.on("close", () => {
       void transport.close().catch(() => undefined);

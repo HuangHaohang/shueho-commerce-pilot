@@ -71,6 +71,8 @@ Port `8787` is an internal service port. Connect the correct tenant's Next.js BF
 
 The optional customer-facing Commerce Pilot MCP process runs separately with `npm run start:mcp` on port `8790` by default. Publish only that listener behind TLS, request-size limits, connection limits and an ingress that preserves `Authorization`; do not expose BFF internal callbacks or port `8787`. It requires `COMMERCE_MCP_AUTH_URL`, `COMMERCE_EXTERNAL_DATA_CONTROL_URL`, and the private SHUEHO external-data MCP credential. It never receives the JustOneAPI REST Token.
 
+The [server244 public MCP deployment](public-mcp-server244.md) supplies a separate digest-pinned Compose unit and Mac Metal worker connected through restricted SSH forwarding. Its public transport uses native SDK SSE keepalive frames to preserve long tool calls through Cloudflare. It does not deploy the browser Agent/Gateway or change Harness ownership.
+
 The mounted `CODEX_HOME` directory should contain app-owned Codex configuration, including custom provider definitions when needed:
 
 ```text
