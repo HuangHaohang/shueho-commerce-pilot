@@ -2,7 +2,7 @@
 FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS verify
 WORKDIR /artifact
 COPY mihomo.gz LICENSE.mihomo ./
-RUN node --input-type=module -e "import fs from 'node:fs'; import {createHash} from 'node:crypto'; import {gunzipSync} from 'node:zlib'; if(process.arch!=='x64') throw Error('This pinned artifact is linux-amd64'); const bytes=fs.readFileSync('mihomo.gz'); if(createHash('sha256').update(bytes).digest('hex')!=='cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84') throw Error('Official Mihomo archive digest mismatch'); fs.writeFileSync('mihomo',gunzipSync(bytes),{mode:0o755});"
+RUN node --input-type=module -e "import fs from 'node:fs'; import {createHash} from 'node:crypto'; import {gunzipSync} from 'node:zlib'; import {rootCertificates} from 'node:tls'; if(process.arch!=='x64') throw Error('This pinned artifact is linux-amd64'); const bytes=fs.readFileSync('mihomo.gz'); if(createHash('sha256').update(bytes).digest('hex')!=='cf06ce2c7d1421bdbda14ee4a5b6046672dc35ebf8eecd8e77504ec3c0ed9a84') throw Error('Official Mihomo archive digest mismatch'); fs.writeFileSync('mihomo',gunzipSync(bytes),{mode:0o755}); if(rootCertificates.length<100) throw Error('Pinned CA bundle unavailable'); fs.writeFileSync('ca-certificates.crt',rootCertificates.join('\n')+'\n');"
 
 FROM scratch
 ARG COMMERCE_SOURCE_COMMIT=uncommitted
@@ -12,6 +12,6 @@ LABEL org.opencontainers.image.revision=$COMMERCE_SOURCE_COMMIT \
       org.opencontainers.image.licenses="GPL-3.0"
 COPY --from=verify /artifact/mihomo /mihomo
 COPY --from=verify /artifact/LICENSE.mihomo /LICENSE.mihomo
-COPY --from=verify /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=verify /artifact/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 USER 65532:65532
 ENTRYPOINT ["/mihomo"]

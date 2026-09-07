@@ -75,7 +75,7 @@ COMMERCE_JUSTONEAPI_PROXY_IMAGE=metacubex/mihomo@sha256:REVIEWED_OFFICIAL_IMAGE_
 COMMERCE_JUSTONEAPI_PROXY_REVISION_DIR=/absolute/protected/justoneapi-proxy/REVISION
 ```
 
-Use a reviewed official digest, never `latest`. Provision the copied revision with parent traversal permission and mode 0640 files in a dedicated group 65532; the overlay adds that group to warehouse and Mihomo runs with gid 65532. Do not relax the subscription-URL source file. Validate actual container read permissions before rollout.
+Use a reviewed official digest, never `latest`. Provision the copied revision with parent traversal permission and mode 0640 files in a dedicated group 65532; the overlay adds that group to warehouse and Mihomo runs with gid 65532. An owner-managed ACL granting only uid 65532 read/traverse on this revision is also supported when the operator cannot change file groups. Do not relax the subscription-URL source file. Validate actual container read permissions before rollout.
 
 ```sh
 docker compose --env-file /path/to/release.env \
