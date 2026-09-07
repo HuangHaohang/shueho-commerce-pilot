@@ -329,7 +329,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
           business_input: loaded.plan.businessInput,
           business_intent: loaded.plan.businessIntent,
           coverage: loaded.plan.coverage,
-          market_context: loaded.plan.marketContext,
+          market_context: loaded.stored.market_context,
           detail_sample_size: loaded.plan.detailSampleSize,
           estimated_provider_calls: loaded.plan.estimatedProviderCalls,
           steps: loaded.plan.steps.map((step) => ({
