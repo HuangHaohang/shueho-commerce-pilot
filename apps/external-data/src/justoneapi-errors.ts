@@ -1,4 +1,5 @@
 export class JustOneApiError extends Error {
+  researchRequestId?: string;
   constructor(
     message: string,
     readonly code: "NOT_CONFIGURED" | "METHOD_UNSUPPORTED" | "INVALID_PARAMETER" | "RESULT_UNKNOWN" |

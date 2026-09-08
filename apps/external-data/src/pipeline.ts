@@ -74,6 +74,7 @@ export class ExternalDataPipeline {
         return loadCompactResearchResult(scope, prepared.researchRequestId);
       } else {
         await markWarehouseCallUnknown(scope, prepared, safeMessage(error));
+        if (error instanceof JustOneApiError) error.researchRequestId = prepared.researchRequestId;
       }
       throw error;
     }

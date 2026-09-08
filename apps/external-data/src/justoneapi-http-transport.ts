@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { JustOneApiError } from "./justoneapi-errors.js";
 import type { JustOneApiProxyPool, ProxyLease } from "./justoneapi-proxy-pool.js";
@@ -70,8 +70,32 @@ export class JustOneApiHttpTransport implements JustOneApiTransport {
         sent = true;
         url.searchParams.set("token", credential.token);
         try {
-          const response = await new Promise<IncomingMessage>((resolve, reject) => {
-            const outgoing = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, {
+          return await new Promise<ProviderCallResult>((resolve, reject) => {
+            let outgoing: ClientRequest | undefined;
+            let response: IncomingMessage | undefined;
+            let settled = false;
+            const finish = (error?: unknown, result?: ProviderCallResult) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              lease?.socket.off("close", tunnelClosed);
+              if (error) {
+                outgoing?.destroy();
+                response?.destroy();
+                lease?.socket.destroy();
+                reject(error);
+              } else resolve(result!);
+            };
+            const tunnelClosed = () => {
+              if (!response?.complete) finish(new Error("PROVIDER_TUNNEL_CLOSED"));
+            };
+            // A preconnected proxy socket may close before ClientRequest attaches
+            // its listeners. Bound the promise itself, including body consumption.
+            const timer = setTimeout(() => finish(new Error("PROVIDER_DEADLINE_EXCEEDED")), Math.max(1, deadline - Date.now()));
+            lease?.socket.once("close", tunnelClosed);
+            if (lease?.socket.destroyed) { finish(new Error("PROVIDER_TUNNEL_CLOSED")); return; }
+            try {
+              outgoing = (url.protocol === "https:" ? httpsRequest : httpRequest)(url, {
               method: input.httpMethod,
               headers: {
                 Accept: "application/json", "User-Agent": "SHUEHO-External-Data/0.1", ...input.headers,
@@ -80,15 +104,25 @@ export class JustOneApiHttpTransport implements JustOneApiTransport {
               },
               agent: agent ?? false,
               signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())), maxHeaderSize: 32768,
-            }, resolve);
-            outgoing.once("error", reject);
-            outgoing.end(input.bodyText ?? undefined);
+            }, (incoming) => {
+              if (settled) { incoming.destroy(); return; }
+              response = incoming;
+              void readProviderResult(incoming, this.options.maxResponseBytes).then(
+                (result) => finish(undefined, result), finish,
+              );
+            });
+              outgoing.once("error", finish);
+              outgoing.end(input.bodyText ?? undefined);
+            } catch (error) { finish(error); }
           });
-          return await readProviderResult(response, this.options.maxResponseBytes);
         } catch (error) {
           if (error instanceof JustOneApiError) throw error;
           lease?.failed();
-          throw new JustOneApiError("Provider transport result is uncertain; replay is prohibited.", "RESULT_UNKNOWN", true);
+          const reason = error instanceof Error && ["PROVIDER_DEADLINE_EXCEEDED", "PROVIDER_TUNNEL_CLOSED"].includes(error.message)
+            ? error.message
+            : error && typeof error === "object" && "code" in error && ["ECONNRESET", "ECONNREFUSED", "EPIPE", "ETIMEDOUT", "ABORT_ERR"].includes(String(error.code))
+              ? String(error.code) : "TRANSPORT_INTERRUPTED";
+          throw new JustOneApiError(`Provider transport result is uncertain (${reason}); replay is prohibited.`, "RESULT_UNKNOWN", true);
         }
       },
     };

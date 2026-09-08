@@ -33,6 +33,8 @@ Provider code 100 invalidates the credential globally. Codes 303/601/602 stop on
 
 Token rotation and proxy-node rotation are independent. Only the JustOneAPI client opts into the proxy pool. Document/catalog imports without provider credentials, database/model/MCP traffic and other services keep their existing network paths.
 
+The transport enforces an absolute deadline across response headers and body consumption, in addition to the request abort signal. A prepared TLS tunnel that closes during the durable quota-commit gap must settle the promise even if ClientRequest has not attached listeners. Timeout or disconnect remains unknown with its quota debit retained; only bounded error categories are recorded, never credential-bearing network errors. Recovery uses the original research and workflow identities, not a replacement paid request.
+
 ## Immutable quota import
 
 Apply external-data migrations `030`–`032` through the existing sorted, SHA-verified migration runner before starting the new service. They add provider credential metadata, per-interface counters, immutable import receipts, scoped dispatch ownership and scoped raw attempts; source/raw business tables and their lineage are retained.

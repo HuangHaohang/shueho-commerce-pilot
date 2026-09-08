@@ -689,6 +689,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
             stepInstanceId: workflowStepInstanceId,
             endpointId: endpoint_id,
             message: safeToolMessage(error),
+            researchRequestId: error.researchRequestId,
           }).catch(() => undefined);
         } else if (workflowExecutionId && workflowStepId) {
           await failMarketplaceWorkflowStep(scope, {
@@ -700,7 +701,14 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
             message: safeToolMessage(error),
           }).catch(() => undefined);
         }
-        if (error instanceof JustOneApiError && error.uncertain) throw error;
+        if (error instanceof JustOneApiError && error.uncertain) {
+          return toolSuccess({
+            success: false, provider_completed: false, processing_state: "unknown",
+            code: "UPSTREAM_RESULT_UNKNOWN", message: safeToolMessage(error),
+            research_request_id: error.researchRequestId ?? workflowExecutionId,
+            workflow_execution_id: workflowExecutionId, endpoint_id,
+          });
+        }
         return toolSuccess({
           success: false,
           provider_completed: false,

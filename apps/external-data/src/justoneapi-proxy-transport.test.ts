@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { config } from "./config.js";
 import { JustOneApiProxyPool, openProxyTunnel, type ProxyNode } from "./justoneapi-proxy-pool.js";
 import { createTransportTestClient } from "./justoneapi-transport-test-support.js";
+import { JustOneApiHttpTransport } from "./justoneapi-http-transport.js";
 import { buildProviderTransportRequest } from "./transport-request.js";
 import type { ProviderEndpoint } from "./types.js";
 
@@ -162,6 +163,32 @@ describe("JustOneAPI HTTP/TLS proxy boundary", () => {
     await expect(fixture.client.call(endpoint, buildProviderTransportRequest(endpoint, {})))
       .rejects.toMatchObject({ code: "RESULT_UNKNOWN", uncertain: true });
     expect(fixture.paid).toHaveLength(1);
+  });
+
+  it("bounds a silent upstream that never sends HTTP response headers", async () => {
+    const fixture = await environment(() => undefined);
+    await fixture.pool.refresh();
+    config.justOneApi.timeoutMs = 100;
+    const start = Date.now();
+    await expect(fixture.client.call(endpoint, buildProviderTransportRequest(endpoint, {})))
+      .rejects.toMatchObject({ code: "RESULT_UNKNOWN", uncertain: true });
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(fixture.paid).toHaveLength(1);
+  });
+
+  it("settles when a prepared tunnel closes during the durable quota commit gap", async () => {
+    const fixture = await environment();
+    await fixture.pool.refresh();
+    const lease = await fixture.pool.acquire(Date.now() + 1000);
+    const adapter = new JustOneApiHttpTransport({ baseUrl: fixture.target.origin, maxResponseBytes: 10000, production: false }, async () => ({
+      allowsTarget: () => true, acquire: async () => lease,
+    }) as unknown as JustOneApiProxyPool);
+    const request = await adapter.prepare(endpoint, buildProviderTransportRequest(endpoint, {}), Date.now() + 100);
+    lease.socket.destroy();
+    await expect(request.send({ id: "fixture", fingerprint: "f".repeat(64), token: "fixture" }))
+      .rejects.toMatchObject({ code: "RESULT_UNKNOWN", uncertain: true });
+    expect(fixture.paid).toHaveLength(0);
+    request.close();
   });
 
   it("does not follow redirects and does not treat HTTP errors as a reason to replay", async () => {

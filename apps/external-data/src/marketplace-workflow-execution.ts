@@ -267,18 +267,19 @@ export async function completeMarketplaceWorkflowStep(
 
 export async function markMarketplaceWorkflowStepUnknown(
   scope: WorkflowScope,
-  input: { executionId: string; stepId: string; stepInstanceId?: string | null; endpointId: string; message: string },
+  input: { executionId: string; stepId: string; stepInstanceId?: string | null; endpointId: string; message: string; researchRequestId?: string },
 ): Promise<void> {
   await withScope(scope, async (client) => {
     await client.query(`
       UPDATE research_workflow_step_execution
       SET state='unknown',provider_completed=NULL,processing_state='unknown',
+          research_request_id=COALESCE(research_request_id,$8::uuid),
           failure_code='UPSTREAM_RESULT_UNKNOWN',failure_message=$5,
           completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
       WHERE workflow_execution_id=$1 AND endpoint_id=$3
         AND tenant_id=$4 AND workspace_id=$6 AND state='running'
         AND (($7::uuid IS NOT NULL AND id=$7) OR ($7::uuid IS NULL AND step_id=$2 AND is_template=false))
-    `, [input.executionId,input.stepId,input.endpointId,scope.tenantId,input.message.slice(0,500),scope.workspaceId,input.stepInstanceId ?? null]);
+    `, [input.executionId,input.stepId,input.endpointId,scope.tenantId,input.message.slice(0,500),scope.workspaceId,input.stepInstanceId ?? null,input.researchRequestId ?? null]);
     await client.query(`
       UPDATE research_workflow_execution
       SET status='unknown',failure_code='UPSTREAM_RESULT_UNKNOWN',failure_message=$2,
@@ -527,6 +528,7 @@ export async function cancelMarketplaceWorkflowExecution(
 export async function completeMarketplaceWorkflowExecution(
   scope: WorkflowScope,
   executionId: string,
+  options: { readOnly?: boolean } = {},
 ): Promise<CompactResearchResult & { workflow: JsonObject; research_request_ids: string[] }> {
   const execution = await readExecution(scope, executionId);
   const stepRows = await readSteps(scope, executionId);
@@ -548,13 +550,14 @@ export async function completeMarketplaceWorkflowExecution(
   const unexecutedSteps = executableStepRows.filter((step) => ["planned", "running", "cancelled"].includes(step.state));
   const incompleteSteps = executableStepRows.filter((step) => !["completed", "skipped"].includes(step.state));
   const completedSteps = executableStepRows.filter((step) => step.state === "completed");
-  const status = execution.status === "cancelled" || execution.status === "unknown"
+  const terminalStatus = execution.status === "cancelled" || execution.status === "unknown"
     ? execution.status
     : executableStepRows.length > 0 && completedSteps.length === executableStepRows.length && unresolvedTemplateRows.length === 0
       ? "completed"
       : completedSteps.length > 0
         ? "partial"
         : "failed";
+  const status = options.readOnly && ["planned", "running"].includes(execution.status) ? execution.status : terminalStatus;
   const evidence = dedupeRows([
     ...childResults.flatMap(({ step, result }) =>
       result.evidence.map((row) => ({
@@ -581,8 +584,10 @@ export async function completeMarketplaceWorkflowExecution(
     success: status === "completed",
     provider_completed: childResults.length > 0 && childResults.every(({ result: child }) => child.provider_completed),
     processing_state: status,
-    code: status === "completed" ? 0 : status === "cancelled" ? 409 : status === "unknown" ? 502 : 422,
-    message: status === "completed"
+    code: ["planned", "running"].includes(status) ? 202 : status === "completed" ? 0 : status === "cancelled" ? 409 : status === "unknown" ? 502 : 422,
+    message: ["planned", "running"].includes(status)
+      ? "研究正在执行；当前返回已有步骤状态和已治理数据，请稍后查询同一编号，不要重新发起采集。"
+      : status === "completed"
       ? "SHUEHO 已完成关键词发现、商品标识解析和下游详情工作流。"
       : status === "partial"
         ? "关键词商品研究仅部分完成；已保留成功步骤的数据，未自动重试失败或未执行的付费调用。"
@@ -598,6 +603,7 @@ export async function completeMarketplaceWorkflowExecution(
     observed_at: observedAt,
     coverage: {
       ...execution.plan_coverage,
+      retry_after_seconds: ["planned", "running"].includes(status) ? 15 : null,
       provider_calls_planned: executableStepRows.length,
       provider_calls_started: startedSteps.length,
       provider_calls_completed: completedSteps.length,
@@ -648,6 +654,7 @@ export async function completeMarketplaceWorkflowExecution(
     },
     research_request_ids: childResults.map(({ result: child }) => child.research_request_id),
   };
+  if (options.readOnly) return result;
   await withScope(scope, async (client) => {
     await client.query(`
       UPDATE research_workflow_execution
@@ -660,7 +667,7 @@ export async function completeMarketplaceWorkflowExecution(
   await settleMarketplaceResearchPlan(
     scope,
     execution.research_plan_id,
-    status === "unknown" ? "failed" : status,
+    terminalStatus === "unknown" ? "failed" : terminalStatus,
   );
   return result;
 }
@@ -717,14 +724,16 @@ export async function loadWorkflowOrResearchResult(
   scope: WorkflowScope,
   id: string,
 ): Promise<CompactResearchResult | (CompactResearchResult & { workflow: JsonObject; research_request_ids: string[] })> {
-  const workflow = await withScope(scope, async (client) => client.query<{ compact_result: JsonObject | null }>(`
-    SELECT compact_result FROM research_workflow_execution
-    WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3 LIMIT 1
+  const workflow = await withScope(scope, async (client) => client.query<{ id: string; compact_result: JsonObject | null }>(`
+    SELECT execution.id,execution.compact_result FROM research_workflow_execution execution
+    LEFT JOIN marketplace_research_plan plan ON plan.workflow_execution_id=execution.id
+      AND plan.tenant_id=execution.tenant_id AND plan.workspace_id=execution.workspace_id
+    WHERE (execution.id=$1 OR plan.id=$1) AND execution.tenant_id=$2 AND execution.workspace_id=$3 LIMIT 1
   `, [id, scope.tenantId, scope.workspaceId]));
   if (workflow.rows[0]?.compact_result) {
     return workflow.rows[0].compact_result as CompactResearchResult & { workflow: JsonObject; research_request_ids: string[] };
   }
-  if (workflow.rows[0]) return completeMarketplaceWorkflowExecution(scope, id);
+  if (workflow.rows[0]) return completeMarketplaceWorkflowExecution(scope, workflow.rows[0].id, { readOnly: true });
   return loadCompactResearchResult(scope, id);
 }
 

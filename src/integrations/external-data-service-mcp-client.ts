@@ -39,6 +39,7 @@ export class ExternalDataServiceMcpError extends Error {
     message: string,
     readonly code: "NOT_CONFIGURED" | "CONNECT_FAILED" | "TOOL_UNAVAILABLE" | "CALL_FAILED" | "INVALID_RESULT" | "RESULT_TOO_LARGE",
     readonly uncertain = false,
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "ExternalDataServiceMcpError";
@@ -158,7 +159,15 @@ export class ExternalDataServiceMcpClient {
     this.assertConfigured();
     await this.ensureConnected();
     try {
-      return await this.callOnce("call_endpoint", args);
+      const result = await this.callOnce("call_endpoint", args);
+      if (result.payload.processing_state === "unknown") {
+        throw new ExternalDataServiceMcpError(
+          typeof result.payload.message === "string" ? safeMessage(new Error(result.payload.message)) : "Provider result is uncertain.",
+          "CALL_FAILED", true,
+          { research_request_id: result.payload.research_request_id, workflow_execution_id: result.payload.workflow_execution_id },
+        );
+      }
+      return result;
     } catch (error) {
       throw normalizeError(error, true);
     }
@@ -263,8 +272,15 @@ function parseResult(result: unknown, maximumBytes: number): ExternalDataService
       .map((item) => item.text as string)
       .join("\n");
     if (text) {
-      const parsed = JSON.parse(text) as unknown;
-      payload = isRecord(parsed) ? parsed : { value: parsed };
+      try {
+        const parsed = JSON.parse(text) as unknown;
+        payload = isRecord(parsed) ? parsed : { value: parsed };
+      } catch {
+        throw new ExternalDataServiceMcpError(
+          result.isError === true ? `External-data tool failed: ${safeMessage(new Error(text))}` : "External-data MCP returned invalid structured data.",
+          "INVALID_RESULT", true,
+        );
+      }
     }
   }
   if (!payload) throw new ExternalDataServiceMcpError("MCP returned no structured payload.", "INVALID_RESULT");

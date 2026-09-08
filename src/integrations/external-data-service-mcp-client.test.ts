@@ -134,6 +134,36 @@ test("stays disabled without a service-owned internal token", async () => {
   );
 });
 
+test("preserves structured uncertain-result recovery ids and sends only once", async () => {
+  const client = createClient(128_000);
+  const before = paidDispatches;
+  try {
+    await assert.rejects(client.callEndpoint({ endpoint_id: "taobao.uncertain_v1" }), (error: unknown) => {
+      assert(error instanceof ExternalDataServiceMcpError);
+      assert.equal(error.uncertain, true);
+      assert.equal(error.details.research_request_id, "00000000-0000-4000-8000-000000000042");
+      assert.match(error.message, /deadline/);
+      return true;
+    });
+    assert.equal(paidDispatches - before, 1);
+  } finally { await client.close(); }
+});
+
+test("plain-text SDK errors retain their cause instead of causing JSON parse errors", async () => {
+  const client = createClient(128_000);
+  const before = paidDispatches;
+  try {
+    await assert.rejects(client.callEndpoint({ endpoint_id: "taobao.text_error_v1" }), (error: unknown) => {
+      assert(error instanceof ExternalDataServiceMcpError);
+      assert.equal(error.uncertain, true);
+      assert.match(error.message, /Provider transport/);
+      assert.doesNotMatch(error.message, /Unexpected token/);
+      return true;
+    });
+    assert.equal(paidDispatches - before, 1);
+  } finally { await client.close(); }
+});
+
 function createClient(maxResultBytes: number): ExternalDataServiceMcpClient {
   return new ExternalDataServiceMcpClient({
     url: `${origin}/mcp`,
@@ -274,6 +304,11 @@ function createMockServer(): McpServer {
     { inputSchema: { endpoint_id: z.string(), params: z.record(z.unknown()).default({}) } },
     async ({ endpoint_id }) => {
       paidDispatches += 1;
+      if (endpoint_id === "taobao.text_error_v1") throw new Error("Provider transport interrupted.");
+      if (endpoint_id === "taobao.uncertain_v1") return result({
+        success: false, processing_state: "unknown", provider_completed: false,
+        message: "Provider deadline exceeded.", research_request_id: "00000000-0000-4000-8000-000000000042",
+      });
       return result({ success: true, code: 0, endpoint_id, data: { content: "x".repeat(2_000) } });
     },
   );

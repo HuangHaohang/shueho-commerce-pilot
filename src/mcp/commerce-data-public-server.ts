@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createPublicHttpTransport } from "./public-http-transport.js";
+import { researchExecutionResponse } from "./research-execution-response.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
 
@@ -197,7 +198,7 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
       "get_research_result",
       {
         title: "读取已治理研究结果",
-        description: "读取业务研究工具返回的研究请求结果，不返回原始仓内容。",
+        description: "按研究请求 ID、执行 ID 或商品计划 ID 读取状态及已治理结果，不重新采集、不返回原始仓内容。执行中按 retry_after_seconds 等待后再查。",
         inputSchema: { research_request_id: z.string().uuid() },
         annotations: {
           readOnlyHint: true,
@@ -362,7 +363,14 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
         inputSchema: { plan_id: z.string().uuid() },
         annotations: { readOnlyHint: false,destructiveHint: true,idempotentHint: false,openWorldHint: true },
       },
-      async ({ plan_id }) => executePublicMarketplaceResearchPlan(principal, plan_id),
+      async ({ plan_id }) => researchExecutionResponse(
+        executePublicMarketplaceResearchPlan(principal, plan_id),
+        () => toolSuccess({
+          success: true, code: 202, processing_state: "running", provider_completed: false,
+          plan_id, research_request_id: plan_id, recovery_tool: "get_research_result", retry_after_seconds: 15,
+          message: "研究已提交，后台继续同一次执行。请用 get_research_result 查询此编号，勿重新执行或另建计划重试。",
+        }),
+      ),
     );
   }
   return server;
@@ -462,7 +470,9 @@ async function executePublicMarketplaceResearchPlan(
         resultBytes: null,responsePayload: null,
       }).catch(() => undefined);
       return toolError("UPSTREAM_RESULT_UNKNOWN",normalized.message,
-        { role: step.role,targetOrdinal: instance.targetOrdinal });
+        { ...normalized.details, role: step.role,targetOrdinal: instance.targetOrdinal,
+          plan_id: executable.planId, workflow_execution_id: executable.executionId,
+          research_request_id: executable.executionId, recovery_tool: "get_research_result" });
     }
     const outcome = classifyExternalDataServiceOutcome(result.payload,result.isError);
     await control.settle(principal,reservation.reservationId, {
