@@ -17,13 +17,15 @@ export type TokenPoolStatus = { tokens: number; activeTokens: number; endpoints:
 export interface JustOneApiTokenStore {
   status(tokenIds: string[]): Promise<TokenPoolStatus>;
   register(credentials: readonly JustOneApiCredential[]): Promise<void>;
-  begin(identity: JustOneApiCallIdentity, executionId: string): Promise<void>;
+  begin(identity: JustOneApiCallIdentity, executionId: string, deadlineAt?: number): Promise<void>;
   reserve(identity: JustOneApiCallIdentity, executionId: string, tokenIds: string[]): Promise<TokenReservation | null>;
+  availabilityDelay(identity: JustOneApiCallIdentity, tokenIds: string[]): Promise<number | null>;
+  progress(identity: JustOneApiCallIdentity, executionId: string, attemptCount: number, waitReason: string | null, nextAttemptAt: number | null): Promise<void>;
   dispatch(identity: JustOneApiCallIdentity, executionId: string, reservation: TokenReservation, proxyNodeId: string | null): Promise<boolean>;
   cancel(identity: JustOneApiCallIdentity, reservation: TokenReservation): Promise<void>;
   complete(identity: JustOneApiCallIdentity, reservation: TokenReservation, result: ProviderCallResult, feedback: TokenFeedback, uncertain?: boolean): Promise<void>;
   unknown(identity: JustOneApiCallIdentity, reservation: TokenReservation): Promise<void>;
-  finish(identity: JustOneApiCallIdentity, executionId: string, state: "completed" | "failed" | "unknown"): Promise<void>;
+  finish(identity: JustOneApiCallIdentity, executionId: string, state: "completed" | "failed" | "unknown", failureCode?: string): Promise<void>;
 }
 
 export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
@@ -61,16 +63,16 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
     finally { client.release(); }
   }
 
-  async begin(identity: JustOneApiCallIdentity, executionId: string): Promise<void> {
+  async begin(identity: JustOneApiCallIdentity, executionId: string, deadlineAt?: number): Promise<void> {
     await this.transaction(identity, async (client) => {
       const raw = await client.query(`SELECT 1 FROM external_api_call_raw
         WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3 AND api_path=$4
           AND request_sha256=$5 AND user_id=$6 AND state='dispatched' FOR UPDATE`,
       [identity.rawCallId,identity.tenantId,identity.workspaceId,identity.apiPath,identity.requestSha256,identity.userId]);
       if (!raw.rowCount) throw new JustOneApiError("Provider call requires an owned immutable warehouse request.", "INVALID_PARAMETER", false);
-      const inserted = await client.query(`INSERT INTO justoneapi_dispatch(raw_call_id,tenant_id,workspace_id,execution_id)
-        VALUES ($1,$2,$3,$4) ON CONFLICT (raw_call_id) DO NOTHING RETURNING raw_call_id`,
-      [identity.rawCallId,identity.tenantId,identity.workspaceId,executionId]);
+      const inserted = await client.query(`INSERT INTO justoneapi_dispatch(raw_call_id,tenant_id,workspace_id,execution_id,deadline_at)
+        VALUES ($1,$2,$3,$4,$5) ON CONFLICT (raw_call_id) DO NOTHING RETURNING raw_call_id`,
+      [identity.rawCallId,identity.tenantId,identity.workspaceId,executionId,deadlineAt === undefined ? null : new Date(deadlineAt)]);
       if (!inserted.rowCount) throw new JustOneApiError("Provider request already claimed; replay is prohibited.", "CALL_ALREADY_CLAIMED", true);
     });
   }
@@ -87,7 +89,9 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
           AND quota.state='active' AND quota.remaining_calls>0 AND token.state='active'
           AND (quota.cooldown_until IS NULL OR quota.cooldown_until<=CURRENT_TIMESTAMP)
           AND NOT EXISTS (SELECT 1 FROM justoneapi_token_attempt previous
-            WHERE previous.raw_call_id=$3 AND previous.token_id=quota.token_id)
+            WHERE previous.raw_call_id=$3 AND NOT (previous.state='cancelled' OR
+              COALESCE(previous.state='business_failed' AND previous.provider_code IN (301,302)
+                AND (previous.http_status BETWEEN 200 AND 299 OR previous.http_status=429),false)))
         ORDER BY quota.last_selected_seq,array_position($2::text[],quota.token_id) LIMIT 1 FOR UPDATE OF quota,token`,
       [identity.apiPath,tokenIds,identity.rawCallId]);
       const tokenId = selected.rows[0]?.token_id;
@@ -104,6 +108,27 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
     });
   }
 
+  async availabilityDelay(identity: JustOneApiCallIdentity, tokenIds: string[]): Promise<number | null> {
+    return this.transaction(identity, async (client) => {
+      const result = await client.query<{ wait_ms: number | null }>(`
+        SELECT CASE WHEN count(*)=0 THEN NULL ELSE GREATEST(1,
+          CEIL(EXTRACT(EPOCH FROM (MIN(COALESCE(quota.cooldown_until,clock_timestamp()))-clock_timestamp()))*1000))::float8 END AS wait_ms
+        FROM justoneapi_token_endpoint_quota quota JOIN justoneapi_token token ON token.token_id=quota.token_id
+        WHERE quota.api_path=$1 AND quota.token_id=ANY($2::text[]) AND quota.state='active'
+          AND token.state='active' AND quota.remaining_calls>0`, [identity.apiPath,tokenIds]);
+      return result.rows[0]!.wait_ms;
+    });
+  }
+
+  async progress(identity: JustOneApiCallIdentity, executionId: string, attemptCount: number, waitReason: string | null, nextAttemptAt: number | null): Promise<void> {
+    await this.transaction(identity, async (client) => {
+      await this.lockExecution(client, identity, executionId);
+      await client.query(`UPDATE justoneapi_dispatch SET attempt_count=$3,wait_reason=$4,next_attempt_at=$5
+        WHERE raw_call_id=$1 AND execution_id=$2`, [identity.rawCallId,executionId,attemptCount,waitReason,
+        nextAttemptAt === null ? null : new Date(nextAttemptAt)]);
+    });
+  }
+
   async dispatch(identity: JustOneApiCallIdentity, executionId: string, reservation: TokenReservation, proxyNodeId: string | null): Promise<boolean> {
     return this.transaction(identity, async (client) => {
       await this.lockExecution(client, identity, executionId);
@@ -111,6 +136,7 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
       const allowed = await client.query(`SELECT 1 FROM justoneapi_token token
         JOIN justoneapi_token_endpoint_quota quota ON quota.token_id=token.token_id
         WHERE token.token_id=$1 AND token.state='active' AND quota.api_path=$2 AND quota.state='active'
+          AND (quota.cooldown_until IS NULL OR quota.cooldown_until<=CURRENT_TIMESTAMP)
         FOR UPDATE OF token,quota`, [reservation.tokenId,identity.apiPath]);
       if (!allowed.rowCount) return false;
       const changed = await client.query(`UPDATE justoneapi_token_attempt SET state='dispatched',
@@ -145,11 +171,11 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
       await this.lockEndpoint(client, identity.apiPath);
       const changed = await client.query(`UPDATE justoneapi_token_attempt SET state=$4,completed_at=CURRENT_TIMESTAMP,
         http_status=$5,provider_code=$6,response_payload=$7::jsonb,response_body_text=$8,
-        response_raw_bytes=$9,response_sha256=$10,response_content_type=$11,response_bytes=$12
+        response_raw_bytes=$9,response_sha256=$10,response_content_type=$11,response_bytes=$12,retry_after_ms=$13
         WHERE id=$1 AND raw_call_id=$2 AND token_id=$3 AND state='dispatched' RETURNING id`,
       [reservation.id,identity.rawCallId,reservation.tokenId,uncertain ? "unknown" : result.state,result.httpStatus,result.providerCode,
         result.payload === null ? null : JSON.stringify(result.payload),result.rawBody,Buffer.from(result.rawBytes),
-        result.responseSha256,result.contentType,result.responseBytes]);
+        result.responseSha256,result.contentType,result.responseBytes,result.retryAfterMs ?? null]);
       if (!changed.rowCount) throw new Error("Provider attempt is not awaiting a response.");
       await client.query(`UPDATE justoneapi_token_endpoint_quota SET inflight_calls=inflight_calls-1,
         updated_at=CURRENT_TIMESTAMP WHERE token_id=$1 AND api_path=$2`, [reservation.tokenId,identity.apiPath]);
@@ -175,10 +201,12 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
     });
   }
 
-  async finish(identity: JustOneApiCallIdentity, executionId: string, state: "completed" | "failed" | "unknown"): Promise<void> {
+  async finish(identity: JustOneApiCallIdentity, executionId: string, state: "completed" | "failed" | "unknown", failureCode?: string): Promise<void> {
     await this.transaction(identity, async (client) => {
-      const result = await client.query(`UPDATE justoneapi_dispatch SET state=$3,completed_at=CURRENT_TIMESTAMP
-        WHERE raw_call_id=$1 AND execution_id=$2 AND state='active' RETURNING raw_call_id`, [identity.rawCallId,executionId,state]);
+      const result = await client.query(`UPDATE justoneapi_dispatch SET state=$3,completed_at=CURRENT_TIMESTAMP,
+        next_attempt_at=CASE WHEN $3='completed' THEN NULL ELSE next_attempt_at END,
+        wait_reason=CASE WHEN $3='completed' THEN NULL ELSE wait_reason END,failure_code=$4
+        WHERE raw_call_id=$1 AND execution_id=$2 AND state='active' RETURNING raw_call_id`, [identity.rawCallId,executionId,state,failureCode ?? null]);
       if (!result.rowCount) throw new Error("Provider execution ownership is no longer active.");
     });
   }

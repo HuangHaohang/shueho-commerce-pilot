@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Pool } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { defaultJustOneApiResilience } from "./justoneapi-retry-policy.js";
 import { JustOneApiClient } from "./justoneapi-client.js";
 import { credentialForToken, type JustOneApiCredential } from "./justoneapi-credentials.js";
 import { JustOneApiError } from "./justoneapi-errors.js";
@@ -63,12 +64,14 @@ async function fixture(count = 2, quotaA = 3, quotaB = 2) {
   const receipt = await importJustOneApiQuotaSnapshot(owner, credentials, snapshot);
   const store = new PostgresJustOneApiTokenStore(runtime);
   const sent: string[] = [];
-  const make = (send: (credential: JustOneApiCredential) => Promise<ProviderCallResult> = async () => response(), before?: () => Promise<void>, customStore = store) => {
+  const make = (send: (credential: JustOneApiCredential) => Promise<ProviderCallResult> = async () => response(), before?: () => Promise<void>, customStore = store, maxAttempts = 1) => {
     const transport: JustOneApiTransport = { prepare: async () => {
       await before?.();
       return { proxyNodeId: "node-0000000000000001", close() {}, send: async (credential) => { sent.push(credential.id); return send(credential); } };
     } };
-    return new JustOneApiClient({ credentials: async () => credentials, store: customStore, transport, timeoutMs: () => 5000, configured: true });
+    return new JustOneApiClient({
+      admission: { acquire: async () => ({ acquired: true,waitMs: 0,reason: null }),feedback: async () => 0,release: async () => undefined },
+      resilience: { ...defaultJustOneApiResilience,maxAttempts,minimumAttemptWindowMs: 1,retryBaseMs: 1 }, credentials: async () => credentials, store: customStore, transport, timeoutMs: () => 5000, configured: true });
   };
   const counters = async (apiPath = pathA) => (await owner.query(`SELECT token_id,remaining_calls::int,reserved_calls::int,
     used_calls::int,inflight_calls::int,state FROM justoneapi_token_endpoint_quota WHERE api_path=$1 AND token_id=ANY($2) ORDER BY array_position($2::text[],token_id)`,
@@ -217,6 +220,24 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     const f = await fixture(2,0); const call = await ownedRequest();
     await expect(f.make().call(call.ep,call.request,call.identity)).rejects.toMatchObject({ code:"TOKEN_QUOTA_UNAVAILABLE",uncertain:false });
     expect(f.sent).toHaveLength(0);
+  });
+
+
+  it.each([301,302])("archives rejected attempt %s then succeeds once within the same durable call", async (code) => {
+    const f = await fixture(code === 301 ? 1 : 2); const call = await ownedRequest();
+    let attempts = 0;
+    const result = await f.make(async () => ({ ...response(++attempts === 1 ? code : 0),retryAfterMs: 1 }),undefined,undefined,3)
+      .call(call.ep,call.request,call.identity);
+    expect(result.providerCode).toBe(0);
+    expect(f.sent).toHaveLength(2);
+    const saved = await owner.query("SELECT state,provider_code,retry_after_ms,response_raw_bytes FROM justoneapi_token_attempt WHERE raw_call_id=$1 ORDER BY ordinal",[call.identity.rawCallId]);
+    expect(saved.rows.map((row) => row.provider_code)).toEqual([code,0]);
+    expect(saved.rows.every((row) => row.response_raw_bytes.length > 0)).toBe(true);
+    expect((await f.counters()).reduce((sum, row) => sum + row.used_calls,0)).toBe(2);
+    expect((await owner.query("SELECT state,attempt_count FROM justoneapi_dispatch WHERE raw_call_id=$1",[call.identity.rawCallId])).rows[0])
+      .toEqual({ state:"completed",attempt_count:2 });
+    await expect(f.make().call(call.ep,call.request,call.identity)).rejects.toMatchObject({ code:"CALL_ALREADY_CLAIMED" });
+    expect(f.sent).toHaveLength(2);
   });
 
   it("keeps a finish failure after a stored response uncertain rather than declaring no dispatch", async () => {

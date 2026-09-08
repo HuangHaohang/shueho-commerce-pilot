@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { workflowPolling } from "./provider-execution-status.js";
 import { researchAnalysisReadiness } from "./evidence-assessment.js";
 import { sha256Json } from "./canonical.js";
 import { withScope } from "./database.js";
@@ -580,6 +581,10 @@ export async function completeMarketplaceWorkflowExecution(
     ...stringValues(child.coverage.availableMetrics),
   ]))].sort();
   const missingRequestedMetrics = requestedMetrics.filter((metric) => !availableMetrics.includes(metric));
+  const childExecutions = childResults.filter(({ result: child }) => isRecord(child.coverage.execution))
+    .map(({ result: child, step }) => ({ ...child.coverage.execution as JsonObject,
+      researchRequestId: child.research_request_id, role: step.role, targetOrdinal: step.target_ordinal }));
+  const polling = workflowPolling(status, childExecutions);
   const observedAt = childResults.map(({ result }) => result.observed_at).sort().at(-1) ?? execution.created_at.toISOString();
   const result: CompactResearchResult & { workflow: JsonObject; research_request_ids: string[] } = {
     success: status === "completed",
@@ -604,7 +609,9 @@ export async function completeMarketplaceWorkflowExecution(
     observed_at: observedAt,
     coverage: {
       ...execution.plan_coverage,
-      retry_after_seconds: ["planned", "running"].includes(status) ? 15 : null,
+      retry_after_seconds: polling.retryAfterSeconds,
+      polling,
+      executions: childExecutions,
       provider_calls_planned: executableStepRows.length,
       provider_calls_started: startedSteps.length,
       provider_calls_completed: completedSteps.length,

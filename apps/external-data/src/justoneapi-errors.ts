@@ -3,7 +3,7 @@ export class JustOneApiError extends Error {
   constructor(
     message: string,
     readonly code: "NOT_CONFIGURED" | "METHOD_UNSUPPORTED" | "INVALID_PARAMETER" | "RESULT_UNKNOWN" |
-      "RESULT_TOO_LARGE" | "INVALID_RESPONSE" | "PROXY_UNAVAILABLE" | "TOKEN_QUOTA_UNAVAILABLE" | "CALL_ALREADY_CLAIMED" | "QUOTA_STORE_UNAVAILABLE",
+      "ADMISSION_TIMEOUT" | "RESULT_TOO_LARGE" | "INVALID_RESPONSE" | "PROXY_UNAVAILABLE" | "TOKEN_QUOTA_UNAVAILABLE" | "CALL_ALREADY_CLAIMED" | "QUOTA_STORE_UNAVAILABLE",
     readonly uncertain: boolean,
   ) { super(message); this.name = "JustOneApiError"; }
 }

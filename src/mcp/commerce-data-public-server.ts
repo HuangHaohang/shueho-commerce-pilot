@@ -2,6 +2,7 @@ import "dotenv/config";
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createPublicHttpTransport } from "./public-http-transport.js";
+import { repeatedPlanResult } from "./repeated-plan-result.js";
 import { researchExecutionResponse } from "./research-execution-response.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { z } from "zod";
@@ -198,7 +199,7 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
       "get_research_result",
       {
         title: "读取已治理研究结果",
-        description: "按研究请求 ID、执行 ID 或商品计划 ID 读取状态及已治理结果，不重新采集、不返回原始仓内容。执行中按 retry_after_seconds 等待后再查。",
+        description: "按研究请求 ID、执行 ID 或商品计划 ID 读取状态、排队/重试进度及已治理结果，不重新采集。遵循 coverage.polling 或 coverage.execution.polling：poll_same_request 按 retryAfterSeconds 等待，stop 停止轮询，reconcile 需要对账且禁止重发。",
         inputSchema: { research_request_id: z.string().uuid() },
         annotations: {
           readOnlyHint: true,
@@ -359,9 +360,9 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal): McpS
       "execute_marketplace_research",
       {
         title: "执行已固定商品研究计划（可能计费）",
-        description: "仅接受未过期的 plan_id；每个供应商步骤仍分别执行权限、预算、策略批准、精确一次分发、原始归档和结算。",
+        description: "仅接受已固定的 plan_id；同一计划重复提交只读取原执行状态，不重复采集。供应商明确拒绝的 301/302 由服务端限次退避重试并共享限流；不确定结果禁止重试。每步仍执行权限、预算、策略批准、归档和结算。",
         inputSchema: { plan_id: z.string().uuid() },
-        annotations: { readOnlyHint: false,destructiveHint: true,idempotentHint: false,openWorldHint: true },
+        annotations: { readOnlyHint: false,destructiveHint: true,idempotentHint: true,openWorldHint: true },
       },
       async ({ plan_id }) => researchExecutionResponse(
         executePublicMarketplaceResearchPlan(principal, plan_id),
@@ -390,6 +391,13 @@ async function executePublicMarketplaceResearchPlan(
       request_text: `Execute marketplace research plan ${planId}`,top_n: 50,business_intent: null,
     }, authorization);
   } catch (error) {
+    if (error instanceof MarketplaceProductResearchPreflightError && error.code === "PLAN_NOT_READY") {
+      const existing = await repeatedPlanResult(error.code, planId, () => upstream.getResearchResult({
+        research_request_id: planId,
+        _commerce_context: { tenant_id: principal.tenantId,workspace_id: principal.workspaceId },
+      }));
+      if (existing) return toolSuccess(existing);
+    }
     return toolError(
       error instanceof MarketplaceProductResearchPreflightError ? error.code : "MARKETPLACE_PLAN_EXECUTION_FAILED",
       error instanceof Error ? error.message : "Marketplace plan could not be executed.",

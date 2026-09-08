@@ -122,6 +122,7 @@ export type QueryIdentity = {
 };
 
 export type ProviderCallResult = {
+  retryAfterMs?: number | null;
   state: "succeeded" | "business_failed";
   httpStatus: number;
   payload: JsonObject | null;

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { request as httpRequest, type ClientRequest, type IncomingMessage } from "node:http";
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import { parseRetryAfter } from "./justoneapi-retry-policy.js";
 import { JustOneApiError } from "./justoneapi-errors.js";
 import type { JustOneApiProxyPool, ProxyLease } from "./justoneapi-proxy-pool.js";
 import type { JustOneApiCredential } from "./justoneapi-credentials.js";
@@ -155,6 +156,7 @@ async function readProviderResult(response: IncomingMessage, maximumBytes: numbe
     contentType: response.headers["content-type"] ?? null,
     responseBytes: bytes.byteLength,
     providerCode,
+    retryAfterMs: parseRetryAfter(response.headers["retry-after"]),
     providerMessage,
     providerRequestId: payload && typeof payload.requestId === "string" ? payload.requestId.slice(0, 255) : null,
     providerRecordedAt: parseProviderTime(payload?.recordTime),

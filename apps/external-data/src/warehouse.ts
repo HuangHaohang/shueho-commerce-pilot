@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { assessProductMetrics, ENRICHMENT_VERSION, publicEvidenceAssessment, researchAnalysisReadiness } from "./evidence-assessment.js";
+import { providerExecutionStatus } from "./provider-execution-status.js";
 import { recordServiceAudit } from "./audit.js";
 import { applyResearchIntentQuality } from "./intent-quality.js";
 import { buildQueryIdentity, canonicalJson, sha256Json, utf8JsonBytes } from "./canonical.js";
@@ -1415,6 +1416,13 @@ export async function loadCompactResearchResult(
       endpoint_id: string;
       raw_call_id: string;
       raw_state: string;
+      dispatch_state: string | null;
+      deadline_at: Date | null;
+      next_attempt_at: Date | null;
+      wait_reason: string | null;
+      attempt_count: number;
+      failure_code: string | null;
+      last_attempt_code: number | null;
       provider_code: number | null;
       provider_message: string | null;
       observed_at: Date;
@@ -1422,10 +1430,15 @@ export async function loadCompactResearchResult(
     }>(client, `
       SELECT request.status, request.structured_intent, query_row.query_key, query_row.endpoint_id,
              raw.id AS raw_call_id, raw.state AS raw_state, raw.provider_code, raw.provider_message,
+             dispatch.state AS dispatch_state,dispatch.deadline_at,dispatch.next_attempt_at,
+             dispatch.wait_reason,COALESCE(dispatch.attempt_count,0) AS attempt_count,dispatch.failure_code,
+             (SELECT attempt.provider_code FROM justoneapi_token_attempt attempt WHERE attempt.raw_call_id=raw.id
+               ORDER BY attempt.ordinal DESC LIMIT 1) AS last_attempt_code,
              COALESCE(raw.provider_recorded_at, raw.completed_at, raw.created_at) AS observed_at
       FROM research_request request
       JOIN external_query query_row ON query_row.research_request_id=request.id
       JOIN external_api_call_raw raw ON raw.external_query_id=query_row.id
+      LEFT JOIN justoneapi_dispatch dispatch ON dispatch.raw_call_id=raw.id
       WHERE request.id=$1 LIMIT 1
     `, [researchRequestId]);
     const latestJob = await client.query<{ id: string }>(`
@@ -1653,11 +1666,17 @@ export async function loadCompactResearchResult(
     const availableMetricNames = [...availableMetrics].sort();
     const missingRequestedMetrics = requestedMetrics.filter((metric) => !availableMetrics.has(metric));
     const success = request.status === "completed";
+    const execution = providerExecutionStatus({
+      rawState: request.raw_state, processingState: request.status, dispatchState: request.dispatch_state,
+      deadlineAt: request.deadline_at, nextAttemptAt: request.next_attempt_at, waitReason: request.wait_reason,
+      attemptCount: request.attempt_count, failureCode: request.failure_code, providerCode: request.provider_code ?? request.last_attempt_code,
+    });
     return {
       success,
       provider_completed: request.raw_state === "succeeded",
       processing_state: request.status,
-      code: success ? 0 : request.provider_code ?? 500,
+      code: success ? 0 : execution.phase === "reconciliation_required" ? 502
+        : request.raw_state === "dispatched" ? 202 : request.provider_code ?? 500,
       message: success
         ? "SHUEHO 外部数据服务已完成采集、完整归档、质量判断和业务层晋级。"
         : request.raw_state === "succeeded"
@@ -1684,6 +1703,7 @@ export async function loadCompactResearchResult(
         availableMetrics: availableMetricNames,
         availableMetricFields,
         missingRequestedMetrics,
+        execution,
         analysisReadiness: researchAnalysisReadiness({
           processingComplete: success, requestedMetrics, availableMetrics: availableMetricNames, products,
         }),

@@ -1,3 +1,4 @@
+import { PostgresJustOneApiAdmission } from "./justoneapi-admission.js";
 import { config } from "./config.js";
 import { database } from "./database.js";
 import { JustOneApiClient } from "./justoneapi-client.js";
@@ -15,6 +16,8 @@ const client = new JustOneApiClient({
     production: config.environment === "production",
   }, getJustOneApiProxyPool),
   timeoutMs: () => config.justOneApi.timeoutMs,
+  admission: new PostgresJustOneApiAdmission(database, config.justOneApi.resilience),
+  resilience: config.justOneApi.resilience,
   configured: Boolean(config.justOneApi.token || config.justOneApi.tokensFile),
 });
 

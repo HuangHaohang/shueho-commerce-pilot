@@ -25,11 +25,11 @@ Quotas are keyed by token and exact canonical API path, including version. Param
 1. Existing Commerce governance performs live authorization, approval and budget admission, then the warehouse persists the Token-free request identity.
 2. The unified client claims the raw call once. Duplicate processes, repeated requests and restarts cannot claim it again.
 3. Token selection atomically reserves one unit: available decreases and reserved increases. A verified proxy tunnel is prepared before any provider HTTP request exists.
-4. Before sending, a compare-and-set moves the attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Each independently governed call sends at most one provider HTTP request.
+4. Before sending, a compare-and-set moves each attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Only documented, confirmed non-billable `301`/`302` rejections or a proxy failure before any provider bytes may lead to another bounded attempt under the same immutable governed call. A success, resource/configuration/quota failure or uncertain result cannot be replayed.
 5. The complete response is persisted in the scoped attempt archive before returning to the existing raw/normalization pipeline; in-flight decreases. A second settlement does not change counters.
 6. Proxy/setup failure before dispatch returns the reservation. A timeout, disconnect, 5xx response or uncertain persistence keeps the consumed unit, becomes unknown and is never replayed automatically. The small commit-before-network crash window is conservatively held for operator reconciliation, not silently refunded.
 
-Provider code 100 invalidates the credential globally. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies a bounded cooldown to that combination. Other interfaces remain eligible. Feedback changes selection for the **next independently governed call**, never starts a hidden second HTTP request after a dispatched call. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
+Provider code 100 invalidates the credential globally. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies cooldown to both that combination and the shared endpoint admission bucket. Other interfaces remain eligible. Only `301`/`302` permit an automatic retry within the admitted call; the prior full rejection is archived before reserving/debiting another attempt. Every network attempt consumes one conservative token unit, including a rejected attempt, and no unit is refunded without authoritative quota reconciliation. Other feedback changes eligibility for the next independently governed call. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
 
 Token rotation and proxy-node rotation are independent. Only the JustOneAPI client opts into the proxy pool. Document/catalog imports without provider credentials, database/model/MCP traffic and other services keep their existing network paths.
 
@@ -85,3 +85,27 @@ docker compose --env-file /path/to/release.env \
 Read back `/health`: `justOneApiTokens` shows configured/active counts, ready interface combinations and reserved/used/in-flight totals; `providerCallsReady` also requires healthy proxy egress when enabled. Read-only stored evidence can remain available when new provider calls are blocked. Inspect SQL/status under operator access for per-token details.
 
 Validation uses a dedicated disposable PostgreSQL database with `JUSTONEAPI_TEST_DATABASE_URL` for the non-superuser, non-BYPASSRLS runtime role and `JUSTONEAPI_TEST_MIGRATION_DATABASE_URL` for fixture setup. Tests cover concurrent debit, restart persistence, duplicate claim, raw retention, cancellation, uncertain outcomes, scoped failure handling, RLS and immutable imports. Ordinary unit-test runs do not silently connect to a developer or production database for these cases. Only GitHub Actions with `NODE_ENV=test` may reuse the disposable database already declared by the existing workflow; no additional workflow permissions are needed.
+
+## Bounded retries and shared admission
+
+Migration `034` adds SQL-backed provider/endpoint admission buckets, expiring operational leases and scoped execution progress. Buckets contain no credentials or tenant content; they are internal service-wide operating state, like the existing shared token quota ledger. Attempts and execution ownership retain forced tenant/workspace RLS and immutable terminal records. Live executions may update only progress; ownership, deadline and final receipts remain fenced. The existing sorted migration runner automatically registers this append-only migration.
+
+These defaults are application operating limits, not claimed official provider entitlements:
+
+| Variable | Default | Meaning |
+|---|---:|---|
+| `JUSTONEAPI_MAX_ATTEMPTS` | 3 | Total attempts, including safe proxy setup attempts |
+| `JUSTONEAPI_TOTAL_TIMEOUT_MS` | 180000 | Total admission/backoff/provider window |
+| `JUSTONEAPI_MAX_CONCURRENT` | 4 | Shared provider concurrency across processes and tokens |
+| `JUSTONEAPI_ENDPOINT_MAX_CONCURRENT` | 1 | Shared concurrency for each exact endpoint version |
+| `JUSTONEAPI_MIN_INTERVAL_MS` | 1000 | Minimum provider start spacing |
+| `JUSTONEAPI_ENDPOINT_MIN_INTERVAL_MS` | 2000 | Minimum endpoint start spacing |
+| `JUSTONEAPI_THROTTLE_BASE_MS` | 15000 | First endpoint cooldown; doubles to 120 seconds on repeated throttles |
+
+A valid `Retry-After` overrides any shorter backoff/cooldown. The client stops when the wait cannot fit a fresh minimum 60-second attempt window; it never shortens that provider wait. No SQL transaction or proxy tunnel is held while waiting, and no token quota is reserved until admission succeeds. Shared leases expire after the absolute call deadline plus a margin so a crashed process cannot permanently consume admission capacity. Expiry releases only operational capacity, never a provider quota debit or billing reservation, and does not replay the crashed call.
+
+`coverage.execution` reports phase, attempt count, next attempt time and polling action. Workflow receipts include per-step execution progress and `coverage.polling`. Clients poll the same id only for `poll_same_request`, stop for `stop`, and retain the original id for operator reconciliation on `reconcile`. A dispatched execution past its durable deadline is surfaced for reconciliation without mutating its raw receipt or silently restarting work. This change does not introduce an automatic cross-process workflow replay worker.
+
+Public MCP repeated execution of a consumed, owned plan reads the original result instead of starting another collection. Normal research input schemas and plan scope remain unchanged. Deploy warehouse and public MCP after applying `034`, draining active provider calls first. Do not use real provider execution as a release smoke test: use the disposable PostgreSQL retry/concurrency suite, public readback and a consumed plan whose original provider dispatch is already terminal.
+
+Policy references: [official retry guidance](https://justoneapi.com/zh/blog/api-failure-retry-guide) and [official response-code table](https://justoneapi.apifox.cn/api%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97-%E4%B8%AD%E6%96%87-7571933m0). The project retains its stricter no-replay rule for uncertain transport/5xx outcomes.

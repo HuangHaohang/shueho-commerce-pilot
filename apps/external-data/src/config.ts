@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import { z } from "zod";
+import { defaultJustOneApiResilience } from "./justoneapi-retry-policy.js";
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -16,6 +17,13 @@ const envSchema = z.object({
   JUSTONEAPI_API_TOKEN: z.string().default(""),
   JUSTONEAPI_TOKENS_FILE: z.string().min(1).optional(),
   JUSTONEAPI_API_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(180_000).default(120_000),
+  JUSTONEAPI_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(5).default(3),
+  JUSTONEAPI_TOTAL_TIMEOUT_MS: z.coerce.number().int().min(60_000).max(240_000).default(180_000),
+  JUSTONEAPI_MAX_CONCURRENT: z.coerce.number().int().min(1).max(32).default(4),
+  JUSTONEAPI_ENDPOINT_MAX_CONCURRENT: z.coerce.number().int().min(1).max(8).default(1),
+  JUSTONEAPI_MIN_INTERVAL_MS: z.coerce.number().int().min(0).max(60_000).default(1_000),
+  JUSTONEAPI_ENDPOINT_MIN_INTERVAL_MS: z.coerce.number().int().min(0).max(60_000).default(2_000),
+  JUSTONEAPI_THROTTLE_BASE_MS: z.coerce.number().int().min(1_000).max(120_000).default(15_000),
   JUSTONEAPI_API_MAX_RESPONSE_BYTES: z.coerce.number().int().min(65_536).max(67_108_864).default(67_108_864),
   JUSTONEAPI_PROXY_MODE: z.enum(["off", "required"]).default("off"),
   JUSTONEAPI_PROXY_NODES_FILE: z.string().min(1).optional(),
@@ -73,6 +81,16 @@ export const config = {
     token: parsed.JUSTONEAPI_API_TOKEN,
     tokensFile: parsed.JUSTONEAPI_TOKENS_FILE,
     timeoutMs: parsed.JUSTONEAPI_API_TIMEOUT_MS,
+    resilience: {
+      ...defaultJustOneApiResilience,
+      maxAttempts: parsed.JUSTONEAPI_MAX_ATTEMPTS,
+      totalTimeoutMs: parsed.JUSTONEAPI_TOTAL_TIMEOUT_MS,
+      maxConcurrent: parsed.JUSTONEAPI_MAX_CONCURRENT,
+      endpointMaxConcurrent: parsed.JUSTONEAPI_ENDPOINT_MAX_CONCURRENT,
+      minIntervalMs: parsed.JUSTONEAPI_MIN_INTERVAL_MS,
+      endpointMinIntervalMs: parsed.JUSTONEAPI_ENDPOINT_MIN_INTERVAL_MS,
+      throttleBaseMs: parsed.JUSTONEAPI_THROTTLE_BASE_MS,
+    },
     maxResponseBytes: parsed.JUSTONEAPI_API_MAX_RESPONSE_BYTES,
     proxy: {
       mode: parsed.JUSTONEAPI_PROXY_MODE,
