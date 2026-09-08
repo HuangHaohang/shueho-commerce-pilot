@@ -9,7 +9,7 @@ const authorization = process.env.COMMERCE_MCP_AUTH_HEADER;
 if (!authorization || !/^Bearer cp_[A-Za-z0-9]{8}_[A-Za-z0-9_-]{32,}$/.test(authorization)) {
   throw new Error("A Commerce Pilot MCP authorization header is required.");
 }
-const upstream = new Client({ name: "commerce-pilot-nullable-schema-bridge", version: "1.0.0" });
+const upstream = new Client({ name: "commerce-pilot-nullable-schema-bridge", version: "1.0.1" });
 await upstream.connect(new StreamableHTTPClientTransport(new URL("https://commerce-mcp.shueho.com/mcp"), {
   requestInit: { headers: { Authorization: authorization } },
 }));
