@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { currentPromotedEvidenceKeys } from "./current-evidence.js";
 import { vectorLiteral, withScope } from "./database.js";
 import { recordServiceAudit } from "./audit.js";
 import { LocalModelClient } from "./local-model-client.js";
@@ -44,7 +45,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
     await client.query("SET LOCAL hnsw.ef_search = 100");
     const result = await client.query<JsonObject>(`
       WITH nearest AS (
-        SELECT document.entity_type, document.entity_id,document.research_request_id,
+        SELECT document.entity_type, document.entity_id,document.research_request_id,enrichment.id AS enrichment_result_id,
                1 - (document.embedding <=> $1::vector) AS vector_score
         FROM semantic_document document
         JOIN ai_enrichment_result enrichment
@@ -52,6 +53,9 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
          AND enrichment.entity_id=document.entity_id
          AND enrichment.research_request_id=document.research_request_id
         WHERE enrichment.decision='promote'
+          AND enrichment.job_id=(SELECT job.id FROM ai_enrichment_job job
+            WHERE job.research_request_id=document.research_request_id AND job.state='completed'
+            ORDER BY job.completed_at DESC NULLS LAST,job.created_at DESC LIMIT 1)
         ORDER BY document.embedding <=> $1::vector
         LIMIT 50
       )
@@ -74,7 +78,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
       FROM nearest
       JOIN business_product_observation product
         ON nearest.entity_type='taobao_item' AND product.source_item_id=nearest.entity_id
-       AND product.research_request_id=nearest.research_request_id
+       AND product.research_request_id=nearest.research_request_id AND product.enrichment_result_id=nearest.enrichment_result_id
       UNION ALL
       SELECT 'content:' || content.id::text AS result_key, 'content' AS entity_type,
              content.id, content.title, content.summary, NULL::text AS shop_name,
@@ -87,7 +91,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
       FROM nearest
       JOIN business_content_observation content
         ON nearest.entity_type='social_item' AND content.source_social_item_id=nearest.entity_id
-       AND content.research_request_id=nearest.research_request_id
+       AND content.research_request_id=nearest.research_request_id AND content.enrichment_result_id=nearest.enrichment_result_id
       UNION ALL
       SELECT 'brand:' || brand.id::text AS result_key, 'brand' AS entity_type,
              brand.id, brand.brand_name AS title,
@@ -103,7 +107,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
       FROM nearest
       JOIN business_brand_observation brand
         ON nearest.entity_type='taobao_brand' AND brand.source_brand_id=nearest.entity_id
-       AND brand.research_request_id=nearest.research_request_id
+       AND brand.research_request_id=nearest.research_request_id AND brand.enrichment_result_id=nearest.enrichment_result_id
       UNION ALL
       SELECT 'property:' || property.id::text AS result_key, 'property' AS entity_type,
              property.id, (property.property_name || '：' || property.property_value) AS title,
@@ -119,7 +123,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
       FROM nearest
       JOIN business_property_observation property
         ON nearest.entity_type='taobao_property_value' AND property.source_property_value_id=nearest.entity_id
-       AND property.research_request_id=nearest.research_request_id
+       AND property.research_request_id=nearest.research_request_id AND property.enrichment_result_id=nearest.enrichment_result_id
       UNION ALL
       SELECT 'evidence:' || evidence.id::text AS result_key, 'evidence' AS entity_type,
              evidence.id, evidence.title, evidence.summary, NULL::text AS shop_name,
@@ -132,7 +136,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
       FROM nearest
       JOIN business_evidence_observation evidence
         ON nearest.entity_type='generic_record' AND evidence.source_record_id=nearest.entity_id
-       AND evidence.research_request_id=nearest.research_request_id
+       AND evidence.research_request_id=nearest.research_request_id AND evidence.enrichment_result_id=nearest.enrichment_result_id
       ORDER BY vector_score DESC
       LIMIT 50
     `, [vectorLiteral(queryVector)]);
@@ -155,7 +159,9 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
     const existing = merged.get(key) ?? { ...row, result_key: key };
     merged.set(key, { ...existing, ...row, result_key: key, elastic_rank: index + 1, elastic_score: nullableNumber(row.elastic_score) });
   });
+  const permittedKeys = await currentPromotedEvidenceKeys(input, [...merged.values()]);
   const ranked = [...merged.values()]
+    .filter((candidate) => permittedKeys.has(candidate.result_key))
     .map((candidate) => ({
       ...candidate,
       reciprocal_rank_score:

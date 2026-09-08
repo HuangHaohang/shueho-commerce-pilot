@@ -65,6 +65,8 @@ The Mac launch service runs Uvicorn under `caffeinate -i`, and uses an independe
 
 Create a clean deployment from the reviewed source commit and protected configuration. Use a filtered, consistent source snapshot or explicit Enterprise provisioning; do not copy developer browser sessions, MCP tokens, unrelated tenants or Codex conversation state. Preserve original raw responses, immutable source receipts, revisions and request identities when migrating existing research evidence. Verify table counts and file hashes before enabling the data service. Rebuild Elasticsearch through fresh index-outbox entries, never by replaying paid provider calls.
 
+After an explicit-ID restore, verify sequence positions as well as row counts. Warehouse migration `033` advances the index-outbox and service-audit sequences to their existing maximum IDs under writer locks without moving an already-ahead sequence backwards. An `index_outbox_pkey` collision can roll back enrichment despite a successful archived provider response; fix the sequence and reprocess that stored response rather than recollecting.
+
 Start databases and model proxies first, restore/apply registered migrations once, then start application services:
 
 ```sh

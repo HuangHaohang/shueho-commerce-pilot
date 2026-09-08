@@ -1,9 +1,37 @@
 import { describe, expect, it } from "vitest";
 
-import { enrichCandidates } from "./enrichment.js";
+import { enrichCandidates, hasUnrequestedProductSubtype } from "./enrichment.js";
 import type { LocalModelClient } from "./local-model-client.js";
 
 describe("AI enrichment promotion", () => {
+  it("does not promote keyword-stuffed products with low semantic confidence", async () => {
+    const models = {
+      embed: async (texts: string[]) => texts.map(() => Array.from({ length: 1024 }, (_, i) => i === 0 ? 1 : 0)),
+      rerank: async () => [0.12, 0.95, 0.95],
+    } as unknown as LocalModelClient;
+    const result = await enrichCandidates({ requestText: "研究砂锅", intent: {
+      platform: "jd", targetProduct: "砂锅", metrics: ["price_band"], expectedCategories: ["砂锅"], excludedCategories: [], currency: "CNY", requestedTopN: 10, originalRequest: "研究砂锅",
+    }, models, candidates: ["砂锅陶瓷煲", "电炖锅电砂锅紫砂内胆", "砂锅燃气灶明火陶瓷锅"].map((title, i) => ({
+      entityType: "generic_record", entityId: `fixture-${i}`, sourceJsonPointer: `/items/${i}`, content: title,
+      quality: { status: "valid", reasons: [], normalizedValue: title }, supportsPrice: true, supportsSales: false,
+      metadata: { recordKind: "product" },
+    })) });
+    expect(result.decisions[0]?.decision).toBe("hold");
+    expect(result.decisions[0]?.reasonCodes).toContain("PRODUCT_MATCH_NOT_CONFIRMED");
+    expect(result.decisions[1]?.decision).toBe("hold");
+    expect(result.decisions[1]?.reasonCodes).toContain("PRODUCT_SUBTYPE_SCOPE_UNCONFIRMED");
+    expect(result.decisions[2]?.decision).toBe("promote");
+  });
+
+  it("does not mix unrequested electric or medicinal cookware into a generic cohort", () => {
+    expect(hasUnrequestedProductSubtype("砂锅", "煎药壶专用中药砂锅")).toBe(true);
+    expect(hasUnrequestedProductSubtype("砂锅", "美的电炖盅陶瓷电砂锅")).toBe(true);
+    expect(hasUnrequestedProductSubtype("砂锅", "燃气明火陶瓷锅 不适用电磁炉")).toBe(false);
+    expect(hasUnrequestedProductSubtype("电砂锅", "电炖锅紫砂内胆")).toBe(false);
+    expect(hasUnrequestedProductSubtype("煎药砂锅", "熬中药陶瓷药罐")).toBe(false);
+    expect(hasUnrequestedProductSubtype("不锈钢勺", "电炖锅配套餐勺")).toBe(false);
+  });
+
   it("keeps raw candidates but rejects explicit cross-category contamination", async () => {
     const models = {
       embed: async (texts: string[]) => texts.map(() => new Array(1024).fill(0).map((_, index) => index === 0 ? 1 : 0)),

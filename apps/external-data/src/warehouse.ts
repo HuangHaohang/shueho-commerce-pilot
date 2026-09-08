@@ -1004,7 +1004,7 @@ export async function createEnrichmentJob(
       INSERT INTO ai_enrichment_job (
         tenant_id,workspace_id,research_request_id,query_key,state,embedding_model,
         embedding_dimensions,reranker_model,prompt_version,input_hash,candidate_count,started_at
-      ) VALUES ($1,$2,$3,$4,'running',$5,$6,$7,'commerce-relevance-v2',$8,$9,CURRENT_TIMESTAMP)
+      ) VALUES ($1,$2,$3,$4,'running',$5,$6,$7,'commerce-relevance-v3',$8,$9,CURRENT_TIMESTAMP)
       ON CONFLICT (research_request_id,input_hash,embedding_model,reranker_model,prompt_version)
       DO UPDATE SET state='running', error_code=NULL, error_message=NULL,
                     started_at=CURRENT_TIMESTAMP, completed_at=NULL
@@ -1063,7 +1063,7 @@ export async function persistEnrichmentDecisions(
         decision.lexicalScore, decision.embeddingScore, decision.rerankScore,
         decision.relevanceScore, decision.confidence, decision.quality.normalizedValue,
         decision.reasonCodes, decision.decision,
-        JSON.stringify({ embeddingModel: models.embeddingModel, rerankerModel: models.rerankerModel, promptVersion: "commerce-relevance-v2" }),
+        JSON.stringify({ embeddingModel: models.embeddingModel, rerankerModel: models.rerankerModel, promptVersion: "commerce-relevance-v3" }),
         inputHash]);
       const embedding = embeddings.get(decision.entityId);
       if (embedding) {
@@ -1087,7 +1087,7 @@ export async function persistEnrichmentDecisions(
       UPDATE ai_enrichment_job SET state='completed', accepted_count=$2, rejected_count=$3,
         completed_at=CURRENT_TIMESTAMP WHERE id=$1
     `, [jobId, promoted, rejected]);
-    await calculateResearchMetrics(client, scope, prepared);
+    await calculateResearchMetrics(client, scope, prepared, jobId);
     await client.query("UPDATE research_request SET status='completed', completed_at=CURRENT_TIMESTAMP WHERE id=$1", [prepared.researchRequestId]);
     await recordServiceAudit(client, scope, {
       researchRequestId: prepared.researchRequestId,
@@ -1259,7 +1259,10 @@ async function calculateResearchMetrics(
   client: PoolClient,
   scope: ExternalDataScope,
   prepared: PreparedWarehouseCall,
+  jobId: string,
 ): Promise<void> {
+  // Rebuild derived metrics from this completed enrichment revision only.
+  await client.query("DELETE FROM research_metric WHERE research_request_id=$1", [prepared.researchRequestId]);
   const products = await client.query<{
     price_yuan: string | null;
     sales_display: string | null;
@@ -1271,9 +1274,9 @@ async function calculateResearchMetrics(
     SELECT price_yuan, sales_display, sales_lower_bound, sales_upper_bound,
            sales_qualifier, relevance_score
     FROM business_product_observation
-    WHERE research_request_id=$1
+    WHERE research_request_id=$1 AND enrichment_result_id IN (SELECT id FROM ai_enrichment_result WHERE job_id=$2)
     ORDER BY relevance_score DESC
-  `, [prepared.researchRequestId]);
+  `, [prepared.researchRequestId, jobId]);
   const prices = products.rows.map((row) => row.price_yuan === null ? null : Number(row.price_yuan))
     .filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0)
     .sort((left, right) => left - right);
@@ -1309,9 +1312,9 @@ async function calculateResearchMetrics(
   const brands = await client.query<{ brand_name: string; item_count: number | null }>(`
     SELECT brand_name, item_count
     FROM business_brand_observation
-    WHERE research_request_id=$1 AND item_count > 0
+    WHERE research_request_id=$1 AND enrichment_result_id IN (SELECT id FROM ai_enrichment_result WHERE job_id=$2) AND item_count > 0
     ORDER BY item_count DESC, brand_name
-  `, [prepared.researchRequestId]);
+  `, [prepared.researchRequestId, jobId]);
   if (brands.rows.length) {
     const total = brands.rows.reduce((sum, brand) => sum + Number(brand.item_count ?? 0), 0);
     const distribution = brands.rows.map((brand) => ({
@@ -1330,9 +1333,9 @@ async function calculateResearchMetrics(
   const properties = await client.query<{ property_name: string; property_value: string; item_count: number | null }>(`
     SELECT property_name, property_value, item_count
     FROM business_property_observation
-    WHERE research_request_id=$1 AND item_count > 0
+    WHERE research_request_id=$1 AND enrichment_result_id IN (SELECT id FROM ai_enrichment_result WHERE job_id=$2) AND item_count > 0
     ORDER BY property_name, item_count DESC, property_value
-  `, [prepared.researchRequestId]);
+  `, [prepared.researchRequestId, jobId]);
   if (properties.rows.length) {
     const groups = new Map<string, Array<{ value: string; itemCount: number }>>();
     for (const property of properties.rows) {

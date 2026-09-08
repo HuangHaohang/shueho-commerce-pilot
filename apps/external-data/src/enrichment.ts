@@ -48,7 +48,8 @@ export async function enrichCandidates(input: {
   }
 
   const decisions = input.candidates.map((candidate): EnrichmentDecision => {
-    const lexicalDocument = candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value"
+    const product = candidate.entityType === "taobao_item" || candidate.metadata.recordKind === "product";
+    const lexicalDocument = product || candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value"
       ? candidate.quality.normalizedValue ?? ""
       : candidate.content;
     const lexicalScore = lexicalRelevanceMany(queryTerms, input.requestText, lexicalDocument);
@@ -65,13 +66,20 @@ export async function enrichCandidates(input: {
     const holdRelevanceMinScore = policyNumber(input.intent.qualityPolicy?.holdRelevanceMinScore, 0.2);
     const passModel = (rerankScore ?? 0) >= rerankMinScore &&
       (embeddingScore ?? -1) >= embeddingMinScore && !categoryMismatch;
-    const exact = lexicalScore >= 0.999;
+    const exact = lexicalScore >= 0.999 && !product;
     const lexicalSupported = lexicalScore >= lexicalPromoteMinScore &&
       ((embeddingScore ?? -1) >= embeddingMinScore - 0.08 || (rerankScore ?? 0) >= 0.2);
+    const productModelSupported = (rerankScore ?? 0) >= rerankMinScore &&
+      ((embeddingScore ?? -1) >= embeddingMinScore ||
+        (lexicalScore >= lexicalPromoteMinScore && (embeddingScore ?? -1) >= embeddingMinScore - 0.08));
+    const ambiguousSubtype = product && hasUnrequestedProductSubtype(input.intent.targetProduct, lexicalDocument);
     const adjacent = !exact && (
       lexicalScore >= 0.25 || passModel || lexicalSupported || relevanceScore >= holdRelevanceMinScore
     );
     const reasons = new Set(candidate.quality.reasons);
+    if (product && lexicalScore >= 0.999) reasons.add("LEXICAL_TARGET_MENTION");
+    if (product && !productModelSupported) reasons.add("PRODUCT_MATCH_NOT_CONFIRMED");
+    if (ambiguousSubtype) reasons.add("PRODUCT_SUBTYPE_SCOPE_UNCONFIRMED");
     if (exact) reasons.add("EXACT_TARGET_MATCH");
     else if (passModel || lexicalSupported || lexicalScore >= 0.25) reasons.add("SEMANTIC_TARGET_MATCH");
     else reasons.add("INSUFFICIENT_RELEVANCE_EVIDENCE");
@@ -85,7 +93,8 @@ export async function enrichCandidates(input: {
 
     let decision: "promote" | "hold" | "reject";
     if (candidate.quality.status === "rejected" || categoryMismatch) decision = "reject";
-    else if (candidate.quality.status === "suspicious" || zeroCount) decision = "hold";
+    else if (candidate.quality.status === "suspicious" || zeroCount || ambiguousSubtype) decision = "hold";
+    else if (product) decision = productModelSupported ? "promote" : "hold";
     else if (exact || passModel || lexicalSupported) decision = "promote";
     else decision = "hold";
 
@@ -106,6 +115,15 @@ export async function enrichCandidates(input: {
     };
   });
   return { decisions, embeddings };
+}
+
+/** Adjacent cookware subtypes need explicit scope; retain them as held evidence. */
+export function hasUnrequestedProductSubtype(target: string | null, title: string): boolean {
+  if (!target || !/锅|煲|壶|炖盅/.test(target)) return false;
+  const appliance = /电(?:砂|沙|炖|煮|饭|压力|热水|蒸)[锅煲壶盅]|电炖盅/;
+  const medicinal = /煎药|煎藥|熬药|熬藥|中药|中藥|药罐|藥罐|药壶|藥壺/;
+  return (appliance.test(title) && !appliance.test(target)) ||
+    (medicinal.test(title) && !medicinal.test(target));
 }
 
 const CATEGORY_CONFLICTS: Array<{ target: RegExp; forbidden: RegExp }> = [
