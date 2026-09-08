@@ -2,6 +2,7 @@ import type { PoolClient } from "pg";
 
 import { assessProductMetrics, ENRICHMENT_VERSION, publicEvidenceAssessment, researchAnalysisReadiness } from "./evidence-assessment.js";
 import { providerExecutionStatus } from "./provider-execution-status.js";
+import { linkWorkflowResearch } from "./workflow-research-link.js";
 import { recordServiceAudit } from "./audit.js";
 import { applyResearchIntentQuality } from "./intent-quality.js";
 import { buildQueryIdentity, canonicalJson, sha256Json, utf8JsonBytes } from "./canonical.js";
@@ -208,6 +209,7 @@ export async function prepareWarehouseCall(
       transportRequest.bodyText,
     ]);
     await client.query("UPDATE research_request SET status='collecting' WHERE id=$1", [request.id]);
+    await linkWorkflowResearch(client, scope, request.id, endpoint.endpointId, params);
     await recordServiceAudit(client, scope, {
       researchRequestId: request.id,
       rawCallId: raw.id,
