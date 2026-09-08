@@ -27,6 +27,11 @@ export class JustOneApiClient {
 
   get configured(): boolean { return this.dependencies.configured; }
 
+  async configuredCredentialIds(): Promise<string[]> {
+    await this.initialize();
+    return this.credentials.map((credential) => credential.id);
+  }
+
   async status() {
     await this.initialize();
     return this.dependencies.store.status(this.credentials.map((credential) => credential.id));

@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { after, before, test } from "node:test";
 import { z } from "zod";
 
-import { ExternalDataServiceMcpClient, ExternalDataServiceMcpError } from "./external-data-service-mcp-client.js";
+import { ExternalDataServiceMcpClient, ExternalDataServiceMcpError, EXTERNAL_DATA_SERVICE_REQUIRED_TOOLS } from "./external-data-service-mcp-client.js";
 
 let origin = "";
 let upstreamServer: ReturnType<typeof createServer>;
@@ -48,25 +48,7 @@ test("verifies the hosted tool contract and calls catalog tools", async () => {
   try {
     const status = await client.verify();
     assert.equal(status.connected, true);
-    assert.deepEqual(status.tools, [
-      "begin_marketplace_product_research",
-      "call_endpoint",
-      "cancel_marketplace_product_research",
-      "complete_marketplace_product_research",
-      "execute_marketplace_product_research_plan",
-      "get_endpoint_schema",
-      "get_marketplace_options",
-      "get_research_result",
-      "list_marketplace_research_platforms",
-      "list_platforms",
-      "plan_marketplace_product_research",
-      "preflight_endpoint",
-      "preflight_marketplace_product_research",
-      "preflight_social_content_research",
-      "resolve_marketplace_product_bindings",
-      "search_business_data",
-      "search_endpoints",
-    ]);
+    assert.deepEqual(status.tools, [...EXTERNAL_DATA_SERVICE_REQUIRED_TOOLS].sort());
     const search = await client.searchEndpoints({ query: "通勤包", platform: "taobao", limit: 8 });
     assert.equal(search.payload.success, true);
     assert.equal(Array.isArray(search.payload.results), true);
@@ -175,6 +157,9 @@ function createClient(maxResultBytes: number): ExternalDataServiceMcpClient {
 
 function createMockServer(): McpServer {
   const server = new McpServer({ name: "mock-shueho-external-data", version: "2.0.0" });
+  for (const name of ["search_data_capabilities","get_data_capability","plan_data_request","claim_data_request_plan","execute_data_request_plan","cancel_data_request_plan"]) {
+    server.registerTool(name,{inputSchema:{}},async()=>result({success:true}));
+  }
   server.registerTool(
     "plan_marketplace_product_research",
     { inputSchema: { platform: z.string(),keyword: z.string() } },

@@ -45,6 +45,14 @@ describe("social content research planning", () => {
     expect(plan.coverage).toMatchObject({ window_enforcement: "warehouse_post_filter", provider_calls: 1 });
   });
 
+  it("maps actual popularity sort fields without claiming an exact interaction sum", () => {
+    const plan=selectSocialContentResearchPlan([endpoint("xiaohongshu.search_note_v4","xiaohongshu",{
+      keyword:{type:"string"},sort:{type:"string",enum:["general","popularity_descending"]},
+    })],{...request("interaction_ranked"),platform:"XIAOHONGSHU"});
+    expect(plan.normalizedParams).toMatchObject({sort:"popularity_descending"});
+    expect(plan.coverage.ranking_basis).toBe("provider_popularity_not_exact_interaction_sum");
+  });
+
   it("fails closed when no endpoint satisfies the requested business capability", () => {
     expect(() => selectSocialContentResearchPlan([], request("latest_content"))).toThrowError(SocialResearchPlanningError);
   });

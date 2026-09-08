@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { persistProviderDataObservations } from "./provider-data-observations.js";
 import { config } from "./config.js";
 import { sha256Json } from "./canonical.js";
 import { getEndpoint, validateEndpointParams } from "./endpoint-registry.js";
@@ -58,7 +59,7 @@ export class ExternalDataPipeline {
   }
 
   async execute(scope: ExternalDataScope, endpointId: string, params: JsonObject): Promise<CompactResearchResult> {
-    await this.models.health();
+    if (scope.businessIntent?.objective !== "provider_observation") await this.models.health();
     const prepared = await prepareWarehouseCall(scope, endpointId, params);
     if (prepared.reused) return this.resumeProcessingOrLoad(scope, prepared);
     let providerResult: ProviderCallResult;
@@ -152,6 +153,10 @@ export class ExternalDataPipeline {
     } catch (error) {
       await markResearchProcessingFailed(scope, prepared.researchRequestId, "normalization", error);
       return loadCompactResearchResult(scope, prepared.researchRequestId);
+    }
+    if (scope.businessIntent?.objective === "provider_observation") {
+      await persistProviderDataObservations(scope,prepared.researchRequestId,payload);
+      return loadCompactResearchResult(scope,prepared.researchRequestId);
     }
     return this.enrichPersistAndLoad(scope, prepared, normalized);
   }

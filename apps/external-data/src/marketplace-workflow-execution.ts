@@ -734,6 +734,7 @@ export function ensureMarketplaceEvidenceId(row: JsonObject): JsonObject {
 export async function loadWorkflowOrResearchResult(
   scope: WorkflowScope,
   id: string,
+  fields: {offset?:number;limit?:number} = {},
 ): Promise<CompactResearchResult | (CompactResearchResult & { workflow: JsonObject; research_request_ids: string[] })> {
   const workflow = await withScope(scope, async (client) => client.query<{ id: string }>(`
     SELECT execution.id FROM research_workflow_execution execution
@@ -744,7 +745,7 @@ export async function loadWorkflowOrResearchResult(
   // A cached workflow can reference superseded enrichment decisions. Read current
   // child evidence without finalizing a running workflow or dispatching any work.
   if (workflow.rows[0]) return completeMarketplaceWorkflowExecution(scope, workflow.rows[0].id, { readOnly: true });
-  return loadCompactResearchResult(scope, id);
+  return loadCompactResearchResult(scope, id, fields);
 }
 
 export class WorkflowExecutionError extends Error {

@@ -6,7 +6,7 @@ describe("JustOneAPI catalog import", () => {
   it("builds a callable GET contract only when official pricing allows it", () => {
     const discovered = openapi("/api/search/v1", "get", {
       parameters: [
-        parameter("token", true), parameter("keyword", false),
+        parameter("token", true), { ...parameter("keyword", false),description:"提交的实际问题或关键词" },
         { name: "sortOrder", in: "query", required: false, schema: { type: "string", enum: ["RELEVANCE", "RECENT"], default: "relevance" } },
         { ...parameter("start", false), description: "开始时间（yyyy-MM-dd HH:mm:ss）" },
         { ...parameter("end", false), description: "结束时间（yyyy-MM-dd HH:mm:ss）" },
@@ -23,6 +23,7 @@ describe("JustOneAPI catalog import", () => {
       requestCodec: { query: ["end", "keyword", "nextCursor", "sortOrder", "start"], transforms: { start: "provider_datetime", end: "provider_datetime" } },
     });
     expect(endpoint.requestSchema).not.toHaveProperty("properties.token");
+    expect(endpoint.requestSchema).toHaveProperty("properties.keyword.description","提交的实际问题或关键词");
     expect(endpoint.requestSchema).toHaveProperty("allOf");
     expect(endpoint.requestSchema).toHaveProperty("properties.sortOrder.default", "RELEVANCE");
   });

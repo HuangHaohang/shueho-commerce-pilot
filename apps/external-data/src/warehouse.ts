@@ -1,6 +1,7 @@
 import type { PoolClient } from "pg";
 
 import { assessProductMetrics, ENRICHMENT_VERSION, publicEvidenceAssessment, researchAnalysisReadiness } from "./evidence-assessment.js";
+import { loadProviderDataFields } from "./provider-data-observations.js";
 import { providerExecutionStatus } from "./provider-execution-status.js";
 import { linkWorkflowResearch } from "./workflow-research-link.js";
 import { recordServiceAudit } from "./audit.js";
@@ -210,6 +211,12 @@ export async function prepareWarehouseCall(
     ]);
     await client.query("UPDATE research_request SET status='collecting' WHERE id=$1", [request.id]);
     await linkWorkflowResearch(client, scope, request.id, endpoint.endpointId, params);
+    if (scope.dataRequestPlanId) {
+      const linked = await client.query(`UPDATE provider_data_request_plan SET research_request_id=$1,updated_at=CURRENT_TIMESTAMP
+        WHERE id=$2 AND endpoint_id=$3 AND user_id=$4 AND state='executing' AND research_request_id IS NULL RETURNING id`,
+      [request.id,scope.dataRequestPlanId,endpoint.endpointId,scope.userId]);
+      if (linked.rowCount!==1) throw new Error("Data plan cannot bind another research request.");
+    }
     await recordServiceAudit(client, scope, {
       researchRequestId: request.id,
       rawCallId: raw.id,
@@ -1410,6 +1417,7 @@ async function enqueueIndex(
 export async function loadCompactResearchResult(
   scope: Pick<ExternalDataScope, "tenantId" | "workspaceId">,
   researchRequestId: string,
+  fields: { offset?: number; limit?: number } = {},
 ): Promise<CompactResearchResult> {
   return withScope(scope, async (client) => {
     const request = await queryOne<{
@@ -1445,6 +1453,21 @@ export async function loadCompactResearchResult(
       LEFT JOIN justoneapi_dispatch dispatch ON dispatch.raw_call_id=raw.id
       WHERE request.id=$1 LIMIT 1
     `, [researchRequestId]);
+    if (request.structured_intent.objective === "provider_observation") {
+      const projection = await loadProviderDataFields(client,researchRequestId,fields.offset ?? 0,fields.limit ?? 50);
+      const execution = providerExecutionStatus({ rawState:request.raw_state,processingState:request.status,dispatchState:request.dispatch_state,
+        deadlineAt:request.deadline_at,nextAttemptAt:request.next_attempt_at,waitReason:request.wait_reason,attemptCount:request.attempt_count,
+        failureCode:request.failure_code,providerCode:request.provider_code ?? request.last_attempt_code });
+      return { success:request.status==="completed",provider_completed:request.raw_state==="succeeded",processing_state:request.status,
+        code:request.status==="completed" ? 0 : request.raw_state==="dispatched" ? 202 : request.provider_code ?? 500,
+        message:request.status==="completed" ? "数据已归档，返回通过字段质量校验的供应商输出观察。" : request.provider_message ?? "数据请求正在处理或等待核验。",
+        research_request_id:researchRequestId,raw_archive_id:request.raw_call_id,endpoint_id:request.endpoint_id,query_key:request.query_key,
+        observed_at:request.observed_at.toISOString(),coverage:{ ...projection.coverage,execution },metrics:{},products:[],brands:[],properties:[],
+        evidence:projection.evidence,exclusions:{ fields:projection.coverage.excludedFields },
+        limitations:["字段值来自所选能力的实际响应，可能包含 AI 生成内容；不代表独立核实的业务事实或可直接比较的指标。",
+          "空值、空列表与缺失字段不能当成销量为零、品牌未被提及或不存在相关数据的证明。",
+          "原始响应保存在独立仓库；凭证、异常字段和超出质量限制的值不会展示。"] };
+    }
     const latestJob = await client.query<{ id: string }>(`
       SELECT id FROM ai_enrichment_job
       WHERE research_request_id=$1 AND state='completed'

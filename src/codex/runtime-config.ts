@@ -1,3 +1,4 @@
+import { DATA_CAPABILITY_TOOL_SCHEMAS } from "../integrations/data-capability-contract.js";
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { cwd, execPath } from "node:process";
@@ -314,6 +315,7 @@ const allowedTools = new Set([
   "commerce_skill.publish",
   "commerce_skill_publish",
   "commerce_skillpublish",
+  ...${JSON.stringify(Object.keys(DATA_CAPABILITY_TOOL_SCHEMAS).flatMap((name) => ["commerce_data."+name,"commerce_data_"+name,"commerce_data"+name]))},
   "commerce_data.research_social_content",
   "commerce_data_research_social_content",
   "commerce_dataresearch_social_content",
@@ -389,6 +391,7 @@ const allowedTools = new Set([
   "websearch",
   "mcp__commerce_web__search",
   "search",
+  ...${JSON.stringify(Object.keys(DATA_CAPABILITY_TOOL_SCHEMAS))},
   "research_social_content",
   "research_marketplace_products",
   "plan_marketplace_research",

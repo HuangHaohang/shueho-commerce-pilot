@@ -82,7 +82,7 @@ export function selectSocialContentResearchPlan(
       }
     : {
         keyword: request.keyword,
-        sortType: "HIGH_INTERACTION",
+        [socialSortBinding(selected)!.parameter]: socialSortBinding(selected)!.value,
       };
   const normalizedParams = validateEndpointParams(selected, params);
   const start = new Date(`${request.startDate}T00:00:00+08:00`).toISOString();
@@ -116,6 +116,7 @@ export function selectSocialContentResearchPlan(
       ? "provider_reported_when_present"
       : "not_guaranteed_by_endpoint_contract",
     provider_calls: 1,
+    ranking_basis: request.objective === "interaction_ranked" ? socialSortBinding(selected)?.basis ?? null : null,
   };
   return {
     planKey: sha256Json({
@@ -150,11 +151,19 @@ function selectInteractionEndpoint(endpoints: ProviderEndpoint[], platform: stri
   return endpoints
     .filter((endpoint) => {
       const properties = schemaProperties(endpoint.requestSchema);
-      const sortType = record(properties.sortType);
-      return endpoint.platformId === platformId && properties.keyword !== undefined &&
-        stringArray(sortType.enum).includes("HIGH_INTERACTION");
+      return endpoint.platformId === platformId && properties.keyword !== undefined && socialSortBinding(endpoint) !== null;
     })
     .sort(compareEndpointSpecificity)[0] ?? null;
+}
+
+function socialSortBinding(endpoint: ProviderEndpoint): { parameter: string; value: string; basis: string } | null {
+  for (const [parameter, schema] of Object.entries(schemaProperties(endpoint.requestSchema))) {
+    if (!/sort/i.test(parameter)) continue;
+    const values = stringArray(record(schema).enum);
+    if (values.includes("HIGH_INTERACTION")) return { parameter,value:"HIGH_INTERACTION",basis:"provider_high_interaction" };
+    if (values.includes("popularity_descending")) return { parameter,value:"popularity_descending",basis:"provider_popularity_not_exact_interaction_sum" };
+  }
+  return null;
 }
 
 function compareEndpointSpecificity(left: ProviderEndpoint, right: ProviderEndpoint): number {

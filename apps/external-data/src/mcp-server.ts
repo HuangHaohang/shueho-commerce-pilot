@@ -1,3 +1,6 @@
+import { searchDataCapabilities, readDataCapability, DataCapabilityError } from "./data-capabilities.js";
+import { createDataRequestPlan, claimDataRequestPlan, cancelDataRequestPlan } from "./data-request-plans.js";
+import { executeDataRequestPlan, readDataRequestResult } from "./data-request-execution.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
@@ -109,6 +112,45 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
         "This is the internal SHUEHO external-data service. It stores complete JustOneAPI REST responses, normalizes every field and returns only curated evidence. Marketplace scope and query language come from database catalogs. New collection uses plan_marketplace_product_research followed by execute_marketplace_product_research_plan; every target step remains separately governed by Commerce Pilot. Never expose credentials or retry an uncertain paid call.",
     },
   );
+  const dataAuthorizationSchema = {
+    allowed_catalog_platforms: z.array(z.string()).optional(),allowed_endpoint_ids: z.array(z.string()).optional(),
+  };
+  const authorizationFor = (args: { allowed_catalog_platforms?: string[]; allowed_endpoint_ids?: string[] }) => ({
+    allowedCatalogPlatforms: args.allowed_catalog_platforms,allowedEndpointIds: args.allowed_endpoint_ids,
+  });
+  const dataError = (error: unknown) => toolSuccess({ success:false,code:error instanceof DataCapabilityError ? error.code : "DATA_REQUEST_FAILED",
+    message:safeToolMessage(error),details:error instanceof DataCapabilityError ? error.details : {},providerDispatched:false });
+  server.registerTool("search_data_capabilities", {
+    title:"检索全部数据能力",description:"从完整供应商目录检索商品、内容、AI 回答、用户资料和指标能力，返回各层阻塞原因，不调用供应商。",
+    inputSchema:{ query:z.string().max(500).default(""),platform:z.string().max(64).optional(),offset:z.number().int().min(0).max(10000).default(0),limit:z.number().int().min(1).max(50).default(20),...dataAuthorizationSchema },
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  }, async (args) => toolSuccess(await searchDataCapabilities(args,authorizationFor(args))));
+  server.registerTool("get_data_capability", {
+    title:"读取数据能力参数",description:"返回指定已登记能力的无凭证参数 Schema、版本与可用性，不返回供应商地址或凭证。",
+    inputSchema:{capability_id:z.string().regex(/^cap_[a-f0-9]{24}$/),...dataAuthorizationSchema},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  },async (args) => { try { return toolSuccess({success:true,...(await readDataCapability(args.capability_id,authorizationFor(args))).view}); } catch(error) { return dataError(error); } });
+  server.registerTool("plan_data_request", {
+    title:"免费规划数据请求",description:"校验业务参数并保存有期限、不可变的数据计划，不调用供应商。",
+    inputSchema:{capability_id:z.string().regex(/^cap_[a-f0-9]{24}$/),inputs:z.record(z.unknown()),...dataAuthorizationSchema,_commerce_context:scopeSchema},
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  },async (args) => { try { return toolSuccess(await createDataRequestPlan(mapScope(args._commerce_context),args.capability_id,args.inputs,authorizationFor(args))); } catch(error) {return dataError(error);} });
+  server.registerTool("claim_data_request_plan", {
+    title:"取得数据计划执行权",description:"原子取得固定数据计划执行权，并在内部返回治理所需的参数摘要。重复提交只返回已有状态。",
+    inputSchema:{plan_id:z.string().uuid(),...dataAuthorizationSchema,_commerce_context:scopeSchema},
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  },async (args) => {try {return toolSuccess(await claimDataRequestPlan(mapScope(args._commerce_context),args.plan_id,authorizationFor(args)));} catch(error) {return dataError(error);} });
+  server.registerTool("execute_data_request_plan", {
+    title:"执行已治理数据计划",description:"仅执行已取得执行权的固定计划，复用统一供应商调用和完整归档，返回字段质量校验结果。",
+    inputSchema:{plan_id:z.string().uuid(),_commerce_context:scopeSchema},
+    annotations:{readOnlyHint:false,destructiveHint:true,idempotentHint:true,openWorldHint:true},
+  },async (args) => {try {return toolSuccess(await executeDataRequestPlan(pipeline,mapScope(args._commerce_context),args.plan_id));}
+    catch(error) {return toolError("DATA_EXECUTION_UNCERTAIN",safeToolMessage(error),{research_request_id:args.plan_id,recovery_tool:"get_research_result"});} });
+  server.registerTool("cancel_data_request_plan", {
+    title:"取消尚未发送的数据计划",description:"只取消没有关联供应商请求的数据计划，不重写已发送调用状态。",
+    inputSchema:{plan_id:z.string().uuid(),_commerce_context:scopeSchema},
+    annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  },async (args) => {try {await cancelDataRequestPlan(mapScope(args._commerce_context),args.plan_id);return toolSuccess({success:true});} catch(error) {return dataError(error);} });
   server.registerTool(
     "list_platforms",
     {
@@ -727,16 +769,16 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       description: "按研究请求 ID 读取经过治理的业务层结果，不返回原始响应。",
       inputSchema: {
         research_request_id: z.string().uuid(),
+        field_offset:z.number().int().min(0).max(10000).default(0),field_limit:z.number().int().min(1).max(100).default(50),
         _commerce_context: scopeSchema.pick({ tenant_id: true, workspace_id: true }),
       },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async ({ research_request_id, _commerce_context }) => toolSuccess(
-      await loadWorkflowOrResearchResult({
-        tenantId: _commerce_context.tenant_id,
-        workspaceId: _commerce_context.workspace_id,
-      }, research_request_id),
-    ),
+    async ({ research_request_id, field_offset, field_limit, _commerce_context }) => {
+      const scope = {tenantId:_commerce_context.tenant_id,workspaceId:_commerce_context.workspace_id};
+      return toolSuccess(await readDataRequestResult(scope,research_request_id,{offset:field_offset,limit:field_limit}) ??
+        await loadWorkflowOrResearchResult(scope,research_request_id,{offset:field_offset,limit:field_limit}));
+    },
   );
   server.registerTool(
     "search_business_data",

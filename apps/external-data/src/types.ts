@@ -23,6 +23,7 @@ export type ExternalDataScope = {
   requestText: string;
   topN?: number;
   businessIntent?: ExternalDataBusinessIntent | null;
+  dataRequestPlanId?: string | null;
   workflowExecutionId?: string | null;
   workflowStepId?: string | null;
   workflowStepInstanceId?: string | null;

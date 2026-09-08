@@ -223,6 +223,7 @@ function buildRequestContract(document: JsonObject, operation: JsonObject): { sc
     if (!name || name.toLowerCase() === "token") continue;
     if (location !== "query" && location !== "path" && location !== "header") continue;
     const parameterSchema = normalizeJsonSchema(resolveMaybeRef(document, parameter.schema));
+    if (typeof parameter.description === "string") parameterSchema.description = parameter.description;
     if (typeof parameter.description === "string" && /yyyy-MM-dd HH:mm:ss/i.test(parameter.description)) {
       parameterSchema.pattern = "^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$";
       transforms[name] = "provider_datetime";

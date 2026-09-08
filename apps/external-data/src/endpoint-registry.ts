@@ -2,7 +2,7 @@ import type { PoolClient } from "pg";
 import { Ajv, type ValidateFunction } from "ajv";
 
 import { database } from "./database.js";
-import { normalizeEndpointParams } from "./canonical.js";
+import { normalizeEndpointParams, sha256Json } from "./canonical.js";
 import type { JsonObject, ProviderEndpoint } from "./types.js";
 
 type EndpointRow = {
@@ -163,7 +163,7 @@ export function validateEndpointParams(endpoint: ProviderEndpoint, params: JsonO
   }
   const transformed = applyParameterTransforms(structuredClone(params), endpoint.requestCodec);
   const normalized = normalizeEndpointParams(endpoint.endpointId, transformed);
-  const cacheKey = `${endpoint.endpointId}:${endpoint.schemaVersion}`;
+  const cacheKey = `${endpoint.endpointId}:${endpoint.schemaVersion}:${sha256Json(endpoint.requestSchema)}`;
   let validate = validatorCache.get(cacheKey);
   if (!validate) {
     const compiled = validator.compile(endpoint.requestSchema);

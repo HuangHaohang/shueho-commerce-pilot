@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 export const EXTERNAL_DATA_SERVICE_REQUIRED_TOOLS = [
+  "search_data_capabilities","get_data_capability","plan_data_request","claim_data_request_plan","execute_data_request_plan","cancel_data_request_plan",
   "list_platforms",
   "list_marketplace_research_platforms",
   "get_marketplace_options",
@@ -101,6 +102,18 @@ export class ExternalDataServiceMcpClient {
 
   getMarketplaceOptions(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
     return this.callCatalog("get_marketplace_options", args);
+  }
+
+  searchDataCapabilities(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("search_data_capabilities",args); }
+  getDataCapability(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("get_data_capability",args); }
+  planDataRequest(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("plan_data_request",args); }
+  claimDataRequestPlan(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("claim_data_request_plan",args); }
+  cancelDataRequestPlan(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("cancel_data_request_plan",args); }
+  async executeDataRequestPlan(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
+    this.assertConfigured();
+    await this.ensureConnected();
+    try { return await this.callOnce("execute_data_request_plan",args); }
+    catch(error) {throw normalizeError(error,true);}
   }
 
   searchEndpoints(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
