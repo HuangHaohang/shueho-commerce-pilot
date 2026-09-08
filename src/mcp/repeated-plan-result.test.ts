@@ -6,7 +6,7 @@ test("a repeated consumed plan reads its existing status without restarting work
   let reads = 0;
   const result = await repeatedPlanResult("PLAN_NOT_READY", "plan", async () => {
     reads += 1;
-    return { isError: false, payload: { success: false, processing_state: "unknown", products: [], research_request_id: "workflow" } };
+    return { isError: true, payload: { success: false, processing_state: "unknown", products: [], research_request_id: "workflow" } };
   });
   assert.equal(reads, 1);
   assert.deepEqual(result, { success: false, processing_state: "unknown", products: [], research_request_id: "workflow", plan_id: "plan", reused: true });
