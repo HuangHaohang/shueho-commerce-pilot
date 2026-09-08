@@ -3,7 +3,7 @@ import type { JsonObject } from "./types.js";
 export function providerExecutionStatus(input: {
   rawState: string; processingState: string; dispatchState: string | null;
   deadlineAt: Date | null; nextAttemptAt: Date | null; waitReason: string | null;
-  attemptCount: number; failureCode: string | null; providerCode: number | null;
+  attemptCount: number | null; failureCode: string | null; providerCode: number | null;
 }, now = Date.now()): JsonObject {
   const interrupted = input.rawState === "dispatched" && input.dispatchState === "active" &&
     input.deadlineAt !== null && input.deadlineAt.getTime() <= now;
@@ -17,7 +17,7 @@ export function providerExecutionStatus(input: {
       : input.rawState === "business_failed" ? "failed" : waiting ? input.waitReason
       : input.rawState === "succeeded" ? "processing" : "collecting",
     attemptCount: input.attemptCount,
-    automaticRetry: waiting && input.attemptCount > 0 && ["retry_backoff", "rate_limited", "proxy_unavailable", "token_cooldown"].includes(input.waitReason!),
+    automaticRetry: waiting && (input.attemptCount ?? 0) > 0 && ["retry_backoff", "rate_limited", "proxy_unavailable", "token_cooldown"].includes(input.waitReason!),
     nextAttemptAt: waiting ? input.nextAttemptAt?.toISOString() ?? null : null,
     lastProviderCode: input.providerCode,
     failureCode: interrupted ? "EXECUTION_DEADLINE_EXCEEDED_RECONCILIATION_REQUIRED" : input.failureCode,

@@ -20,3 +20,8 @@ it("does not call a completed response uncertain merely because local processing
   expect(providerExecutionStatus({ ...active, rawState: "succeeded", dispatchState: "completed", processingState: "enriching" }, 101_000))
     .toMatchObject({ phase: "processing", automaticRetry: false, polling: { action: "poll_same_request" } });
 });
+
+it("does not invent a zero attempt count for pre-ledger archived calls", () => {
+  expect(providerExecutionStatus({ ...active, rawState: "succeeded", processingState: "completed", dispatchState: null, attemptCount: null }, 10_000))
+    .toMatchObject({ phase: "completed", attemptCount: null, automaticRetry: false });
+});

@@ -1420,7 +1420,7 @@ export async function loadCompactResearchResult(
       deadline_at: Date | null;
       next_attempt_at: Date | null;
       wait_reason: string | null;
-      attempt_count: number;
+      attempt_count: number | null;
       failure_code: string | null;
       last_attempt_code: number | null;
       provider_code: number | null;
@@ -1431,7 +1431,9 @@ export async function loadCompactResearchResult(
       SELECT request.status, request.structured_intent, query_row.query_key, query_row.endpoint_id,
              raw.id AS raw_call_id, raw.state AS raw_state, raw.provider_code, raw.provider_message,
              dispatch.state AS dispatch_state,dispatch.deadline_at,dispatch.next_attempt_at,
-             dispatch.wait_reason,COALESCE(dispatch.attempt_count,0) AS attempt_count,dispatch.failure_code,
+             dispatch.wait_reason,CASE WHEN dispatch.raw_call_id IS NULL THEN NULL ELSE
+               GREATEST(dispatch.attempt_count,(SELECT count(*) FROM justoneapi_token_attempt counted WHERE counted.raw_call_id=raw.id))::int
+             END AS attempt_count,dispatch.failure_code,
              (SELECT attempt.provider_code FROM justoneapi_token_attempt attempt WHERE attempt.raw_call_id=raw.id
                ORDER BY attempt.ordinal DESC LIMIT 1) AS last_attempt_code,
              COALESCE(raw.provider_recorded_at, raw.completed_at, raw.created_at) AS observed_at
