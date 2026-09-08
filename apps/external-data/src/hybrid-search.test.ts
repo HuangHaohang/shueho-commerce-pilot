@@ -40,7 +40,8 @@ describe("curateBusinessSearchResult", () => {
       observed_at: "2026-08-26T00:00:00.000Z",
       metrics: { price_yuan: 19.9 },
       quality_basis: "ai_promoted_text",
-      confidence: 0.88,
+      confidence: null,
+      score_interpretation: "relevance_only_not_calibrated_probability_or_sales",
       retrieval_score: 0.9,
     });
     expect(result).not.toHaveProperty("tenant_id");

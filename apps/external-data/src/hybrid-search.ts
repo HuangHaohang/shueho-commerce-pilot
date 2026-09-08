@@ -1,5 +1,6 @@
+import { assessProductMetrics, publicEvidenceAssessment } from "./evidence-assessment.js";
 import { config } from "./config.js";
-import { currentPromotedEvidenceKeys } from "./current-evidence.js";
+import { currentPromotedEvidence } from "./current-evidence.js";
 import { vectorLiteral, withScope } from "./database.js";
 import { recordServiceAudit } from "./audit.js";
 import { LocalModelClient } from "./local-model-client.js";
@@ -159,11 +160,12 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
     const existing = merged.get(key) ?? { ...row, result_key: key };
     merged.set(key, { ...existing, ...row, result_key: key, elastic_rank: index + 1, elastic_score: nullableNumber(row.elastic_score) });
   });
-  const permittedKeys = await currentPromotedEvidenceKeys(input, [...merged.values()]);
+  const permittedEvidence = await currentPromotedEvidence(input, [...merged.values()]);
   const ranked = [...merged.values()]
-    .filter((candidate) => permittedKeys.has(candidate.result_key))
+    .filter((candidate) => permittedEvidence.has(candidate.result_key))
     .map((candidate) => ({
       ...candidate,
+      enrichment_metadata: permittedEvidence.get(candidate.result_key),
       reciprocal_rank_score:
         (candidate.vector_rank ? 1 / (60 + candidate.vector_rank) : 0) +
         (candidate.elastic_rank ? 1 / (60 + candidate.elastic_rank) : 0),
@@ -201,6 +203,7 @@ async function recordBusinessSearchAudit(
 }
 
 export function curateBusinessSearchResult(candidate: JsonObject): JsonObject {
+  const assessment = publicEvidenceAssessment(candidate.enrichment_metadata);
   return {
     evidence_id: candidate.id,
     entity_type: candidate.entity_type,
@@ -219,7 +222,14 @@ export function curateBusinessSearchResult(candidate: JsonObject): JsonObject {
     query_key: candidate.query_key,
     quality_basis: candidate.quality_basis ?? "ai_promoted_text",
     relevance_score: candidate.relevance_score,
-    confidence: candidate.confidence ?? null,
+    confidence: null,
+    evidence_assessment: {
+      ...assessment,
+      ...(!isRecord(assessment.metrics) && (candidate.evidence_kind === "product" || candidate.entity_type === "product")
+        ? { metrics: assessProductMetrics(isRecord(candidate.metrics) ? candidate.metrics : candidate,
+            typeof candidate.source_json_pointer === "string" ? candidate.source_json_pointer : null) } : {}),
+    },
+    score_interpretation: "relevance_only_not_calibrated_probability_or_sales",
     retrieval_score: candidate.rerank_score,
   };
 }

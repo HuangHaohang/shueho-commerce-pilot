@@ -37,11 +37,9 @@ export function assessTextQuality(
 export function assessTaobaoItemQuality(item: Record<string, unknown>): QualityDecision {
   const title = assessTextQuality(item.itemName, { maxLength: 1000, field: "itemName" });
   const reasons = [...title.reasons];
-  const price = numberValue(item.priceZKYuanDouble ?? item.discntPriceYuan ?? item.priceYuanDouble);
-  if (price === null || price < 0 || price > 100_000_000) reasons.push("INVALID_PRICE");
   if (item.itemId === undefined || item.itemId === null || String(item.itemId).length > 64) reasons.push("INVALID_ITEM_ID");
   return {
-    status: reasons.some((reason) => ["INVALID_PRICE", "INVALID_ITEM_ID", ...title.reasons].includes(reason))
+    status: reasons.some((reason) => ["INVALID_ITEM_ID", ...title.reasons].includes(reason))
       ? "rejected"
       : title.status,
     reasons: [...new Set(reasons)],
@@ -126,11 +124,6 @@ function semanticTokens(value: string): Set<string> {
 
 function normalizeForMatch(value: string): string {
   return value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-}
-
-function numberValue(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function clamp(value: number): number {

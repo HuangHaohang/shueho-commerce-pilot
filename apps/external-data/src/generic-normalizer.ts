@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { assessProductMetrics } from "./evidence-assessment.js";
 import { assessTextQuality } from "./quality.js";
 import { unwrapProviderPayload } from "./normalizers.js";
 import type { JsonObject, ProviderEndpoint, QualityDecision } from "./types.js";
@@ -119,7 +120,7 @@ function normalizeRecord(
     ...extractMetrics(rawData),
     ...extractCommerceProductMetrics(rawData, endpoint),
   };
-  const keys = isRecord(rawData) ? Object.keys(rawData).join(" ") : "";
+  const metricAssessment = assessProductMetrics(metrics, jsonPointer);
   return {
     parentJsonPointer,
     collectionJsonPointer,
@@ -137,8 +138,8 @@ function normalizeRecord(
     rawData,
     rawSha256: rawJsonSha(rawData),
     quality,
-    supportsPrice: /price|amount|cost|售价|价格/i.test(keys),
-    supportsSales: /sales|sold|volume|成交|销量/i.test(keys),
+    supportsPrice: metricAssessment.price.status === "available",
+    supportsSales: metricAssessment.sales.status === "available",
   };
 }
 

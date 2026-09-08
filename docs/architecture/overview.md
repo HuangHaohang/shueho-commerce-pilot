@@ -101,6 +101,7 @@ The browser never connects directly to App Server and never supplies `cwd`, prov
 | Marketplace paid execution identity | Tenant/thread/Turn-bound `marketplace_research_plan` plus target-specific workflow step instances |
 | Product-grounded research subject | Server-created context-set UUID plus the exact Product revision references and immutable snapshot SHA-256 fixed before `turn/start` |
 | Product-insight method | Persisted Recipe id: `market_research`, `new_product_development`, or `product_retrospective`; the BFF and Gateway reject a mismatched method |
+| External evidence quality | Immutable user scope, independent model relevance and normalized metric eligibility; sampling completeness and analysis readiness are distinct |
 | Product-insight claims and receipts | One method-fixed Harness structured output with evidence-linked Claims, explainable Scorecard dimensions, proposed decision Gate and experiments, reconciled against safe same-Turn `research_request_id` / `evidence_id` tool projections; raw provider records remain in the independent warehouse |
 | Runtime operational logs | Redacted structured JSON, exportable through OpenTelemetry to Elastic or another log backend; never the business source of truth |
 | Uploaded/generated media | Tenant artifact metadata + ownership-checked BFF URL |

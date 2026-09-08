@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { enrichCandidates, hasUnrequestedProductSubtype } from "./enrichment.js";
+import { enrichCandidates, buildEnrichmentQueryText } from "./enrichment.js";
 import type { LocalModelClient } from "./local-model-client.js";
 
 describe("AI enrichment promotion", () => {
@@ -17,25 +17,33 @@ describe("AI enrichment promotion", () => {
       metadata: { recordKind: "product" },
     })) });
     expect(result.decisions[0]?.decision).toBe("hold");
-    expect(result.decisions[0]?.reasonCodes).toContain("PRODUCT_MATCH_NOT_CONFIRMED");
-    expect(result.decisions[1]?.decision).toBe("hold");
-    expect(result.decisions[1]?.reasonCodes).toContain("PRODUCT_SUBTYPE_SCOPE_UNCONFIRMED");
+    expect(result.decisions[0]?.reasonCodes).toContain("SCOPE_UNCONFIRMED");
+    expect(result.decisions[1]?.decision).toBe("promote");
     expect(result.decisions[2]?.decision).toBe("promote");
   });
 
-  it("does not mix unrequested electric or medicinal cookware into a generic cohort", () => {
-    expect(hasUnrequestedProductSubtype("砂锅", "煎药壶专用中药砂锅")).toBe(true);
-    expect(hasUnrequestedProductSubtype("砂锅", "美的电炖盅陶瓷电砂锅")).toBe(true);
-    expect(hasUnrequestedProductSubtype("砂锅", "燃气明火陶瓷锅 不适用电磁炉")).toBe(false);
-    expect(hasUnrequestedProductSubtype("电砂锅", "电炖锅紫砂内胆")).toBe(false);
-    expect(hasUnrequestedProductSubtype("煎药砂锅", "熬中药陶瓷药罐")).toBe(false);
-    expect(hasUnrequestedProductSubtype("不锈钢勺", "电炖锅配套餐勺")).toBe(false);
+  it("uses only the immutable user scope and never injects category exclusions", () => {
+    for (const [target, request] of [
+      ["砂锅", "研究砂锅"], ["电脑", "研究适合户外携带的电脑，包括二合一设备"],
+      ["双肩包", "研究双肩包，排除真皮，不排除电脑夹层"],
+    ]) {
+      const query = buildEnrichmentQueryText("untrusted replacement request", {
+        platform: "jd", targetProduct: target!, originalRequest: request!, metrics: ["sales_level"],
+        expectedCategories: [target!], excludedCategories: [], currency: "CNY", requestedTopN: 10,
+      });
+      expect(query).toContain(request);
+      expect(query).not.toContain("untrusted replacement");
+      expect(query).not.toContain("研究范围排除：");
+      expect(query).not.toContain("需要支持的指标：");
+      expect(query).not.toContain("电炖锅");
+      expect(query).not.toContain("煎药");
+    }
   });
 
-  it("keeps raw candidates but rejects explicit cross-category contamination", async () => {
+  it("holds unsupported scope across categories without deleting valid source data", async () => {
     const models = {
       embed: async (texts: string[]) => texts.map(() => new Array(1024).fill(0).map((_, index) => index === 0 ? 1 : 0)),
-      rerank: async (_query: string, documents: string[]) => documents.map(() => 0.95),
+      rerank: async () => [0.95, 0.05],
     } as unknown as LocalModelClient;
     const result = await enrichCandidates({
       requestText: "帮我调研淘宝上蘑菇勺的价格带和销量量级",
@@ -74,8 +82,9 @@ describe("AI enrichment promotion", () => {
       models,
     });
     expect(result.decisions[0]?.decision).toBe("promote");
-    expect(result.decisions[1]?.decision).toBe("reject");
-    expect(result.decisions[1]?.reasonCodes).toContain("CROSS_CATEGORY_CONTAMINATION");
+    expect(result.decisions[1]?.decision).toBe("hold");
+    expect(result.decisions[1]?.reasonCodes).toContain("SCOPE_UNCONFIRMED");
+    expect(result.decisions[1]?.quality.status).toBe("valid");
   });
 
   it("does not reject a commuter bag merely because it has a laptop compartment", async () => {
@@ -129,10 +138,10 @@ describe("AI enrichment promotion", () => {
     });
     expect(observedQuery).toContain("目标市场当地语言");
     expect(result.decisions[0]?.decision).toBe("promote");
-    expect(result.decisions[0]?.reasonCodes).toContain("SEMANTIC_TARGET_MATCH");
+    expect(result.decisions[0]?.reasonCodes).toContain("MODEL_SCOPE_SUPPORTED");
   });
 
-  it("uses localized and simplified-traditional query variants before applying model thresholds", async () => {
+  it("keeps multilingual lexical matches held when semantic evidence is weak", async () => {
     const models = {
       embed: async (texts: string[]) => texts.map(() => new Array(1024).fill(0).map((_, index) => index === 0 ? 1 : 0)),
       rerank: async () => [0.1],
@@ -154,7 +163,7 @@ describe("AI enrichment promotion", () => {
       models,
     });
     expect(result.decisions[0]?.lexicalScore).toBeGreaterThanOrEqual(0.6);
-    expect(result.decisions[0]?.decision).toBe("promote");
+    expect(result.decisions[0]?.decision).toBe("hold");
     expect(result.decisions[0]?.reasonCodes).not.toContain("TARGET_MISMATCH");
   });
 
@@ -180,6 +189,6 @@ describe("AI enrichment promotion", () => {
     });
     expect(result.decisions[0]?.decision).toBe("hold");
     expect(result.decisions[0]?.entityMatch).not.toBe("irrelevant");
-    expect(result.decisions[0]?.reasonCodes).toContain("INSUFFICIENT_RELEVANCE_EVIDENCE");
+    expect(result.decisions[0]?.reasonCodes).toContain("SCOPE_UNCONFIRMED");
   });
 });

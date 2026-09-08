@@ -1,5 +1,6 @@
 import type { PoolClient } from "pg";
 
+import { assessProductMetrics, ENRICHMENT_VERSION, publicEvidenceAssessment, researchAnalysisReadiness } from "./evidence-assessment.js";
 import { recordServiceAudit } from "./audit.js";
 import { applyResearchIntentQuality } from "./intent-quality.js";
 import { buildQueryIdentity, canonicalJson, sha256Json, utf8JsonBytes } from "./canonical.js";
@@ -998,20 +999,21 @@ export async function createEnrichmentJob(
         entityId: candidate.entityId,
         content: candidate.content,
         quality: candidate.quality,
+        metadata: candidate.metadata,
       })),
     });
     const row = await queryOne<{ id: string }>(client, `
       INSERT INTO ai_enrichment_job (
         tenant_id,workspace_id,research_request_id,query_key,state,embedding_model,
         embedding_dimensions,reranker_model,prompt_version,input_hash,candidate_count,started_at
-      ) VALUES ($1,$2,$3,$4,'running',$5,$6,$7,'commerce-relevance-v3',$8,$9,CURRENT_TIMESTAMP)
+      ) VALUES ($1,$2,$3,$4,'running',$5,$6,$7,$10,$8,$9,CURRENT_TIMESTAMP)
       ON CONFLICT (research_request_id,input_hash,embedding_model,reranker_model,prompt_version)
       DO UPDATE SET state='running', error_code=NULL, error_message=NULL,
                     started_at=CURRENT_TIMESTAMP, completed_at=NULL
       WHERE ai_enrichment_job.state IN ('running','failed')
       RETURNING id
     `, [scope.tenantId, scope.workspaceId, prepared.researchRequestId, prepared.identity.queryKey,
-      models.embeddingModel, models.embeddingDimensions, models.rerankerModel, inputHash, candidates.length]);
+      models.embeddingModel, models.embeddingDimensions, models.rerankerModel, inputHash, candidates.length, ENRICHMENT_VERSION]);
     return row.id;
   });
 }
@@ -1047,7 +1049,7 @@ export async function persistEnrichmentDecisions(
 ): Promise<void> {
   await withScope(scope, async (client) => {
     for (const decision of decisions) {
-      const inputHash = sha256Json({ content: decision.content, request: scope.requestText });
+      const inputHash = sha256Json({ content: decision.content, metadata: decision.metadata, intent: prepared.identity.intent });
       const result = await queryOne<{ id: string }>(client, `
         INSERT INTO ai_enrichment_result (
           tenant_id,workspace_id,job_id,research_request_id,entity_type,entity_id,entity_match,
@@ -1058,12 +1060,12 @@ export async function persistEnrichmentDecisions(
         RETURNING id
       `, [scope.tenantId, scope.workspaceId, jobId, prepared.researchRequestId,
         decision.entityType, decision.entityId, decision.entityMatch,
-        decision.entityMatch === "irrelevant" ? false : decision.entityMatch === "unknown" ? null : true,
+        null, // Relevance is not a verified category classification.
         decision.supportsPrice, decision.supportsSales, decision.quality.status,
         decision.lexicalScore, decision.embeddingScore, decision.rerankScore,
         decision.relevanceScore, decision.confidence, decision.quality.normalizedValue,
         decision.reasonCodes, decision.decision,
-        JSON.stringify({ embeddingModel: models.embeddingModel, rerankerModel: models.rerankerModel, promptVersion: "commerce-relevance-v3" }),
+        JSON.stringify({ embeddingModel: models.embeddingModel, rerankerModel: models.rerankerModel, promptVersion: ENRICHMENT_VERSION, assessment: decision.assessment }),
         inputHash]);
       const embedding = embeddings.get(decision.entityId);
       if (embedding) {
@@ -1279,7 +1281,8 @@ async function calculateResearchMetrics(
     WHERE research_request_id=$1 AND enrichment_result_id IN (SELECT id FROM ai_enrichment_result WHERE job_id=$2)
     ORDER BY relevance_score DESC
   `, [prepared.researchRequestId, jobId]);
-  const prices = products.rows.map((row) => row.price_yuan === null ? null : Number(row.price_yuan))
+  const prices = products.rows.filter((row) => assessProductMetrics(row, null).price.status === "available")
+    .map((row) => row.price_yuan === null ? null : Number(row.price_yuan))
     .filter((value): value is number => value !== null && Number.isFinite(value) && value >= 0)
     .sort((left, right) => left - right);
   if (prices.length) {
@@ -1293,9 +1296,9 @@ async function calculateResearchMetrics(
     };
     await upsertMetric(client, scope, prepared.researchRequestId, "price_band", value,
       "accepted_products_unweighted_percentiles", prices.length, { acceptedProducts: products.rows.length },
-      confidenceForSample(prices.length));
+      0);
   }
-  const salesRows = products.rows.filter((row) => row.sales_display);
+  const salesRows = products.rows.filter((row) => assessProductMetrics(row, null).sales.status === "available");
   if (salesRows.length) {
     const value = {
       observations: salesRows.map((row) => ({
@@ -1309,7 +1312,7 @@ async function calculateResearchMetrics(
     };
     await upsertMetric(client, scope, prepared.researchRequestId, "sales_level", value,
       "provider_sales_bucket_preserving_open_intervals", salesRows.length,
-      { acceptedProducts: products.rows.length }, confidenceForSample(salesRows.length));
+      { acceptedProducts: products.rows.length }, 0);
   }
   const brands = await client.query<{ brand_name: string; item_count: number | null }>(`
     SELECT brand_name, item_count
@@ -1330,7 +1333,7 @@ async function calculateResearchMetrics(
       top3Share: Number(distribution.slice(0, 3).reduce((sum, brand) => sum + brand.share, 0).toFixed(6)),
       distribution,
     }, "accepted_nonzero_provider_brand_facet_counts", distribution.length,
-    { acceptedBrands: distribution.length }, confidenceForSample(distribution.length));
+    { acceptedBrands: distribution.length }, 0);
   }
   const properties = await client.query<{ property_name: string; property_value: string; item_count: number | null }>(`
     SELECT property_name, property_value, item_count
@@ -1359,7 +1362,7 @@ async function calculateResearchMetrics(
     await upsertMetric(client, scope, prepared.researchRequestId, "property_distribution", {
       properties: distribution,
     }, "accepted_nonzero_provider_property_facet_counts", properties.rows.length,
-    { acceptedPropertyValues: properties.rows.length }, confidenceForSample(properties.rows.length));
+    { acceptedPropertyValues: properties.rows.length }, 0);
   }
 }
 
@@ -1441,7 +1444,8 @@ export async function loadCompactResearchResult(
              observation.sales_display,
              observation.sales_lower_bound,observation.sales_upper_bound,
              observation.sales_qualifier,observation.relevance_score,
-             observation.confidence,observation.source_json_pointer
+             observation.confidence,observation.source_json_pointer,
+             enrichment.model_metadata AS enrichment_metadata
       FROM business_product_observation observation
       JOIN ai_enrichment_result enrichment ON enrichment.id=observation.enrichment_result_id
       WHERE observation.research_request_id=$1 AND enrichment.job_id=$2
@@ -1452,6 +1456,7 @@ export async function loadCompactResearchResult(
         SELECT evidence.source_platform,evidence.provider_entity_id,evidence.title,evidence.author,
                evidence.canonical_url,evidence.metrics,evidence.relevance_score,
                evidence.confidence,evidence.source_json_pointer,
+               enrichment.model_metadata AS enrichment_metadata,
                row_number() OVER (
                  PARTITION BY evidence.source_platform,evidence.provider_entity_id
                  ORDER BY evidence.relevance_score DESC,evidence.id
@@ -1507,11 +1512,12 @@ export async function loadCompactResearchResult(
                THEN (metrics->>'review_count_lower_bound')::bigint ELSE NULL END AS review_count_lower_bound,
              CASE WHEN jsonb_typeof(metrics->'good_rate_percent')='number'
                THEN (metrics->>'good_rate_percent')::numeric ELSE NULL END AS good_rate_percent,
-             metrics,relevance_score,confidence,source_json_pointer
+             metrics,relevance_score,confidence,source_json_pointer,enrichment_metadata
       FROM ranked WHERE identity_rank=1
       ORDER BY relevance_score DESC LIMIT 30
     `, [researchRequestId, latestJobId]);
-    const products = dedupeProductRows([...specializedProducts.rows, ...genericProducts.rows]);
+    const products = dedupeProductRows([...specializedProducts.rows, ...genericProducts.rows])
+      .map((row) => projectAssessedEvidence(row, true));
     const brands = await client.query<JsonObject>(`
       SELECT observation.provider_brand_id AS brand_id,observation.brand_name,
              observation.item_count,observation.relevance_score
@@ -1536,6 +1542,7 @@ export async function loadCompactResearchResult(
              content.canonical_url,content.published_at,content.metrics,
              'ai_promoted_text'::text AS quality_basis,
              content.relevance_score,content.confidence,content.source_json_pointer,
+             enrichment.model_metadata AS enrichment_metadata,
              content.observed_at
       FROM business_content_observation content
       JOIN social_search_item source ON source.id=content.source_social_item_id
@@ -1552,6 +1559,7 @@ export async function loadCompactResearchResult(
              evidence.canonical_url,evidence.published_at,evidence.metrics,
              'ai_promoted_text'::text AS quality_basis,
              evidence.relevance_score,evidence.confidence,evidence.source_json_pointer,
+             enrichment.model_metadata AS enrichment_metadata,
              evidence.observed_at
       FROM business_evidence_observation evidence
       JOIN ai_enrichment_result enrichment ON enrichment.id=evidence.enrichment_result_id
@@ -1570,8 +1578,10 @@ export async function loadCompactResearchResult(
     const decisionCounts = Object.fromEntries(decisions.rows.map((row) => [row.decision, Number(row.count)]));
     const intent = isRecord(request.structured_intent) ? request.structured_intent : {};
     const requestedMetrics = stringArray(intent.metrics);
-    const metricValues: JsonObject = Object.fromEntries(storedMetrics.rows.map((row) => [row.metric_name, {
-      ...row.metric_value, sampleCount: row.sample_count, confidence: row.confidence,
+    const metricValues: JsonObject = Object.fromEntries(storedMetrics.rows
+      .filter((row) => !["price_band", "sales_level"].includes(row.metric_name))
+      .map((row) => [row.metric_name, {
+      ...row.metric_value, sampleCount: row.sample_count, confidence: null,
     }]));
     // Read receipts created before the metric-contract correction without
     // reporting a requested brand_competition metric as missing.
@@ -1587,7 +1597,7 @@ export async function loadCompactResearchResult(
         : row.price_yuan !== null && row.price_yuan !== undefined
           ? "CNY"
           : null;
-      if (amount === null || amount < 0 || currency === null) continue;
+      if (assessProductMetrics(row, null).price.status !== "available" || amount === null || currency === null) continue;
       priceGroups.set(currency, [...(priceGroups.get(currency) ?? []), amount]);
     }
     for (const values of priceGroups.values()) values.sort((left, right) => left - right);
@@ -1601,7 +1611,7 @@ export async function loadCompactResearchResult(
         maximum: values.at(-1),
         sampleCount: values.length,
         method: "unweighted_provider_display_prices",
-        confidence: confidenceForSample(values.length),
+        confidence: null,
         ...(currency === "CNY" ? {
           minimumYuan: values[0],
           p25Yuan: percentile(values, 0.25),
@@ -1612,9 +1622,7 @@ export async function loadCompactResearchResult(
       }));
       metricValues.price_band = bands.length === 1 ? bands[0]! : { currency: null, bands };
     }
-    const salesRows = products.filter((row) =>
-      row.sales_display !== null && row.sales_display !== undefined ||
-      row.sales_lower_bound !== null && row.sales_lower_bound !== undefined);
+    const salesRows = products.filter((row) => assessProductMetrics(row, null).sales.status === "available");
     const hasSalesEvidence = salesRows.length > 0;
     if (!metricValues.sales_level && salesRows.length) {
       const knownLowerBounds = salesRows
@@ -1632,19 +1640,16 @@ export async function loadCompactResearchResult(
         exactValuesAvailable: salesRows.some((row) => row.sales_qualifier === "exact"),
         sampleCount: salesRows.length,
         method: "provider_sales_display_preserving_qualifier",
-        confidence: confidenceForSample(salesRows.length),
+        confidence: null,
       };
     }
-    const evidence = [...contentEvidence.rows, ...genericEvidence.rows]
+    const evidence = [...contentEvidence.rows, ...genericEvidence.rows].map((row) => projectAssessedEvidence(row))
       .sort((left, right) => Number(right.relevance_score ?? 0) - Number(left.relevance_score ?? 0))
       .slice(0, 50);
     const availableMetricFields = [...new Set(
       evidence.flatMap((row) => isRecord(row.metrics) ? Object.keys(row.metrics) : []),
     )].sort();
     const availableMetrics = new Set(Object.keys(metricValues));
-    if (availableMetricFields.some((field) => ["sales_display", "sales_lower_bound", "sales_upper_bound"].includes(field))) {
-      availableMetrics.add("sales_level");
-    }
     const availableMetricNames = [...availableMetrics].sort();
     const missingRequestedMetrics = requestedMetrics.filter((metric) => !availableMetrics.has(metric));
     const success = request.status === "completed";
@@ -1679,6 +1684,9 @@ export async function loadCompactResearchResult(
         availableMetrics: availableMetricNames,
         availableMetricFields,
         missingRequestedMetrics,
+        analysisReadiness: researchAnalysisReadiness({
+          processingComplete: success, requestedMetrics, availableMetrics: availableMetricNames, products,
+        }),
       },
       metrics: metricValues,
       products,
@@ -1688,6 +1696,8 @@ export async function loadCompactResearchResult(
       exclusions: decisionCounts,
       limitations: [
         "结果仅来自本次查询及通过质量和相关性判断的证据。",
+        "相关性分数仅用于排序，不是准确率、销量或同类可比性证明；范围只按用户要求判断，不自动排除未指定的子类。",
+        "价格分布仅描述返回样本；同类商品范围、销量周期和统计口径未核实前，不支持热卖排行或同类新品定价结论。",
         ...(isRecord(intent.timeRange)
           ? ["缺少可验证发布时间或位于请求时间范围外的记录不会进入业务证据层。"]
           : []),
@@ -1704,6 +1714,20 @@ export async function loadCompactResearchResult(
       ],
     };
   });
+}
+
+function projectAssessedEvidence(row: JsonObject, product = false): JsonObject {
+  const { enrichment_metadata, ...evidence } = row;
+  const assessment = publicEvidenceAssessment(enrichment_metadata);
+  return {
+    ...evidence,
+    confidence: null,
+    evidence_assessment: {
+      ...assessment,
+      ...(product ? { metrics: assessProductMetrics(row,
+        typeof row.source_json_pointer === "string" ? row.source_json_pointer : null) } : {}),
+    },
+  };
 }
 
 async function persistQualityIssues(
@@ -1796,10 +1820,6 @@ function percentile(values: number[], percentileValue: number): number {
   const upper = Math.ceil(index);
   const weight = index - lower;
   return Number((((values[lower] ?? 0) * (1 - weight)) + ((values[upper] ?? 0) * weight)).toFixed(4));
-}
-
-function confidenceForSample(sampleCount: number): number {
-  return Number(Math.min(0.95, 0.4 + Math.log10(Math.max(1, sampleCount)) * 0.25).toFixed(4));
 }
 
 function clampInteger(value: number, minimum: number, maximum: number): number {

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 
+import { researchAnalysisReadiness } from "./evidence-assessment.js";
 import { sha256Json } from "./canonical.js";
 import { withScope } from "./database.js";
 import { settleMarketplaceResearchPlan } from "./marketplace-research-plan-store.js";
@@ -628,6 +629,9 @@ export async function completeMarketplaceWorkflowExecution(
       requestedMetrics,
       availableMetrics,
       missingRequestedMetrics,
+      analysisReadiness: researchAnalysisReadiness({
+        processingComplete: status === "completed", requestedMetrics, availableMetrics, products,
+      }),
     },
     metrics: groupWorkflowChildValues(childResults,"metrics"),
     products,
@@ -783,7 +787,7 @@ async function readWorkflowBusinessEvidence(scope: WorkflowScope, executionId: s
              evidence.role AS workflow_role,target.target_ordinal AS workflow_target_ordinal,
              evidence.evidence_kind,evidence.provider_entity_id,evidence.title,evidence.summary,
              evidence.canonical_url,evidence.metrics,evidence.quality_basis,
-             evidence.relevance_score,evidence.confidence,evidence.source_json_pointer,evidence.observed_at
+             evidence.relevance_score,NULL::double precision AS confidence,evidence.source_json_pointer,evidence.observed_at
       FROM research_workflow_business_evidence evidence
       JOIN research_workflow_step_execution step ON step.id=evidence.workflow_step_execution_id
       LEFT JOIN research_workflow_target target ON target.id=step.target_id

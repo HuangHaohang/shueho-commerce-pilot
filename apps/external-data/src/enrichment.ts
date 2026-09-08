@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { candidateMetricAssessment, ENRICHMENT_VERSION } from "./evidence-assessment.js";
 import { LocalModelClient } from "./local-model-client.js";
 import { expandMultilingualQueryTerms } from "./market-localization.js";
 import { lexicalRelevanceMany } from "./quality.js";
@@ -27,7 +28,7 @@ export async function enrichCandidates(input: {
     const queryEmbedding = (await input.models.embed([queryText], "query"))[0];
     if (!queryEmbedding) throw new Error("Local embedding model returned no query embedding.");
     for (const batch of batches(eligible, 64)) {
-      const vectors = await input.models.embed(batch.map((candidate) => candidate.content), "document");
+      const vectors = await input.models.embed(batch.map(scopeDocument), "document");
       for (let index = 0; index < batch.length; index += 1) {
         const candidate = batch[index];
         const vector = vectors[index];
@@ -35,9 +36,21 @@ export async function enrichCandidates(input: {
         embeddings.set(candidate.entityId, vector);
         embeddingScores.set(candidate.entityId, cosine(queryEmbedding, vector));
       }
+      // Retrieval vectors must still correspond to the complete stored content.
+      // Scope admission uses descriptive text so metric presence cannot change it.
+      const changed = batch.filter((candidate) => scopeDocument(candidate) !== candidate.content);
+      if (changed.length) {
+        const contentVectors = await input.models.embed(changed.map((candidate) => candidate.content), "document");
+        for (let index = 0; index < changed.length; index += 1) {
+          const candidate = changed[index];
+          const vector = contentVectors[index];
+          if (!candidate || !vector) throw new Error("Local content embedding batch response is incomplete.");
+          embeddings.set(candidate.entityId, vector);
+        }
+      }
     }
     for (const batch of batches(eligible, 50)) {
-      const scores = await input.models.rerank(queryText, batch.map((candidate) => candidate.content));
+      const scores = await input.models.rerank(queryText, batch.map(scopeDocument));
       for (let index = 0; index < batch.length; index += 1) {
         const candidate = batch[index];
         const score = scores[index];
@@ -49,7 +62,8 @@ export async function enrichCandidates(input: {
 
   const decisions = input.candidates.map((candidate): EnrichmentDecision => {
     const product = candidate.entityType === "taobao_item" || candidate.metadata.recordKind === "product";
-    const lexicalDocument = product || candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value"
+    const lexicalDocument = product ? scopeDocument(candidate)
+      : candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value"
       ? candidate.quality.normalizedValue ?? ""
       : candidate.content;
     const lexicalScore = lexicalRelevanceMany(queryTerms, input.requestText, lexicalDocument);
@@ -59,51 +73,45 @@ export async function enrichCandidates(input: {
     const relevanceScore = clamp((lexicalScore * 0.25) + (semanticScore * 0.25) + ((rerankScore ?? 0) * 0.5));
     const zeroCount = (candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value") &&
       typeof candidate.metadata.itemCount === "number" && candidate.metadata.itemCount <= 0;
-    const categoryMismatch = obviousCategoryMismatch(input.intent.targetProduct, candidate.content);
+    const metrics = candidateMetricAssessment(candidate);
     const embeddingMinScore = policyNumber(input.intent.qualityPolicy?.embeddingMinScore, config.localModels.embeddingMinScore);
     const rerankMinScore = policyNumber(input.intent.qualityPolicy?.rerankMinScore, config.localModels.rerankMinScore);
     const lexicalPromoteMinScore = policyNumber(input.intent.qualityPolicy?.lexicalPromoteMinScore, 0.6);
-    const holdRelevanceMinScore = policyNumber(input.intent.qualityPolicy?.holdRelevanceMinScore, 0.2);
-    const passModel = (rerankScore ?? 0) >= rerankMinScore &&
-      (embeddingScore ?? -1) >= embeddingMinScore && !categoryMismatch;
-    const exact = lexicalScore >= 0.999 && !product;
-    const lexicalSupported = lexicalScore >= lexicalPromoteMinScore &&
-      ((embeddingScore ?? -1) >= embeddingMinScore - 0.08 || (rerankScore ?? 0) >= 0.2);
-    const productModelSupported = (rerankScore ?? 0) >= rerankMinScore &&
+    // Admission does not use the weighted rank. A lexical hit cannot bypass the reranker.
+    const modelSupported = (rerankScore ?? 0) >= rerankMinScore &&
       ((embeddingScore ?? -1) >= embeddingMinScore ||
         (lexicalScore >= lexicalPromoteMinScore && (embeddingScore ?? -1) >= embeddingMinScore - 0.08));
-    const ambiguousSubtype = product && hasUnrequestedProductSubtype(input.intent.targetProduct, lexicalDocument);
-    const adjacent = !exact && (
-      lexicalScore >= 0.25 || passModel || lexicalSupported || relevanceScore >= holdRelevanceMinScore
-    );
     const reasons = new Set(candidate.quality.reasons);
-    if (product && lexicalScore >= 0.999) reasons.add("LEXICAL_TARGET_MENTION");
-    if (product && !productModelSupported) reasons.add("PRODUCT_MATCH_NOT_CONFIRMED");
-    if (ambiguousSubtype) reasons.add("PRODUCT_SUBTYPE_SCOPE_UNCONFIRMED");
-    if (exact) reasons.add("EXACT_TARGET_MATCH");
-    else if (passModel || lexicalSupported || lexicalScore >= 0.25) reasons.add("SEMANTIC_TARGET_MATCH");
-    else reasons.add("INSUFFICIENT_RELEVANCE_EVIDENCE");
+    if (lexicalScore >= 0.999) reasons.add("LEXICAL_TARGET_MENTION");
+    reasons.add(modelSupported ? "MODEL_SCOPE_SUPPORTED" : "SCOPE_UNCONFIRMED");
     if (zeroCount) reasons.add("ZERO_PROVIDER_COUNT");
-    if (categoryMismatch) {
-      reasons.add("CROSS_CATEGORY_CONTAMINATION");
-      reasons.add("TARGET_MISMATCH");
-    }
-    if (candidate.supportsPrice) reasons.add("SUPPORTS_PRICE_ANALYSIS");
-    if (candidate.supportsSales) reasons.add("SUPPORTS_SALES_ANALYSIS");
+    if (metrics.price.status === "available") reasons.add("SUPPORTS_PRICE_ANALYSIS");
+    if (metrics.sales.status === "available") reasons.add("SUPPORTS_SALES_ANALYSIS");
+    if (product && metrics.price.status !== "available") reasons.add(String(metrics.price.reason));
+    if (product && metrics.sales.status !== "available") reasons.add(String(metrics.sales.reason));
 
-    let decision: "promote" | "hold" | "reject";
-    if (candidate.quality.status === "rejected" || categoryMismatch) decision = "reject";
-    else if (candidate.quality.status === "suspicious" || zeroCount || ambiguousSubtype) decision = "hold";
-    else if (product) decision = productModelSupported ? "promote" : "hold";
-    else if (exact || passModel || lexicalSupported) decision = "promote";
-    else decision = "hold";
-
-    const entityMatch = categoryMismatch ? "irrelevant" : exact ? "exact" : adjacent ? "adjacent" : "unknown";
-    const confidence = decision === "reject" && candidate.quality.status === "rejected"
-      ? 0.99
-      : clamp(0.35 + Math.abs(relevanceScore - 0.5) + (candidate.quality.status === "valid" ? 0.1 : 0));
+    const decision = candidate.quality.status === "rejected" ? "reject"
+      : candidate.quality.status === "suspicious" || zeroCount || !modelSupported ? "hold" : "promote";
+    // The legacy numeric column is not a calibrated probability. Public responses return null.
+    const confidence = 0;
+    const entityMatch = modelSupported ? "adjacent" : "unknown";
+    const assessment = {
+      version: ENRICHMENT_VERSION,
+      scope: {
+        status: candidate.quality.status === "rejected" ? "invalid_record"
+          : decision === "promote" ? "model_supported" : "uncertain",
+        basis: "immutable_research_request_and_model_relevance",
+        homogeneousCohortVerified: false,
+        thresholds: { embeddingMinScore, rerankMinScore, lexicalPromoteMinScore, lexicalEmbeddingAllowance: 0.08 },
+      },
+      metrics,
+      ranking: { kind: "relevance_only", weights: { lexical: 0.25, embedding: 0.25, reranker: 0.5 }, calibratedProbability: false },
+    };
     return {
       ...candidate,
+      supportsPrice: metrics.price.status === "available",
+      supportsSales: metrics.sales.status === "available",
+      assessment,
       lexicalScore,
       embeddingScore,
       rerankScore,
@@ -117,24 +125,12 @@ export async function enrichCandidates(input: {
   return { decisions, embeddings };
 }
 
-/** Adjacent cookware subtypes need explicit scope; retain them as held evidence. */
-export function hasUnrequestedProductSubtype(target: string | null, title: string): boolean {
-  if (!target || !/锅|煲|壶|炖盅/.test(target)) return false;
-  const appliance = /电(?:砂|沙|炖|煮|饭|压力|热水|蒸)[锅煲壶盅]|电炖盅/;
-  const medicinal = /煎药|煎藥|熬药|熬藥|中药|中藥|药罐|藥罐|药壶|藥壺/;
-  return (appliance.test(title) && !appliance.test(target)) ||
-    (medicinal.test(title) && !medicinal.test(target));
-}
-
-const CATEGORY_CONFLICTS: Array<{ target: RegExp; forbidden: RegExp }> = [
-  { target: /勺|锅|铲|餐具|厨具|刀叉|筷/, forbidden: /手机|电脑|笔记本|RTX\d*|显卡|处理器|硬盘|打印机|路由器/i },
-  { target: /服装|衣|裤|裙|鞋/, forbidden: /手机|电脑|显卡|处理器|锅铲|餐具/i },
-  { target: /手机|电脑|数码|显卡|处理器/, forbidden: /锅铲|餐具|裙|女裤|毛绒玩具/i },
-];
-
-function obviousCategoryMismatch(target: string | null, content: string): boolean {
-  if (!target) return false;
-  return CATEGORY_CONFLICTS.some((rule) => rule.target.test(target) && rule.forbidden.test(content));
+/** Product scope is assessed from descriptive evidence, independently of numeric metrics. */
+function scopeDocument(candidate: EnrichmentCandidate): string {
+  if (candidate.entityType !== "taobao_item" && candidate.metadata.recordKind !== "product") return candidate.content;
+  const title = typeof candidate.metadata.title === "string" ? candidate.metadata.title : candidate.quality.normalizedValue;
+  return [title, typeof candidate.metadata.summary === "string" ? candidate.metadata.summary : ""]
+    .filter(Boolean).join("；").slice(0, 4096);
 }
 
 export function buildEnrichmentQueryText(
@@ -149,11 +145,12 @@ export function buildEnrichmentQueryText(
     ...queryTerms,
   ]);
   return [
-    requestText.trim(),
+    `用户确认的研究范围：${intent.originalRequest.trim() || requestText.trim()}`,
     intent.targetProduct ? `目标商品：${intent.targetProduct}` : "",
     ...allTerms.map((term) => `等价检索词：${term}`),
-    intent.metrics.length ? `需要支持的指标：${intent.metrics.join("、")}` : "",
-    "证据可能使用目标市场当地语言；跨语言等价商品词应视为匹配。只接受与目标商品类目相符的公开市场证据，排除手机、电脑等跨类目污染。",
+    ...intent.expectedCategories.map((category) => `研究范围包含：${category}`),
+    ...intent.excludedCategories.map((category) => `研究范围排除：${category}`),
+    "仅判断记录与用户研究范围的相关性。范围限制只来自用户要求，不自行缩小到某个子类；证据可能使用目标市场当地语言，跨语言等价商品词应视为匹配。价格、销量等指标是否存在另行核验，不能提高或降低商品范围相关性。",
   ].filter(Boolean).join("；").slice(0, 4096);
 }
 

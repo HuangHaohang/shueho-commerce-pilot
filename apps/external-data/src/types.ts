@@ -159,6 +159,7 @@ export type EnrichmentDecision = EnrichmentCandidate & {
   rerankScore: number | null;
   relevanceScore: number;
   confidence: number;
+  assessment: JsonObject;
   entityMatch: "exact" | "adjacent" | "irrelevant" | "unknown";
   reasonCodes: string[];
   decision: "promote" | "hold" | "reject";
