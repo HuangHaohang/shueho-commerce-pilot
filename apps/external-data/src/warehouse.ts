@@ -1262,7 +1262,9 @@ async function calculateResearchMetrics(
   jobId: string,
 ): Promise<void> {
   // Rebuild derived metrics from this completed enrichment revision only.
-  await client.query("DELETE FROM research_metric WHERE research_request_id=$1", [prepared.researchRequestId]);
+  await client.query(`UPDATE research_metric SET metric_value='{}'::jsonb,sample_count=0,
+    coverage='{}'::jsonb,confidence=0,calculation_method='superseded_enrichment_revision',observed_at=CURRENT_TIMESTAMP
+    WHERE research_request_id=$1`, [prepared.researchRequestId]);
   const products = await client.query<{
     price_yuan: string | null;
     sales_display: string | null;
@@ -1558,7 +1560,7 @@ export async function loadCompactResearchResult(
     `, [researchRequestId, latestJobId]);
     const storedMetrics = await client.query<{ metric_name: string; metric_value: JsonObject; sample_count: number; confidence: number }>(`
       SELECT metric_name, metric_value, sample_count, confidence
-      FROM research_metric WHERE research_request_id=$1 ORDER BY metric_name
+      FROM research_metric WHERE research_request_id=$1 AND sample_count>0 ORDER BY metric_name
     `, [researchRequestId]);
     const decisions = await client.query<{ decision: string; count: string }>(`
       SELECT result.decision, count(*)::text AS count
