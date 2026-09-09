@@ -1,3 +1,4 @@
+import {taskCallId} from "./research-task-runtime.js";
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -44,7 +45,7 @@ export function registerDataCapabilityTools(server: McpServer, principal: Authen
     processing_state:"executing",provider_completed:false,retry_after_seconds:15,recovery_tool:"get_research_result",message:"同一数据请求正在执行，请按计划编号查询，不要新建计划重采。"})));
 
   async function execute(planId: string) {
-    const scope = context(`data_execute_${randomUUID().replaceAll("-","")}`);
+    const scope = context(`data_execute_${taskCallId().replaceAll("-","")}`);
     let claimed: Record<string,unknown> | null = null;
     try {
       claimed = requireDataPayload(await upstream.claimDataRequestPlan({plan_id:planId,...await authorization(),_commerce_context:scope}));

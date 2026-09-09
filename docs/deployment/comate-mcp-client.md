@@ -41,3 +41,5 @@ actual Comate custom-model path and confirm a real model response rather than a
 mock or error. A provider-free planning request must retain null
 price bounds and produce valid plans for both Taobao and JD. Do not convert zero
 prices back to null on the server or disable platform capability checks.
+
+Contract 7 replaces the old free-plan/execute pair with `submit_marketplace_research`, `submit_social_research`, `submit_data_request`, and `get_research_task`. The bridge retries only enumerated read tools on transient network failures (at most three attempts). It never retries submissions or paid execution, and preserves `isError=true` when transport fails. Restart Comate and create a new task after refreshing the installed bridge, directTools and Skill.

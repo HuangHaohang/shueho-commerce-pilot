@@ -63,7 +63,7 @@ export function capabilityView(row: DataCapabilityRow, authorization: DataCapabi
         ...row.request_schema, properties: Object.fromEntries(Object.entries(properties).filter(([key]) => !isProtectedField(key))),
         required: required.filter((key) => !isProtectedField(key)),
       },
-      execution: { plan_tool: "plan_data_request", execute_tool: "execute_data_request", provider_calls: 1 },
+      execution: { submit_tool: "submit_data_request", result_tool: "get_research_task", provider_calls: 1 },
       result_contract: "Validated, bounded source-field observations with provenance; provider outputs are not independently verified business facts.",
     } : {}),
   };

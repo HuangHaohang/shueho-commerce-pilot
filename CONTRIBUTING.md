@@ -67,7 +67,7 @@ npm run jobs:thread-deletion
 - JustOneAPI methods, request schemas, parameter locations, pagination and documentation status come from `external-data:import-catalog`. The import must retain immutable sitemap/OpenAPI/normalized-contract hashes and intersect with the immutable pricing snapshot; do not hand-code endpoint branches.
 - Marketplace country/site choices come from OpenAPI enums imported into `provider_market_option`. Agent instructions, Gateway code and frontend components must never own or copy those option lists.
 - Marketplace query language, script, currency, timezone and quality/sample policy come from immutable `provider_market_profile_import_receipt` revisions. A provider enum is selectable only when it intersects an enabled market profile; country labels are never language inference.
-- Marketplace product collection is two-phase for new Harness contracts: free `plan_marketplace_research` persists a tenant/thread/Turn-bound plan and obtains a no-reservation quote; paid `execute_marketplace_research` accepts only that plan id. Do not merge plan and execution arguments or allow execution to change platform, market, localization, sample size, endpoint set, catalog revision or workflow definition.
+- Historical marketplace product collection used two phases: free `plan_marketplace_research` persists a tenant/thread/Turn-bound plan and obtains a no-reservation quote; paid `execute_marketplace_research` accepts only that plan id. Do not merge plan and execution arguments or allow execution to change platform, market, localization, sample size, endpoint set, catalog revision or workflow definition.
 - Model questions use only App Server `item/tool/requestUserInput`; application approvals hold the original `item/tool/call` and use `commerce/approval/*`. Never fabricate a Codex server request or duplicate its answer with `thread/inject_items`.
 - New integrations use application Tools or managed MCP boundaries.
 - Database migrations are append-only under `apps/web/migrations` and must be registered in `apps/web/scripts/migrate-auth.ts`.
@@ -128,3 +128,5 @@ The PR description must include:
 - known limitations or follow-up work.
 
 Do not merge a PR with unresolved high-risk review findings, missing migrations, failing CI, undocumented architecture changes, or unverified external writes.
+
+- Current research contracts submit immutable durable tasks directly. Do not expose free planning/separate execution tools. Preserve internal scope receipts, live authorization/budget checks, fenced operation checkpoints, no uncertain replay and legacy readback.

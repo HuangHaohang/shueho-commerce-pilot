@@ -1,3 +1,4 @@
+import {normalizeSocialMetricFields,socialMetricCoverage} from "./social-metric-coverage.js";
 import type { PoolClient } from "pg";
 
 import { assessProductMetrics, ENRICHMENT_VERSION, publicEvidenceAssessment, researchAnalysisReadiness } from "./evidence-assessment.js";
@@ -1683,13 +1684,14 @@ export async function loadCompactResearchResult(
         confidence: null,
       };
     }
-    const evidence = [...contentEvidence.rows, ...genericEvidence.rows].map((row) => projectAssessedEvidence(row))
+    const evidence = [...contentEvidence.rows, ...genericEvidence.rows].map((row): JsonObject => {const projected=projectAssessedEvidence(row);return {...projected,metrics:normalizeSocialMetricFields(isRecord(projected.metrics)?projected.metrics:{})};})
       .sort((left, right) => Number(right.relevance_score ?? 0) - Number(left.relevance_score ?? 0))
       .slice(0, 50);
     const availableMetricFields = [...new Set(
       evidence.flatMap((row) => isRecord(row.metrics) ? Object.keys(row.metrics) : []),
     )].sort();
-    const availableMetrics = new Set(Object.keys(metricValues));
+    const socialCoverage=socialMetricCoverage(evidence);
+    const availableMetrics = new Set([...Object.keys(metricValues),...socialCoverage.available]);
     const availableMetricNames = [...availableMetrics].sort();
     const missingRequestedMetrics = requestedMetrics.filter((metric) => !availableMetrics.has(metric));
     const success = request.status === "completed";
@@ -1729,11 +1731,12 @@ export async function loadCompactResearchResult(
         requestedMetrics,
         availableMetrics: availableMetricNames,
         availableMetricFields,
+        metricCoverageByField:socialCoverage.perField,
         missingRequestedMetrics,
         execution,
-        analysisReadiness: researchAnalysisReadiness({
+        analysisReadiness: {...researchAnalysisReadiness({
           processingComplete: success, requestedMetrics, availableMetrics: availableMetricNames, products,
-        }),
+        }),...(requestedMetrics.some(name=>(socialCoverage.perField[name] as JsonObject|undefined)?.status==='partial')?{requestedMetricCoverage:'partial'}:{})},
       },
       metrics: metricValues,
       products,

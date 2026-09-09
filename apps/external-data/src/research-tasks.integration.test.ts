@@ -1,0 +1,30 @@
+import {randomUUID} from 'node:crypto';import {Pool} from 'pg';import {describe,it,expect,afterAll,beforeAll} from 'vitest';
+import {config} from './config.js';import {database} from './database.js';
+import {submitResearchTask,claimResearchTask,readResearchTask,updateResearchTask} from './research-tasks.js';
+const ci=process.env.GITHUB_ACTIONS==='true'&&process.env.NODE_ENV==='test';
+const url=process.env.JUSTONEAPI_TEST_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_DATABASE_URL:undefined);
+const ownerUrl=process.env.JUSTONEAPI_TEST_MIGRATION_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_MIGRATION_DATABASE_URL:undefined);
+const owner=new Pool({connectionString:ownerUrl});
+describe.skipIf(!url||!ownerUrl)('durable research queue with PostgreSQL',()=>{
+ beforeAll(()=>{expect(config.databaseUrl).toBe(url);});afterAll(async()=>{await database.end();await owner.end();});
+ it('deduplicates scoped submissions, fences leases, recovers abandoned tasks and isolates results',async()=>{
+  const scope={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'fixture'};
+  const input={source:'external_mcp',kind:'social',idempotency_key:randomUUID(),inputs:{keyword:'fixture'},principal:scope};
+  const [a,b]=await Promise.all([submitResearchTask(scope,input),submitResearchTask(scope,input)]);expect(a.task_id).toBe(b.task_id);
+  await expect(submitResearchTask(scope,{...input,inputs:{keyword:'different'}})).rejects.toThrow('CONFLICT');
+  await expect(readResearchTask({...scope,workspaceId:randomUUID()},a.task_id)).rejects.toThrow('NOT_FOUND');
+  const lease=randomUUID();const c=await claimResearchTask(lease);expect(c.task.id).toBe(a.task_id);
+  expect((await claimResearchTask(randomUUID())).task).toBeNull();
+  const base={task_id:a.task_id,lease_id:lease,operation_key:'1:call',operation_name:'call',input_hash:'a'};
+  expect((await updateResearchTask(scope,{...base,action:'begin_operation'})).fresh).toBe(true);
+  await updateResearchTask(scope,{...base,action:'complete_operation',result:{value:7}});
+  await owner.query("UPDATE research_task SET lease_until=clock_timestamp()-INTERVAL '1 second' WHERE id=$1",[a.task_id]);
+  const replacement=randomUUID();expect((await claimResearchTask(replacement)).task.id).toBe(a.task_id);
+  await expect(updateResearchTask(scope,{...base,action:'heartbeat'})).rejects.toThrow('LEASE_LOST');
+  const replay=await updateResearchTask(scope,{...base,lease_id:replacement,action:'begin_operation'});expect(replay.operation.result).toEqual({value:7});
+  await updateResearchTask(scope,{task_id:a.task_id,lease_id:replacement,action:'finish',state:'completed',result:{success:true}});
+  expect((await readResearchTask(scope,a.task_id)).state).toBe('completed');
+  await expect(owner.query("UPDATE research_task SET inputs='{}' WHERE id=$1",[a.task_id])).rejects.toThrow('immutable');
+  const unscoped=await database.query('SELECT * FROM research_task');expect(unscoped.rowCount).toBe(0);
+ });
+});

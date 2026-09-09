@@ -128,6 +128,17 @@ services:
       timeout: 10s
       retries: 10
 
+  research-worker:
+    <<: *app
+    env_file: ${COMMERCE_CONFIG_DIR}/public-mcp.env
+    environment: { COMMERCE_RESEARCH_WORKER: "1" }
+    volumes: ["${COMMERCE_CONFIG_DIR}/ca.crt:/run/tls/ca.crt:ro"]
+    networks: [backend]
+    mem_limit: 768m
+    cpus: 1.0
+    stop_grace_period: 30s
+    depends_on: [control, internal-tls]
+
   edge:
     image: ${COMMERCE_PROXY_IMAGE:?Set a release proxy image}
     restart: unless-stopped

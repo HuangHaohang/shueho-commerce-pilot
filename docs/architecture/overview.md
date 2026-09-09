@@ -189,3 +189,5 @@ docs/                     architecture, development, deployment contracts
 ```
 
 New commerce integrations belong in explicit application tools or managed MCP servers. They do not belong in shell commands, browser fetches to vendor APIs, arbitrary filesystem access, or generated Hooks.
+
+Research task contract 7 replaces the model-facing planning pair with immediate task submission and result readback. A separate deterministic worker handles durable steps and recovery, while Codex Harness retains all agent-runtime responsibilities.

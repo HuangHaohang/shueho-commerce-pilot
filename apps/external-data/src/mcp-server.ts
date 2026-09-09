@@ -1,3 +1,6 @@
+import {withScope as taskWithScope} from "./database.js";
+import {loadCompactResearchResult as loadTaskResearchResult} from "./warehouse.js";
+import {submitResearchTask,readResearchTask,claimResearchTask,updateResearchTask} from "./research-tasks.js";
 import { searchDataCapabilities, readDataCapability, DataCapabilityError } from "./data-capabilities.js";
 import { createDataRequestPlan, claimDataRequestPlan, cancelDataRequestPlan } from "./data-request-plans.js";
 import { executeDataRequestPlan, readDataRequestResult } from "./data-request-execution.js";
@@ -115,6 +118,16 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
   const dataAuthorizationSchema = {
     allowed_catalog_platforms: z.array(z.string()).optional(),allowed_endpoint_ids: z.array(z.string()).optional(),
   };
+  const taskScope=z.object({tenant_id:z.string().uuid(),workspace_id:z.string().uuid(),user_id:z.string().min(1)});
+  const taskOwner=(s:z.infer<typeof taskScope>)=>({tenantId:s.tenant_id,workspaceId:s.workspace_id,userId:s.user_id});
+  server.registerTool('submit_research_task',{inputSchema:{kind:z.enum(['marketplace','social','data']),source:z.enum(['external_mcp','codex_harness']),idempotency_key:z.string().uuid(),inputs:z.record(z.unknown()),principal:z.record(z.unknown()),_commerce_context:taskScope}},async a=>toolSuccess(await submitResearchTask(taskOwner(a._commerce_context),a as JsonObject)));
+  server.registerTool('read_research_task',{inputSchema:{task_id:z.string().uuid(),_commerce_context:taskScope}},async a=>toolSuccess(await readResearchTask(taskOwner(a._commerce_context),a.task_id)));
+  server.registerTool('recover_research_call',{inputSchema:{source_call_id:z.string().min(8).max(160),_commerce_context:taskScope}},async a=>{
+    const owner=taskOwner(a._commerce_context);const row=await taskWithScope(owner,async c=>(await c.query('SELECT id,status FROM research_request WHERE source_call_id=$1 AND user_id=$2',[a.source_call_id,owner.userId])).rows[0]);
+    return toolSuccess({success:true,found:!!row,terminal:row && ['completed','failed','unknown'].includes(row.status),result:row?await loadTaskResearchResult(owner,row.id):null});
+  });
+  server.registerTool('claim_research_task',{inputSchema:{lease_id:z.string().uuid()}},async a=>toolSuccess(await claimResearchTask(a.lease_id)));
+  server.registerTool('update_research_task',{inputSchema:{task_id:z.string().uuid(),lease_id:z.string().uuid(),action:z.enum(['heartbeat','finish','retry','begin_operation','complete_operation']),state:z.enum(['completed','partial','failed','reconciliation_required']).optional(),operation_key:z.string().max(200).optional(),input_hash:z.string().optional(),operation_name:z.string().optional(),result:z.unknown().optional(),_commerce_context:taskScope}},async a=>toolSuccess(await updateResearchTask(taskOwner(a._commerce_context),a as JsonObject)));
   const authorizationFor = (args: { allowed_catalog_platforms?: string[]; allowed_endpoint_ids?: string[] }) => ({
     allowedCatalogPlatforms: args.allowed_catalog_platforms,allowedEndpointIds: args.allowed_endpoint_ids,
   });

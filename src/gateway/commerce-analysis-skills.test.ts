@@ -59,8 +59,8 @@ test("new-product development stays evidence-backed and stops before a launch or
   assert.match(skill, /commerce_data\.search_business_data/);
   assert.match(skill, /commerce_data\.list_marketplace_research_platforms/);
   assert.match(skill, /commerce_data\.get_marketplace_options/);
-  assert.match(skill, /commerce_data\.plan_marketplace_research/);
-  assert.match(skill, /commerce_data\.execute_marketplace_research/);
+  assert.match(skill, /commerce_data\.submit_marketplace_research/);
+  assert.match(skill, /commerce_data\.get_research_task/);
   assert.match(skill, /reviewEvidenceCount=0/);
   assert.match(skill, /Price evidence supports a market-position hypothesis/);
   assert.match(skill, /validation status is hypothesis only/);
@@ -102,7 +102,7 @@ test("product retrospective fails honest when company performance evidence is ab
   assert.match(skill, /do not output company-performance comparisons, ROI conclusions/);
   assert.match(skill, /core requested outcome depends only on unavailable company operating metrics/);
   assert.match(skill, /return responseType=answer immediately/);
-  assert.match(skill, /do not call plan_marketplace_research, execute_marketplace_research, or research_social_content/);
+  assert.match(skill, /do not call submit_marketplace_research, submit_data_request, or submit_social_research/);
   assert.match(skill, /Before any paid planning, use native request_user_input/);
   assert.match(skill, /only after explicit acceptance/);
   assert.match(skill, /every recommended action is not executed/);

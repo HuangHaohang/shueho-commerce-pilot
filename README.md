@@ -359,3 +359,5 @@ See [docs/config/custom-model-provider.md](./docs/config/custom-model-provider.m
 ## Deployment Runtime
 
 Deployment machines do not need to preinstall Codex. The app declares `@openai/codex` as a production dependency and resolves Codex App Server from the application dependency tree. Production requires `COMMERCE_RUNTIME_TENANT_ID`, tenant-dedicated `CODEX_HOME`, private event/authorization/admission callbacks, a least-privilege runtime database role, and a non-root container or equivalent isolation boundary. See [docs/deployment/runtime.md](./docs/deployment/runtime.md).
+
+Research contract 7 submits durable background tasks directly and returns task IDs; no user-facing free planning or separate execution step. A dedicated worker owns fenced checkpoints, provider admission and safe recovery. See [external data architecture](docs/architecture/external-data-service.md#durable-research-tasks-contract-7-supersedes-model-facing-plans).

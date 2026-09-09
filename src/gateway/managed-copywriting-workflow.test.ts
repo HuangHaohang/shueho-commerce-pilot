@@ -77,11 +77,11 @@ test("maps market research to Harness tools with one Harness-owned report schema
   assert.ok(receiptSchema.items.required.includes("reviewEvidenceCount"));
   assert.ok(receiptSchema.items.required.includes("evidenceKinds"));
   const skill = renderManagedWorkflowSkill("commerce-market-research");
-  assert.match(skill, /commerce_data\.research_social_content/);
+  assert.match(skill, /commerce_data\.submit_social_research/);
   assert.match(skill, /latest_content/);
   assert.match(skill, /interaction_ranked/);
-  assert.match(skill, /commerce_data\.plan_marketplace_research/);
-  assert.match(skill, /commerce_data\.execute_marketplace_research/);
+  assert.match(skill, /commerce_data\.submit_marketplace_research/);
+  assert.match(skill, /commerce_data\.get_research_task/);
   assert.match(skill, /scorecard with separate, evidence-linked dimensions/);
   assert.match(skill, /decisionGate is a review recommendation only/);
   assert.match(skill, /detail_sample_size=null/);
@@ -108,7 +108,7 @@ test("maps market research to Harness tools with one Harness-owned report schema
   assert.match(skill, /reviewEvidenceCount counts only accepted review evidence/);
   assert.match(skill, /Public Web Search is not a substitute for missing external review evidence/);
   assert.match(skill, /Never send product ids, revision ids, subject refs, snapshot hashes, internal SKU\/SPU, costs, inventory/);
-  assert.match(skill, /Never retry a completed, stale, expired or uncertain paid plan automatically/);
+  assert.match(skill, /Never retry a completed, stale, expired or uncertain supplier execution automatically/);
   assert.match(skill, /Use responseType=answer only when the user asks for a method explanation/);
   assert.match(skill, /Do not classify by sentence form/);
   assert.match(skill, /research request phrased as a question still returns responseType=report/);

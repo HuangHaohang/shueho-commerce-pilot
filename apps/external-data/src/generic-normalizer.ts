@@ -1,3 +1,4 @@
+import {normalizeSocialMetricFields} from "./social-metric-coverage.js";
 import { createHash } from "node:crypto";
 
 import { assessProductMetrics } from "./evidence-assessment.js";
@@ -117,7 +118,7 @@ function normalizeRecord(
   const canonicalUrl = validUrl(deepFirstString(rawData, URL_KEYS));
   const publishedAt = parseTime(deepFirstValue(rawData, TIME_KEYS));
   const metrics = {
-    ...extractMetrics(rawData),
+    ...normalizeSocialMetricFields(extractMetrics(rawData)),
     ...extractCommerceProductMetrics(rawData, endpoint),
   };
   const metricAssessment = assessProductMetrics(metrics, jsonPointer);

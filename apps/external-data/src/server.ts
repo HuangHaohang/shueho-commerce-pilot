@@ -62,7 +62,7 @@ const server = createServer(async (request, response) => {
       response.setHeader("WWW-Authenticate", 'Bearer realm="SHUEHO External Data"');
       return sendJson(response, 401, { error: "Authentication required." });
     }
-    const body = await readJsonBody(request, 1_048_576);
+    const body = await readJsonBody(request, 4_194_304);
     const mcpServer = createExternalDataMcpServer(pipeline);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,

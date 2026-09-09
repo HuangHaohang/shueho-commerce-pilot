@@ -233,7 +233,7 @@ test("renders application-owned specialist Skills with Harness and enterprise ev
   assert.match(retrospective, /do not claim.*ROI|Never.*ROI/is);
   assert.match(retrospective, /Immediately after reading the selected Product/);
   assert.match(retrospective, /return responseType=answer immediately/);
-  assert.match(retrospective, /do not call plan_marketplace_research, execute_marketplace_research, or research_social_content/);
+  assert.match(retrospective, /do not call submit_marketplace_research, submit_data_request, or submit_social_research/);
   assert.match(retrospective, /Before any paid planning, use native request_user_input/);
   assert.match(retrospective, /Proceed with marketplace planning only after explicit acceptance/);
 });
