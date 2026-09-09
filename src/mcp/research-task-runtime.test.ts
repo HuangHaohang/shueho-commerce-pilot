@@ -37,3 +37,8 @@ test('model contract removes the planning/execution pair and adds task submissio
  assert.deepEqual(spec.tools.map((t:any)=>t.name),['submit_marketplace_research','submit_data_request','submit_social_research','get_research_task']);
  assert(spec.tools[0].inputSchema.required.includes('idempotency_key'));
 });
+
+test('task instrumentation preserves synchronous client status methods',()=>{
+ const f=fixture();const client=taskAwareClient({readStatus:()=>({connected:true}),configured:true},f.journal,'upstream');
+ assert.deepEqual(client.readStatus(),{connected:true});assert.equal(client.configured,true);
+});

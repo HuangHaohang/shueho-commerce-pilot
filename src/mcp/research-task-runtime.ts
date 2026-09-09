@@ -15,6 +15,7 @@ const scope=(p:AuthenticatedMcpPrincipal)=>({tenant_id:p.tenantId,workspace_id:p
 export function taskAwareClient<T extends object>(target:T,journal:ExternalDataServiceMcpClient,group:string):T {
  const tracked=new Set(group==='control'?['quote','reserve','dispatch','settle','cancel']:['planDataRequest','claimDataRequestPlan','executeDataRequestPlan','planMarketplaceProductResearch','executeMarketplaceProductResearchPlan','resolveMarketplaceProductBindings','completeMarketplaceProductResearch','cancelMarketplaceProductResearch','callEndpoint']);
  return new Proxy(target,{get(object,name){const method=Reflect.get(object,name);if(typeof method!=='function')return method;
+  if(!tracked.has(String(name)))return method.bind(object);
   return async(...args:unknown[])=>{
    const run=current.getStore();if(!run || !tracked.has(String(name)))return method.apply(object,args);
    if(run.lost)throw new Error('TASK_LEASE_LOST');
