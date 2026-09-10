@@ -1,3 +1,5 @@
+import {ProviderNotDispatchedError,notDispatchedPayload} from "../integrations/provider-dispatch-stage.js";
+import {SettlementNotPersistedError} from '../integrations/settlement-delivery-error.js';
 import {taskCallId} from "./research-task-runtime.js";
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -60,16 +62,18 @@ export function registerDataCapabilityTools(server: McpServer, principal: Authen
       let result;
       try {result = await upstream.executeDataRequestPlan({plan_id:planId,_commerce_context:scope});}
       catch(error) {
-        await control.settle(principal,reservation.reservationId,{state:"unknown",upstreamCode:null,upstreamMessage:"Data execution response is uncertain.",resultBytes:null,responsePayload:null}).catch(()=>undefined);
+        if(error instanceof ProviderNotDispatchedError){const payload=notDispatchedPayload(error);await control.settle(principal,reservation.reservationId,{state:'business_failed',upstreamCode:null,upstreamMessage:error.message,resultBytes:null,responsePayload:payload});return {...success(payload),isError:true};}
+        await control.settle(principal,reservation.reservationId,{state:"unknown",upstreamCode:null,upstreamMessage:"Data execution response is uncertain.",resultBytes:null,responsePayload:null}).catch(error=>{if(error instanceof SettlementNotPersistedError)throw error;});
         return failure(Object.assign(new Error("数据请求结果不确定，请查询原计划编号并对账，禁止重新采集。"),{code:"DATA_RESULT_UNKNOWN",details:{research_request_id:planId}}));
       }
       const outcome = classifyExternalDataServiceOutcome(result.payload,result.isError);
       let settlementPending=false;
       try { await control.settle(principal,reservation.reservationId,{state:outcome.settlementState,upstreamCode:outcome.upstreamCode,
         upstreamMessage:typeof result.payload.message==="string" ? result.payload.message : null,resultBytes:result.resultBytes,responsePayload:result.payload}); }
-      catch {settlementPending=true;}
+      catch(error) {if(error instanceof SettlementNotPersistedError)throw error;settlementPending=true;}
       return success({...result.payload,plan_id:planId,...(settlementPending ? {billing_reconciliation_pending:true} : {})});
     } catch(error) {
+      if(error instanceof SettlementNotPersistedError)throw error;
       if (claimed && claimed.reused !== true) await upstream.cancelDataRequestPlan({plan_id:planId,_commerce_context:scope}).catch(()=>undefined);
       return failure(error);
     }

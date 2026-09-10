@@ -1,3 +1,5 @@
+import {SettlementNotPersistedError} from "../integrations/settlement-delivery-error.js";
+import {ProviderNotDispatchedError,notDispatchedPayload} from "../integrations/provider-dispatch-stage.js";
 import {withTaskPage} from "./research-task-runtime.js";
 import {createHash} from "node:crypto";
 import {taskCallId} from "./research-task-runtime.js";
@@ -405,13 +407,14 @@ async function executePublicMarketplaceResearchPlan(
         },
       });
     } catch (error) {
+      if(error instanceof ProviderNotDispatchedError){const payload=notDispatchedPayload(error);await control.settle(principal,reservation.reservationId,{state:'business_failed',upstreamCode:null,upstreamMessage:error.message,resultBytes:null,responsePayload:payload});return {...toolSuccess(payload),isError:true};}
       const normalized = error instanceof ExternalDataServiceMcpError
         ? error
         : new ExternalDataServiceMcpError("SHUEHO external-data workflow step failed.","CALL_FAILED",true);
       await control.settle(principal,reservation.reservationId, {
         state: "unknown",upstreamCode: null,upstreamMessage: normalized.message,
         resultBytes: null,responsePayload: null,
-      }).catch(() => undefined);
+      }).catch(error=>{if(error instanceof SettlementNotPersistedError)throw error;});
       return toolError("UPSTREAM_RESULT_UNKNOWN",normalized.message,
         { ...normalized.details, role: step.role,targetOrdinal: instance.targetOrdinal,
           plan_id: executable.planId, workflow_execution_id: executable.executionId,
@@ -507,6 +510,7 @@ async function executePublicResearch(
       },
     });
   } catch (error) {
+    if(error instanceof ProviderNotDispatchedError){const payload=notDispatchedPayload(error);await control.settle(principal,reservation.reservationId,{state:'business_failed',upstreamCode:null,upstreamMessage:error.message,resultBytes:null,responsePayload:payload});return {...toolSuccess(payload),isError:true};}
     const normalized = error instanceof ExternalDataServiceMcpError
       ? error
       : new ExternalDataServiceMcpError("SHUEHO external-data MCP call failed.", "CALL_FAILED", true);
@@ -519,7 +523,8 @@ async function executePublicResearch(
         resultBytes: null,
         responsePayload: null,
       });
-    } catch {
+    } catch(error) {
+      if(error instanceof SettlementNotPersistedError)throw error;
       reconciliationPending = true;
     }
     return toolError(

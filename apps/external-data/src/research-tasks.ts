@@ -30,7 +30,11 @@ export async function readResearchTask(scope:Scope,id:string){return withScope(s
  const operations=await c.query(`SELECT operation_name,state,count(*)::int AS count FROM research_task_operation WHERE task_id=$1 GROUP BY operation_name,state`,[id]);
  const partial=await c.query(`SELECT DISTINCT result#>>'{payload,research_request_id}' AS research_request_id FROM research_task_operation
   WHERE task_id=$1 AND state='completed' AND result#>>'{payload,research_request_id}' IS NOT NULL`,[id]);
- return {...taskReceipt(row),progress:operations.rows,partial_results:partial.rows};
+ const billing=(await c.query(`SELECT count(*)::int AS total,count(*) FILTER(WHERE state='completed')::int AS completed,
+ count(*) FILTER(WHERE state IN ('pending','running'))::int AS pending,count(*) FILTER(WHERE state='attention_required')::int AS attention_required
+ FROM research_settlement_outbox WHERE task_id=$1`,[id])).rows[0];
+ return {...taskReceipt(row),progress:operations.rows,partial_results:partial.rows,
+  settlement:{...billing,state:billing.attention_required?'attention_required':billing.pending?'pending':billing.total?'completed':'not_enqueued'}};
 });}
 export async function claimResearchTask(leaseId:string){const r=await database.query('SELECT * FROM claim_research_task($1)',[leaseId]);return {success:true,task:r.rows[0]??null};}
 export async function updateResearchTask(scope:Scope,input:JsonObject){return withScope(scope,async c=>{
@@ -69,7 +73,8 @@ export async function manageResearchTask(scope:Scope,input:JsonObject):Promise<R
   return taskReceipt((await c.query('SELECT * FROM research_task WHERE id=$1',[task.id])).rows[0]);
  });
 }
-export async function researchQueueHealth(){return (await database.query('SELECT research_queue_health() AS health')).rows[0].health;}
+export async function researchQueueHealth(){return {...(await database.query('SELECT research_queue_health() AS health')).rows[0].health,
+ ...(await database.query('SELECT research_settlement_health() AS health')).rows[0].health};}
 function taskReceipt(row:Record<string,any>){return {success:true,task_id:row.id,state:row.state,kind:row.kind,created_at:row.created_at,updated_at:row.updated_at,
  execution_version:row.execution_version,cancel_requested:!!row.cancel_requested_at,approval:row.approval??null,
  polling:{action:['queued','running'].includes(row.state)?'poll_same_task':'stop',retryAfterSeconds:['queued','running'].includes(row.state)?15:null},

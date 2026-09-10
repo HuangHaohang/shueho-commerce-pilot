@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
-import {taskAwareClient,withResearchTaskExecution} from './research-task-runtime.js';
+import {taskAwareClient,withResearchTaskExecution,withTaskPage,markTaskLeaseLost} from './research-task-runtime.js';
 import {taskToolContract} from '../integrations/research-task-contract.js';
 function fixture(){
  const ops=new Map<string,any>();let calls=0;
@@ -56,5 +56,14 @@ test('revoked admission prevents a new supplier dispatch',async()=>{
  const f=fixture();const task={...f.task,execution_version:2};const live={revalidate:async()=>{throw new Error('REVOKED');}};
  const control=taskAwareClient({reserve:async()=>({reservationId:'r'})},f.journal,'control',live);
  const provider=taskAwareClient(f.target,f.journal,'upstream',live);
- await assert.rejects(withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve();await provider.callEndpoint({});}),/REVOKED/);assert.equal(f.calls(),0);
+ await assert.rejects(withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve();await provider.callEndpoint({});}),/blocked before dispatch/);assert.equal(f.calls(),0);
+});
+
+test('page scopes share lease invalidation with the parent and subsequent pages',async()=>{
+ const f=fixture();const provider=taskAwareClient(f.target,f.journal,'upstream');
+ await withResearchTaskExecution(f.task,randomUUID(),async()=>{
+  await withTaskPage(1,async()=>{markTaskLeaseLost();});
+  await assert.rejects(withTaskPage(2,()=>provider.callEndpoint({})),/LEASE_LOST/);
+  await assert.rejects(provider.callEndpoint({}),/LEASE_LOST/);
+ });assert.equal(f.calls(),0);
 });

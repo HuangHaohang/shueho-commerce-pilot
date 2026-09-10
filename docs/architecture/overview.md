@@ -193,3 +193,5 @@ New commerce integrations belong in explicit application tools or managed MCP se
 Research task contract 7 replaces the model-facing planning pair with immediate task submission and result readback. A separate deterministic worker handles durable steps and recovery, while Codex Harness retains all agent-runtime responsibilities.
 
 Contract 8 adds native MCP task negotiation, owner-scoped task list/cancel, record-level result paging and backend page traversal. Immutable execution versions and idempotent lease claims support recovery; authorization is checked live before each fresh provider dispatch. Approval continuation uses Harness-owned tool requests plus application Commerce approval events, or negotiated MCP elicitation, without a second agent loop.
+
+Contract 9 separates research completion from durable settlement delivery, retains negotiated MCP transport sessions across HTTP requests, shares lease cancellation across pages and pages immutable record snapshots. Harness still owns conversations, reasoning, tool lifecycle and approval interaction; transport sessions and deterministic delivery workers do not take over those responsibilities.

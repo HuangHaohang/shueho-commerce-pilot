@@ -27,7 +27,7 @@ export function researchTaskStore(upstream:ExternalDataServiceMcpClient,control:
    await control.authorizeCatalog(p);return mcpTaskView(await enqueueTask(upstream,p,kinds[name]!,args));
   },
   async getTask(id){return mcpTaskView(await read(id));},
-  async getTaskResult(id){const task=await read(id);return mcpResult({...((task.result as Record<string,any>)??{}),task_id:id,state:task.state});},
+  async getTaskResult(id){const task=await read(id);return mcpResult({...((task.result as Record<string,any>)??{}),task_id:id,state:task.state,settlement:task.settlement});},
   async storeTaskResult(){throw new Error('TASK_RESULTS_ARE_WORKER_OWNED');},
   async updateTaskStatus(id,status){if(status!=='cancelled')throw new Error('TASK_STATUS_IS_WORKER_OWNED');await control.authorizeCatalog(p);const task=await read(id);if((task.approval as any)?.reservationId)await control.cancel(p,(task.approval as any).reservationId,'user_denied');await upstream.taskOperation('manage_research_task',{action:'cancel',task_id:id,_commerce_context:owner});},
   async listTasks(cursor){await control.authorizeCatalog(p);const result=(await upstream.taskOperation('manage_research_task',{action:'list',cursor,limit:20,_commerce_context:owner})).payload;return {tasks:(result.tasks as Record<string,any>[]).map(mcpTaskView),...(result.next_cursor?{nextCursor:String(result.next_cursor)}:{})};},

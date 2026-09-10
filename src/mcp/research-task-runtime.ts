@@ -3,13 +3,16 @@ import {createHash,randomUUID} from 'node:crypto';
 import type {ExternalDataServiceMcpClient} from '../integrations/external-data-service-mcp-client.js';
 import type {AuthenticatedMcpPrincipal} from '../integrations/external-data-control-client.js';
 import {researchTaskOutcome} from '../integrations/research-task-outcome.js';
+import {ProviderNotDispatchedError,notDispatchedPayload} from '../integrations/provider-dispatch-stage.js';
+import {SettlementNotPersistedError} from '../integrations/settlement-delivery-error.js';
 
 export type Task={id:string;kind:'marketplace'|'social'|'data';inputs:Record<string,unknown>;principal:AuthenticatedMcpPrincipal;attempts:number;execution_version?:number};
-type Run={task:Task;lease:string;sequence:number;recover:boolean;lost:boolean;reservationId?:string;page?:number};
+type Run={task:Task;lease:string;sequence:number;control:{recover:boolean;lost:boolean};reservationId?:string;page?:number};
 const current=new AsyncLocalStorage<Run>();
 export const taskCallId=()=>{const r=current.getStore();return r?r.page?`${r.task.id.replaceAll('-','')}_p${r.page}`:r.task.id:randomUUID();};
 export async function withTaskPage<T>(page:number,operation:()=>Promise<T>):Promise<T>{const r=current.getStore();return r?current.run({...r,page},operation):operation();}
-export const withResearchTaskExecution=<T>(task:Task,lease:string,execute:()=>Promise<T>)=>current.run({task,lease,sequence:0,recover:false,lost:false},execute);
+export const withResearchTaskExecution=<T>(task:Task,lease:string,execute:()=>Promise<T>)=>current.run({task,lease,sequence:0,control:{recover:false,lost:false}},execute);
+export const markTaskLeaseLost=()=>{const run=current.getStore();if(run)run.control.lost=true;};
 export const isTaskExecution=()=>!!current.getStore();
 const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex');
@@ -20,7 +23,12 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
   if(!tracked.has(String(name)))return method.bind(object);
   return async(...args:unknown[])=>{
    const run=current.getStore();if(!run || !tracked.has(String(name)))return method.apply(object,args);
-   if(run.lost && !(group==='control' && name==='settle'))throw new Error('TASK_LEASE_LOST');
+   if(group==='control' && name==='settle'){
+    try{await journal.taskOperation('enqueue_research_settlement',{task_id:run.task.id,reservation_id:String(args[1]),payload:args[2],_commerce_context:scope(run.task.principal)});}
+    catch{throw new SettlementNotPersistedError();}
+    return;
+   }
+   if(run.control.lost && !(group==='control' && name==='settle'))throw new Error('TASK_LEASE_LOST');
    const actor=run.task.principal as AuthenticatedMcpPrincipal & {taskThreadId?:string;taskTurnId?:string};
    if(actor.rootThreadId){
     if(group==='control' && ['quote','reserve'].includes(String(name)))args[1]={...(args[1] as object),source:'codex_harness',threadId:actor.taskThreadId,turnId:actor.taskTurnId};
@@ -37,13 +45,19 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
      const live=await control.revalidate(run.task.principal,op.result.reservationId);
      return {...op.result,requiresApproval:live.approvalState==='pending',approvalState:live.approvalState};
     }
+    if(op.result?.payload?.dispatch_phase==='not_dispatched')throw new ProviderNotDispatchedError(op.result.payload.error?.details?.reasonCode??'ADMISSION_REJECTED');
     return op.result;
    }
    if(group==='upstream' && ['callEndpoint','executeDataRequestPlan'].includes(String(name)) && begun.fresh){
-    if(control){
+    try{if(control){
      if(!run.reservationId)throw new Error('TASK_RESERVATION_MISSING');
      const live=await control.revalidate(run.task.principal,run.reservationId);
      if(live.state!=='dispatched' || !['approved','not_required'].includes(live.approvalState))throw new Error('TASK_ADMISSION_REVOKED');
+    }}catch(error){
+     const blocked=new ProviderNotDispatchedError(String((error as {code?:string}).code??'ADMISSION_REJECTED'));
+     const payload=notDispatchedPayload(blocked);
+     await journal.taskOperation('update_research_task',{...base,action:'complete_operation',result:{payload,isError:true,resultBytes:Buffer.byteLength(JSON.stringify(payload))}});
+     throw blocked;
     }
    }
    let result:unknown;
@@ -57,7 +71,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
      const recovered=await journal.getResearchResult({research_request_id:input.plan_id,_commerce_context:scope(run.task.principal)});
      if(['completed','failed','unknown'].includes(String(recovered.payload.processing_state)))result=recovered;
     }
-    if(result===undefined){run.recover=true;throw new Error('TASK_OPERATION_REQUIRES_RECONCILIATION');}
+    if(result===undefined){run.control.recover=true;throw new Error('TASK_OPERATION_REQUIRES_RECONCILIATION');}
    }else result=await method.apply(object,args);
    if(group==='control' && name==='reserve')run.reservationId=(result as any).reservationId;
    await journal.taskOperation('update_research_task',{...base,action:'complete_operation',result});
@@ -76,21 +90,21 @@ export function startResearchTaskWorker(upstream:ExternalDataServiceMcpClient,ex
   let task:Task|undefined,lease=randomUUID();
   try{
    const claimed=(await upstream.taskOperation('claim_research_task',{lease_id:lease})).payload;task=claimed.task as Task|undefined;if(!task)return;
-   const run:Run={task,lease,sequence:0,recover:false,lost:false};
+   const run:Run={task,lease,sequence:0,control:{recover:false,lost:false}};
    const base={task_id:task.id,lease_id:lease,_commerce_context:scope(task.principal)};
-   const heartbeat=setInterval(()=>{void upstream.taskOperation('update_research_task',{...base,action:'heartbeat'}).then(r=>{if(r.payload.cancel_requested)run.lost=true;}).catch(()=>{run.lost=true;});},20_000);
+   const heartbeat=setInterval(()=>{void upstream.taskOperation('update_research_task',{...base,action:'heartbeat'}).then(r=>{if(r.payload.cancel_requested)run.control.lost=true;}).catch(()=>{run.control.lost=true;});},20_000);
    let response:any;
    try{response=await current.run(run,()=>execute(task!));}
    catch(error){
     const code=(error as {code?:string;message?:string}).code??(error as Error).message;
-    if(code==='TASK_CANCELLED'){run.lost=true;}
-    else run.recover=true;
+    if(code==='TASK_CANCELLED'){run.control.lost=true;}
+    else run.control.recover=true;
    }
    finally{clearInterval(heartbeat);}
-   if(run.lost)return;
-   if(run.recover && task.attempts<5){await upstream.taskOperation('update_research_task',{...base,action:'retry'});return;}
+   if(run.control.lost)return;
+   if(run.control.recover && task.attempts<5){await upstream.taskOperation('update_research_task',{...base,action:'retry'});return;}
    const payload=response?.structuredContent ?? response?.payload ?? {success:false,error:{code:'TASK_RECONCILIATION_REQUIRED',message:'任务执行中断，保留原任务及调用记录待对账。'}};
-   const state=run.recover?'reconciliation_required':researchTaskOutcome(payload);
+   const state=run.control.recover?'reconciliation_required':researchTaskOutcome(payload);
    await upstream.taskOperation('update_research_task',{...base,action:'finish',state,result:payload,...(state==='waiting_approval'?{approval:payload.error?.details??{}}:{})});
   }catch{console.error(JSON.stringify({event:'research_task_worker_retry',task_id:task?.id??null}));}
   finally{active--;}

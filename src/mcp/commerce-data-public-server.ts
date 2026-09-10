@@ -1,4 +1,6 @@
 import {registerDurableTaskResult,researchTaskStore,mcpTaskView,mcpResult,mcpFailure,taskOutputSchema} from "./research-task-protocol.js";
+import {McpSessionPool} from './mcp-session-pool.js';
+import {startResearchSettlementWorker} from './research-settlement-worker.js';
 import {createResearchService} from "./research-service.js";
 import {enqueueTask,getTask,taskAwareClient,taskCallId,startResearchTaskWorker} from "./research-task-runtime.js";
 import { DATA_CAPABILITY_TOOL_SCHEMAS } from "../integrations/data-capability-contract.js";
@@ -53,7 +55,9 @@ upstream=taskAwareClient(taskStore,taskStore,"upstream",rawControl);
 if (upstream.configured && control.configured) await upstream.verify();
 
 const researchService=createResearchService(upstream,control);
+const sessions=new McpSessionPool();
 const stopTaskWorker=process.env.COMMERCE_RESEARCH_WORKER==='1'?startResearchTaskWorker(taskStore,task=>researchService.execute(task)):()=>{};
+const stopSettlementWorker=process.env.COMMERCE_RESEARCH_WORKER==='1'?startResearchSettlementWorker(taskStore,rawControl):()=>{};
 
 const httpServer = createServer(async (request, response) => {
   try {
@@ -71,7 +75,7 @@ const httpServer = createServer(async (request, response) => {
     if (request.method === "GET" && url.pathname === "/health") {
       const queue=await taskStore.taskOperation('research_queue_health',{}).then(r=>r.payload).catch(()=>null);
       const upstreamStatus = upstream.readStatus();
-      const workerReady=!!queue && (Number(queue.queued??0)===0 || queue.secondsSinceWorkerPoll!==null && Number(queue.secondsSinceWorkerPoll)<90);
+      const workerReady=!!queue && (Number(queue.queued??0)+Number(queue.settlementPending??0)===0 || queue.secondsSinceWorkerPoll!==null && Number(queue.secondsSinceWorkerPoll)<90);
       sendJson(response, upstreamStatus.connected && control.configured && workerReady ? 200 : 503, {
         ok: upstreamStatus.connected && control.configured && workerReady,
         workerReady,queue,
@@ -92,8 +96,8 @@ const httpServer = createServer(async (request, response) => {
       sendJson(response, 404, { error: "Not found." });
       return;
     }
-    if (request.method !== "POST") {
-      response.setHeader("Allow", "POST");
+    if (!['POST','GET','DELETE'].includes(request.method??'')) {
+      response.setHeader("Allow", "POST, GET, DELETE");
       sendJson(response, 405, jsonRpcError(-32000, "Method not allowed."));
       return;
     }
@@ -104,15 +108,9 @@ const httpServer = createServer(async (request, response) => {
       sendJson(response, 401, jsonRpcError(-32001, "Authentication required."));
       return;
     }
-    const parsedBody = await readJsonBody(request, 1_048_576);
-    const mcpServer = createCommerceDataMcpServer(principal,request.headers["mcp-protocol-version"]==='2025-11-25' || (parsedBody as any)?.params?.protocolVersion==='2025-11-25');
-    const transport = createPublicHttpTransport();
-    await mcpServer.connect(transport);
-    response.on("close", () => {
-      void transport.close().catch(() => undefined);
-      void mcpServer.close().catch(() => undefined);
-    });
-    await transport.handleRequest(request, response, parsedBody);
+    const parsedBody = request.method==='POST'?await readJsonBody(request, 1_048_576):undefined;
+    const owner=JSON.stringify([principal.tenantId,principal.workspaceId,principal.userId,principal.tokenId]);
+    await sessions.handle(request,response,parsedBody,owner,()=>createCommerceDataMcpServer(principal,(parsedBody as any)?.params?.protocolVersion==='2025-11-25'));
   } catch (error) {
     if (response.headersSent) return;
     sendJson(response, 500, jsonRpcError(-32603, safeMessage(error)));
@@ -150,7 +148,7 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal,native
         server.experimental.tasks.registerToolTask(nativeName,{...options,outputSchema:taskOutputSchema,inputSchema:{...options.inputSchema,idempotency_key:z.string().uuid(),...(task.kind==='data'?{pagination:z.object({max_pages:z.number().int().min(1).max(100)}).optional()}: {})},execution:{taskSupport:'required'}},{
           createTask:async(args:any)=>{await control.authorizeCatalog(principal);return {task:mcpTaskView(await enqueueTask(taskStore,principal,task.kind,args))};},
           getTask:async(_args:any,extra:any)=>mcpTaskView(await getTask(taskStore,principal,extra.taskId)),
-          getTaskResult:async(_args:any,extra:any)=>{const t=await getTask(taskStore,principal,extra.taskId);return mcpResult({...t.result as any,task_id:extra.taskId});},
+          getTaskResult:async(_args:any,extra:any)=>{const t=await getTask(taskStore,principal,extra.taskId);return mcpResult({...t.result as any,task_id:extra.taskId,settlement:t.settlement});},
         });
       }
 
@@ -175,7 +173,7 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal,native
   });
   register('list_research_tasks',{title:'列出研究任务',description:'找回自己的任务，无需重新提交。',inputSchema:{cursor:z.string().uuid().optional(),limit:z.number().int().min(1).max(50).default(20)},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);return mcpResult((await taskStore.taskOperation('manage_research_task',{...args,action:'list',_commerce_context:owner})).payload);});
   register('cancel_research_task',{title:'取消研究任务',description:'停止尚未发出的步骤；已发出的请求仍需保留结果与结算，不自动退款或重采。',inputSchema:{task_id:z.string().uuid()},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);const task=await getTask(taskStore,principal,args.task_id);if((task.approval as any)?.reservationId)await rawControl.cancel(principal,(task.approval as any).reservationId,'user_denied');return mcpResult((await taskStore.taskOperation('manage_research_task',{...args,action:'cancel',_commerce_context:owner})).payload);});
-  register('get_research_records',{title:'按记录读取研究结果',description:'分页读取完整评价/商品/内容记录，保留来源；不重新采集。',inputSchema:{task_id:z.string().uuid().optional(),research_request_id:z.string().uuid().optional(),offset:z.number().int().min(0).max(10000).default(0),limit:z.number().int().min(1).max(100).default(50)},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);return mcpResult((await taskStore.taskOperation('read_research_records',{...args,_commerce_context:owner})).payload);});
+  register('get_research_records',{title:'按记录读取研究结果',description:'分页读取完整评价/商品/内容记录，保留来源；不重新采集。',inputSchema:{snapshot_id:z.string().uuid().optional(),task_id:z.string().uuid().optional(),research_request_id:z.string().uuid().optional(),offset:z.number().int().min(0).max(10000).default(0),limit:z.number().int().min(1).max(100).default(50)},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);return mcpResult((await taskStore.taskOperation('read_research_records',{...args,_commerce_context:owner})).payload);});
   for(const d of researchService.definitions(principal))registerDefinition(d.name,d.config,d.handler);
   if(nativeTasks)registerDurableTaskResult(server,researchTaskStore(taskStore,rawControl,principal));
   return server;
@@ -321,6 +319,8 @@ async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   stopTaskWorker();
+  stopSettlementWorker();
+  await sessions.close();
   await upstream.close();
   httpServer.close(() => process.exit(0));
 }

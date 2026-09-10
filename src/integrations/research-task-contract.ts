@@ -11,7 +11,7 @@ export function taskToolContract(spec:any):any{
  tools.push(...[
  {name:'list_research_tasks',properties:{cursor:{type:'string',format:'uuid'},limit:{type:'integer',minimum:1,maximum:50}},required:[]},
  {name:'cancel_research_task',properties:{task_id:{type:'string',format:'uuid'}},required:['task_id']},
- {name:'get_research_records',properties:{task_id:{type:'string',format:'uuid'},research_request_id:{type:'string',format:'uuid'},offset:{type:'integer',minimum:0,maximum:10000},limit:{type:'integer',minimum:1,maximum:100}},required:[]},
+ {name:'get_research_records',properties:{snapshot_id:{type:'string',format:'uuid'},task_id:{type:'string',format:'uuid'},research_request_id:{type:'string',format:'uuid'},offset:{type:'integer',minimum:0,maximum:10000},limit:{type:'integer',minimum:1,maximum:100}},required:[]},
  ].map(t=>({type:'function',name:t.name,description:t.name==='cancel_research_task'?'Cancel future steps without refunding or replaying dispatched work.':'Read owned tasks or validated record-level data; never recollect.',deferLoading:false,inputSchema:{type:'object',additionalProperties:false,properties:t.properties,required:t.required}})));
  return {...spec,tools};
 }

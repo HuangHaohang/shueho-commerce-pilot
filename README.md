@@ -363,3 +363,5 @@ Deployment machines do not need to preinstall Codex. The app declares `@openai/c
 Research contract 7 submits durable background tasks directly and returns task IDs; no user-facing free planning or separate execution step. A dedicated worker owns fenced checkpoints, provider admission and safe recovery. See [external data architecture](docs/architecture/external-data-service.md#durable-research-tasks-contract-7-supersedes-model-facing-plans).
 
 Research contract 8 adds idempotent task claims, current authorization checks, persistent approval continuation, native MCP 2025-11-25 Tasks, task list/cancel and deduplicated record reads. Multi-page direct queries remain backend-owned; only the requested bounded scope is collected, with unknown outcomes preserved for reconciliation.
+
+Contract 9 retains MCP session capabilities for multi-request approval flows, persists settlement intents independently of task completion and uses immutable record snapshots for stable pagination. Known pre-dispatch denials remain distinct from uncertain provider outcomes; all page workers share the parent lease state.
