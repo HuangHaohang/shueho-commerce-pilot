@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';import {Pool} from 'pg';import {describe,it,expect,afterAll,beforeAll} from 'vitest';
 import {config} from './config.js';import {database} from './database.js';
-import {submitResearchTask,claimResearchTask,readResearchTask,updateResearchTask} from './research-tasks.js';
+import {submitResearchTask,claimResearchTask,readResearchTask,updateResearchTask,manageResearchTask} from './research-tasks.js';
 const ci=process.env.GITHUB_ACTIONS==='true'&&process.env.NODE_ENV==='test';
 const url=process.env.JUSTONEAPI_TEST_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_DATABASE_URL:undefined);
 const ownerUrl=process.env.JUSTONEAPI_TEST_MIGRATION_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_MIGRATION_DATABASE_URL:undefined);
@@ -14,6 +14,7 @@ describe.skipIf(!url||!ownerUrl)('durable research queue with PostgreSQL',()=>{
   await expect(submitResearchTask(scope,{...input,inputs:{keyword:'different'}})).rejects.toThrow('CONFLICT');
   await expect(readResearchTask({...scope,workspaceId:randomUUID()},a.task_id)).rejects.toThrow('NOT_FOUND');
   const lease=randomUUID();const c=await claimResearchTask(lease);expect(c.task.id).toBe(a.task_id);
+  expect((await claimResearchTask(lease)).task.id).toBe(a.task_id);
   expect((await claimResearchTask(randomUUID())).task).toBeNull();
   const base={task_id:a.task_id,lease_id:lease,operation_key:'1:call',operation_name:'call',input_hash:'a'};
   expect((await updateResearchTask(scope,{...base,action:'begin_operation'})).fresh).toBe(true);
@@ -26,5 +27,24 @@ describe.skipIf(!url||!ownerUrl)('durable research queue with PostgreSQL',()=>{
   expect((await readResearchTask(scope,a.task_id)).state).toBe('completed');
   await expect(owner.query("UPDATE research_task SET inputs='{}' WHERE id=$1",[a.task_id])).rejects.toThrow('immutable');
   const unscoped=await database.query('SELECT * FROM research_task');expect(unscoped.rowCount).toBe(0);
+ });
+ it('an empty claim replay never consumes a later task; cancellation fences further work',async()=>{
+  const emptyLease=randomUUID();expect((await claimResearchTask(emptyLease)).task).toBeNull();
+  const scope={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'fixture'};
+  const task=await submitResearchTask(scope,{source:'external_mcp',kind:'data',idempotency_key:randomUUID(),inputs:{},principal:scope});
+  expect((await claimResearchTask(emptyLease)).task).toBeNull();
+  const lease=randomUUID();expect((await claimResearchTask(lease)).task.id).toBe(task.task_id);
+  expect((await manageResearchTask(scope,{action:'cancel',task_id:task.task_id})).state).toBe('cancelled');
+  await expect(updateResearchTask(scope,{task_id:task.task_id,lease_id:lease,action:'begin_operation',operation_key:'no_dispatch',operation_name:'call',input_hash:'hash'})).rejects.toThrow('LEASE_LOST');
+ });
+ it('approval waits persist and resume the same immutable task',async()=>{
+  const scope={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'fixture'};
+  const t=await submitResearchTask(scope,{source:'external_mcp',kind:'data',idempotency_key:randomUUID(),inputs:{},principal:scope});
+  const lease=randomUUID();await claimResearchTask(lease);
+  await updateResearchTask(scope,{task_id:t.task_id,lease_id:lease,action:'finish',state:'waiting_approval',approval:{reservationId:randomUUID()},result:{success:false,error:{code:'APPROVAL_REQUIRED'}}});
+  expect((await readResearchTask(scope,t.task_id)).state).toBe('waiting_approval');
+  expect((await manageResearchTask(scope,{action:'resume',task_id:t.task_id})).state).toBe('queued');
+  const replacement=randomUUID();expect((await claimResearchTask(replacement)).task.id).toBe(t.task_id);
+  await updateResearchTask(scope,{task_id:t.task_id,lease_id:replacement,action:'finish',state:'completed',result:{success:true}});
  });
 });

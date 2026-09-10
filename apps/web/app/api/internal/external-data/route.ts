@@ -12,6 +12,7 @@ import {
   quoteExternalDataPlan,
   reserveExternalDataCall,
   settleExternalDataCall,
+  revalidateExternalDataCall,
 } from "@/lib/enterprise/external-data";
 
 const MAX_CONTROL_BODY_BYTES = 6 * 1024 * 1024 + 256 * 1024;
@@ -87,6 +88,7 @@ const settleSchema = scopeSchema.extend({
 });
 
 const bodySchema = z.discriminatedUnion("action", [
+  scopeSchema.extend({action:z.literal('revalidate'),reservationId:z.string().uuid()}),
   reserveSchema,
   catalogSchema,
   quoteSchema,
@@ -117,6 +119,7 @@ export async function POST(request: Request) {
     mcpAccessTokenId: parsed.data.mcpAccessTokenId,
   };
   try {
+    if(parsed.data.action==='revalidate')return NextResponse.json({verified:true,receipt:await revalidateExternalDataCall(scope,parsed.data.reservationId)});
     if (parsed.data.action === "catalog") {
       const authorization = await authorizeExternalDataCatalog(scope);
       return NextResponse.json({ authorized: true, authorization }, { headers: { "Cache-Control": "no-store" } });

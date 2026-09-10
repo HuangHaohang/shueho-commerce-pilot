@@ -74,6 +74,11 @@ export class ExternalDataControlClient {
     return Boolean(this.config.controlUrl && this.config.internalToken);
   }
 
+  async revalidate(principal:ExternalDataPrincipal,reservationId:string):Promise<Record<string,any>> {
+    const result=await this.post(this.requireControlUrl(),{...principal,action:'revalidate',reservationId});
+    return result.receipt as Record<string,any>;
+  }
+
   async reserve(
     principal: ExternalDataPrincipal,
     input: {

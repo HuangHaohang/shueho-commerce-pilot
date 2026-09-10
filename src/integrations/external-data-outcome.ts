@@ -5,7 +5,7 @@ export function classifyExternalDataServiceOutcome(
   upstreamCode: number | null;
   providerCompleted: boolean;
   businessUsable: boolean;
-  settlementState: "succeeded" | "business_failed";
+    settlementState: "succeeded" | "business_failed" | "unknown";
 } {
   const upstreamCode = typeof payload.code === "number" ? payload.code : null;
   const providerCompleted = payload.provider_completed === true;
@@ -14,6 +14,7 @@ export function classifyExternalDataServiceOutcome(
     upstreamCode,
     providerCompleted,
     businessUsable,
-    settlementState: providerCompleted ? "succeeded" : "business_failed",
+    settlementState: providerCompleted ? "succeeded" : payload.processing_state==='unknown' ||
+      ['DATA_EXECUTION_UNCERTAIN','DATA_RESULT_UNKNOWN','UPSTREAM_RESULT_UNKNOWN','RESULT_UNKNOWN'].includes(String((payload.error as {code?:string}|undefined)?.code ?? payload.code)) ? 'unknown' : 'business_failed',
   };
 }

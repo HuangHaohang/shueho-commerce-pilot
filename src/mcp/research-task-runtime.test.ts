@@ -34,11 +34,27 @@ test('unconfirmed dispatch checkpoint never replays the financial side effect',a
 });
 test('model contract removes the planning/execution pair and adds task submission/read',()=>{
  const spec=taskToolContract({tools:['plan_marketplace_research','execute_marketplace_research','plan_data_request','execute_data_request','research_social_content'].map(name=>({name,inputSchema:{properties:{},required:[]}}))});
- assert.deepEqual(spec.tools.map((t:any)=>t.name),['submit_marketplace_research','submit_data_request','submit_social_research','get_research_task']);
+ assert.deepEqual(spec.tools.map((t:any)=>t.name),['submit_marketplace_research','submit_data_request','submit_social_research','get_research_task','list_research_tasks','cancel_research_task','get_research_records']);
  assert(spec.tools[0].inputSchema.required.includes('idempotency_key'));
 });
 
 test('task instrumentation preserves synchronous client status methods',()=>{
  const f=fixture();const client=taskAwareClient({readStatus:()=>({connected:true}),configured:true},f.journal,'upstream');
  assert.deepEqual(client.readStatus(),{connected:true});assert.equal(client.configured,true);
+});
+
+test('v2 checkpoint identity is independent of unrelated call order and live checks run before dispatch',async()=>{
+ const f=fixture();let validations=0;const task={...f.task,execution_version:2};
+ const live={revalidate:async()=>{validations++;return {state:'dispatched',approvalState:'not_required'};}};
+ const control=taskAwareClient({reserve:async()=>({reservationId:'reservation',requiresApproval:false}),quote:async()=>({priced:true})},f.journal,'control',live);
+ const provider=taskAwareClient(f.target,f.journal,'upstream',live);
+ await withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve();await provider.callEndpoint({_commerce_context:{source_call_id:'stable'}});});
+ await withResearchTaskExecution(task,randomUUID(),async()=>{await control.quote();await control.reserve();await provider.callEndpoint({_commerce_context:{source_call_id:'stable'}});});
+ assert.equal(f.calls(),1);assert.equal(validations,1);
+});
+test('revoked admission prevents a new supplier dispatch',async()=>{
+ const f=fixture();const task={...f.task,execution_version:2};const live={revalidate:async()=>{throw new Error('REVOKED');}};
+ const control=taskAwareClient({reserve:async()=>({reservationId:'r'})},f.journal,'control',live);
+ const provider=taskAwareClient(f.target,f.journal,'upstream',live);
+ await assert.rejects(withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve();await provider.callEndpoint({});}),/REVOKED/);assert.equal(f.calls(),0);
 });

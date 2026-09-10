@@ -927,6 +927,41 @@ export async function dispatchExternalDataCall(
   });
 }
 
+/** Read-only live admission check. Historical dispatch receipts never grant current authority. */
+export async function revalidateExternalDataCall(scope: ExternalDataCallScope, reservationId: string) {
+  return withEnterpriseTenantDatabaseContext(scope, async client => {
+    if(scope.mcpAccessTokenId){
+      const token=await client.query(`SELECT 1 FROM commerce_mcp_access_token WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3
+        AND created_by_user_id=$4 AND status='active' AND (expires_at IS NULL OR expires_at>CURRENT_TIMESTAMP)
+        AND 'external_data.call'=ANY(scopes)`,[scope.mcpAccessTokenId,scope.tenantId,scope.workspaceId,scope.userId]);
+      if(!token.rowCount)throw new ExternalDataGovernanceError('MCP授权已失效。','MCP_TOKEN_REVOKED',403);
+    }
+    if (!(await hasEffectivePermission(client,scope,'external_data.call'))) {
+      throw new ExternalDataGovernanceError('外部数据权限已被撤销。','EXTERNAL_DATA_PERMISSION_REVOKED',403);
+    }
+    const row=(await client.query(`SELECT * FROM commerce_external_data_call WHERE id=$1 AND tenant_id=$2 AND workspace_id=$3 AND user_id=$4`,
+      [reservationId,scope.tenantId,scope.workspaceId,scope.userId])).rows[0];
+    if(!row)throw new ExternalDataGovernanceError('调用不存在。','EXTERNAL_DATA_CALL_NOT_FOUND',404);
+    const policy=await ensurePolicy(client,scope.tenantId,scope.workspaceId);
+    if(policy.status!=='enabled' || policy.allowed_endpoint_ids.length && !policy.allowed_endpoint_ids.includes(row.endpoint_id) ||
+      policy.allowed_platforms.length && !policy.allowed_platforms.includes(row.platform)) {
+      throw new ExternalDataGovernanceError('当前企业策略不允许此调用。','EXTERNAL_DATA_ENDPOINT_DENIED',403);
+    }
+    const rate=await readEffectiveRate(client,scope,row.endpoint_id);
+    if(!rate || rate.customer_unit_price_micros===null)throw new ExternalDataGovernanceError('当前接口定价不可用。','EXTERNAL_DATA_PRICING_UNAVAILABLE',409);
+    if(Number(rate.customer_unit_price_micros)>Number(row.billable_amount_micros) || rate.currency!==row.currency)throw new ExternalDataGovernanceError('当前价格与预留金额不一致。','EXTERNAL_DATA_PRICE_CHANGED',409);
+    if(row.approval_state==='not_required' && requiresExternalDataApproval({approvalMode:policy.approval_mode,perCallAutoApprovalMicros:policy.per_call_auto_approval_micros===null?null:Number(policy.per_call_auto_approval_micros),monthlySpendLimitMicros:policy.monthly_spend_limit_micros===null?null:Number(policy.monthly_spend_limit_micros)},'policy',Number(row.billable_amount_micros))) {
+      throw new ExternalDataGovernanceError('当前策略需要重新批准。','EXTERNAL_DATA_APPROVAL_CHANGED',403);
+    }
+    const usage=await readPeriodUsage(client,scope,policy);
+    if(usage.callsUsed>policy.monthly_call_limit || policy.monthly_spend_limit_micros!==null && usage.spendUsedMicros>Number(policy.monthly_spend_limit_micros)) {
+      throw new ExternalDataGovernanceError('当前预算已不足。','EXTERNAL_DATA_BUDGET_EXCEEDED',429);
+    }
+    return {state:row.state,approvalState:row.approval_state,endpointId:row.endpoint_id,
+      parameterHash:row.parameter_hash,sourceCallId:row.call_id,reservationId};
+  });
+}
+
 export async function settleExternalDataCall(
   scope: ExternalDataCallScope,
   reservationId: string,

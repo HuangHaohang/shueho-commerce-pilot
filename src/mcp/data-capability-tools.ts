@@ -54,9 +54,7 @@ export function registerDataCapabilityTools(server: McpServer, principal: Authen
       const reservation = await control.reserve(principal,{source:"external_mcp",callId:String(claimed.source_call_id),endpointId:String(claimed.endpoint_id),
         platform:String(claimed.platform),parameterHash:hashExternalDataParameters(params),parameterKeys:externalDataParameterKeys(params),requestedApprovalMode:"policy"});
       if (reservation.requiresApproval) {
-        await control.cancel(principal,reservation.reservationId,"approval_required");
-        await upstream.cancelDataRequestPlan({plan_id:planId,_commerce_context:scope});
-        return failure(Object.assign(new Error("当前策略要求人工审批，请通过 Commerce Pilot 工作台审批。"),{code:"APPROVAL_REQUIRED"}));
+        return failure(Object.assign(new Error("任务等待正式审批，批准后继续原任务。"),{code:"APPROVAL_REQUIRED",details:{reservationId:reservation.reservationId,currency:reservation.currency,billableAmountMicros:reservation.billableAmountMicros}}));
       }
       await control.dispatch(principal,reservation.reservationId,{endpoint_id:claimed.endpoint_id,params});
       let result;

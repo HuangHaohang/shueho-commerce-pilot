@@ -270,6 +270,7 @@ type MarketplaceWorkflowRuntimeStep = MarketplaceProductResearchStep & {
 };
 
 type PendingExternalDataApproval = {
+  researchTaskId?: string;
   requestId: string;
   scope: RuntimeScope;
   principal: ExternalDataPrincipal;
@@ -3843,6 +3844,7 @@ async function cancelPendingExternalDataApproval(
   approval: PendingExternalDataApproval,
   reason: "user_denied" | "approval_required" | "upstream_unavailable",
 ): Promise<void> {
+  if(approval.researchTaskId && reason==='upstream_unavailable')return;
   await externalDataControl
     .cancel(approval.principal, approval.reservation.reservationId, reason)
     .catch(() => undefined);
@@ -3856,6 +3858,7 @@ async function cancelPendingExternalDataApproval(
       },
     }).catch(() => undefined);
   }
+  if(approval.researchTaskId)await externalDataService.taskOperation('manage_research_task',{action:'cancel',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
 }
 
 function broadcastCommerceApprovalResolved(
@@ -4470,12 +4473,35 @@ async function handleCommerceDataHostToolRequest(
     ? event.params.arguments
     : {};
 
+  if(['list_research_tasks','cancel_research_task','get_research_records'].includes(tool)){
+    await externalDataControl.authorizeCatalog(principal);
+    const owner={tenant_id:principal.tenantId,workspace_id:principal.workspaceId,user_id:principal.userId,root_thread_id:principal.rootThreadId};
+    if(tool==='get_research_records'){
+      if(!!args.task_id===!!args.research_request_id || !isUuid(String(args.task_id??args.research_request_id)))throw new Error('Provide one valid task or research id');
+      respondWithCommerceDataResult(event.id,(await externalDataService.taskOperation('read_research_records',{...args,_commerce_context:owner})).payload);return;
+    }
+    if(tool==='cancel_research_task'){
+      if(typeof args.task_id!=='string'||!isUuid(args.task_id))throw new Error('Invalid task id');
+      const task=await externalDataService.taskOperation('read_research_task',{task_id:args.task_id,_commerce_context:owner});const approval=task.payload.approval as {reservationId?:string}|null;
+      if(approval?.reservationId)await externalDataControl.cancel(principal,approval.reservationId,'user_denied');
+    }
+    respondWithCommerceDataResult(event.id,(await externalDataService.taskOperation('manage_research_task',{...args,action:tool==='list_research_tasks'?'list':'cancel',_commerce_context:owner})).payload);return;
+  }
   if (['submit_marketplace_research','submit_social_research','submit_data_request','get_research_task'].includes(tool)) {
     await externalDataControl.authorizeCatalog(principal);
     const actor={...principal,tokenId:'',scopes:['external_data.catalog.read','external_data.call'] as Array<'external_data.catalog.read'|'external_data.call'>,taskThreadId:threadId,taskTurnId:turnId};
     if(tool==='get_research_task'){
       if(typeof args.task_id!=='string'||!isUuid(args.task_id))throw new Error('Invalid task id');
-      respondWithCommerceDataResult(event.id,await getTask(externalDataService,actor,args.task_id));return;
+      const task=await getTask(externalDataService,actor,args.task_id);
+      const approval=task.approval as Record<string,any>|null;
+      if(task.state==='waiting_approval' && approval?.reservationId){
+        const requestId=`task_approval_${args.task_id}`;
+        const pending:PendingRequestUserInput={id:event.id,requestId,threadId,turnId,itemId:callId,isBlocking:true,receivedAt:new Date().toISOString(),origin:'commerce_approval',action:'external_data.call',questions:[{id:'external_data_call',header:'研究任务审批',question:`批准此任务的下一次数据调用？费用 ${Number(approval.billableAmountMicros??0)/1000000} ${approval.currency??'CNY'}`,isOther:false,isSecret:false,options:[{label:'允许本次调用',description:'批准后后台继续同一任务'},{label:'拒绝',description:'停止尚未发出的步骤'}]}]};
+        pendingRequestUserInputs.set(requestId,pending);
+        pendingExternalDataApprovals.set(requestId,{requestId,researchTaskId:args.task_id,scope,principal,reservation:{reservationId:approval.reservationId,requiresApproval:true,approvalState:'pending',pricingStatus:'priced',currency:approval.currency??'CNY',vendorCostMicros:null,billableAmountMicros:approval.billableAmountMicros??null,monthlyCallLimit:0,callsUsed:0,monthlySpendLimitMicros:null,spendUsedMicros:0},endpointId:'',params:{},threadId,turnId,callId,requestText:'审批后台研究任务',businessTool:'execute_data_request',businessIntent:{},planCoverage:{},workflow:null,workflowStep:null});
+        broadcastEvent({type:'notification',method:COMMERCE_APPROVAL_REQUESTED_METHOD,params:serializePendingRequestUserInput(pending),at:pending.receivedAt});return;
+      }
+      respondWithCommerceDataResult(event.id,task);return;
     }
     if(typeof args.idempotency_key!=='string'||!isUuid(args.idempotency_key))throw new Error('Invalid task idempotency key');
     const requestText=turnResearchRequestTexts.get(turnId) ?? await readResearchRequestText(threadId,turnId);
@@ -5358,6 +5384,10 @@ async function resolveExternalDataApproval(
   const selection = answers.external_data_call?.answers[0];
   if (selection !== "允许本次调用") {
     await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "user_denied");
+    if(approval.researchTaskId){
+      const result=await externalDataService.taskOperation('manage_research_task',{action:'cancel',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
+      respondWithCommerceDataResult(pending.id,result.payload);return;
+    }
     if (typeof approval.businessIntent.data_plan_id === "string") {
       await externalDataService.cancelDataRequestPlan({plan_id:approval.businessIntent.data_plan_id,_commerce_context:{
         tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,
@@ -5413,6 +5443,10 @@ async function resolveExternalDataApproval(
     throw new Error("The Harness tool call ended before external-data approval was applied.");
   }
   await externalDataControl.approve(approval.principal, approval.reservation.reservationId);
+  if(approval.researchTaskId){
+    const result=await externalDataService.taskOperation('manage_research_task',{action:'resume',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
+    respondWithCommerceDataResult(pending.id,result.payload);return;
+  }
   if (approval.workflow && approval.workflowStep) {
     await executeMarketplaceWorkflowStep(
       pending.id,
