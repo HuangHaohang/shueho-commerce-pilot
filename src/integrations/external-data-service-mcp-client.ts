@@ -48,6 +48,9 @@ export class ExternalDataServiceMcpError extends Error {
   }
 }
 
+export class ExternalDataTaskRpcError extends Error {
+ constructor(readonly code:string){super('Durable task RPC did not return a successful receipt.');}
+}
 export class ExternalDataServiceMcpClient {
   private client: Client | null = null;
   private transport: StreamableHTTPClientTransport | null = null;
@@ -105,7 +108,14 @@ export class ExternalDataServiceMcpClient {
     return this.callCatalog("get_marketplace_options", args);
   }
 
-  taskOperation(name: "submit_research_task"|"read_research_task"|"claim_research_task"|"update_research_task"|"recover_research_call"|"manage_research_task"|"research_queue_health"|"read_research_records"|"enqueue_research_settlement"|"claim_research_settlement"|"finish_research_settlement",args:Record<string,unknown>):Promise<ExternalDataServiceToolResult>{return this.callCatalog(name,args);}
+  async taskOperation(name: "submit_research_task"|"read_research_task"|"claim_research_task"|"update_research_task"|"recover_research_call"|"manage_research_task"|"research_queue_health"|"read_research_records"|"enqueue_research_settlement"|"claim_research_settlement"|"finish_research_settlement",args:Record<string,unknown>):Promise<ExternalDataServiceToolResult>{
+    const result=await this.callCatalog(name,args);
+    if(result.isError||result.payload.success!==true){
+      const code=(result.payload.error as any)?.code??result.payload.code;
+      throw new ExternalDataTaskRpcError(typeof code==='string'&&/^[A-Z0-9_]{1,100}$/.test(code)?code:'TASK_RPC_FAILED');
+    }
+    return result;
+  }
   searchDataCapabilities(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("search_data_capabilities",args); }
   getDataCapability(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("get_data_capability",args); }
   planDataRequest(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("plan_data_request",args); }

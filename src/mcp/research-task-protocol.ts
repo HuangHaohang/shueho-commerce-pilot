@@ -10,8 +10,14 @@ import type {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 export const taskOutputSchema=z.object({success:z.boolean(),task_id:z.string().uuid().optional(),state:z.string().optional(),
  error:z.object({code:z.string(),message:z.string(),details:z.record(z.unknown()).optional()}).optional()}).passthrough();
 export function mcpTaskView(value:Record<string,any>):McpTask {
- const statuses:Record<string,McpTask['status']>={queued:'working',running:'working',waiting_approval:'input_required',completed:'completed',partial:'completed',failed:'failed',reconciliation_required:'failed',cancelled:'cancelled'};
+ const statuses:Record<string,McpTask['status']>={queued:'working',running:'working',waiting_approval:'input_required',completed:'completed',partial:'failed',failed:'failed',reconciliation_required:'failed',cancelled:'cancelled'};
  return {taskId:value.task_id,status:statuses[value.state]??'failed',statusMessage:value.state,createdAt:String(value.created_at),lastUpdatedAt:String(value.updated_at),ttl:null,pollInterval:15000};
+}
+export function taskResultPayload(task:Record<string,any>){
+ const failed=['partial','failed','reconciliation_required','cancelled'].includes(task.state);
+ const result={...task.result,task_id:task.task_id,state:task.state,settlement:task.settlement};
+ if(failed){result.success=false;if(task.state==='cancelled')result.error={code:'TASK_CANCELLED',message:'任务已取消，已完成的结果与结算记录仍保留。'};}
+ return result;
 }
 export function mcpResult(payload:Record<string,any>){return {isError:payload.success===false,structuredContent:payload,content:[{type:'text' as const,text:JSON.stringify(payload)}]};}
 export function mcpFailure(error:unknown){const e=error as {code?:string;message?:string};return mcpResult({success:false,error:{code:e.code??'RESEARCH_REQUEST_FAILED',message:e.message??'研究请求未完成。'}});}
@@ -27,9 +33,9 @@ export function researchTaskStore(upstream:ExternalDataServiceMcpClient,control:
    await control.authorizeCatalog(p);return mcpTaskView(await enqueueTask(upstream,p,kinds[name]!,args));
   },
   async getTask(id){return mcpTaskView(await read(id));},
-  async getTaskResult(id){const task=await read(id);return mcpResult({...((task.result as Record<string,any>)??{}),task_id:id,state:task.state,settlement:task.settlement});},
+  async getTaskResult(id){const task=await read(id);return mcpResult(taskResultPayload(task));},
   async storeTaskResult(){throw new Error('TASK_RESULTS_ARE_WORKER_OWNED');},
-  async updateTaskStatus(id,status){if(status!=='cancelled')throw new Error('TASK_STATUS_IS_WORKER_OWNED');await control.authorizeCatalog(p);const task=await read(id);if((task.approval as any)?.reservationId)await control.cancel(p,(task.approval as any).reservationId,'user_denied');await upstream.taskOperation('manage_research_task',{action:'cancel',task_id:id,_commerce_context:owner});},
+  async updateTaskStatus(id,status){if(status!=='cancelled')throw new Error('TASK_STATUS_IS_WORKER_OWNED');await control.authorizeCatalog(p);await read(id);await upstream.taskOperation('manage_research_task',{action:'cancel',task_id:id,_commerce_context:owner});},
   async listTasks(cursor){await control.authorizeCatalog(p);const result=(await upstream.taskOperation('manage_research_task',{action:'list',cursor,limit:20,_commerce_context:owner})).payload;return {tasks:(result.tasks as Record<string,any>[]).map(mcpTaskView),...(result.next_cursor?{nextCursor:String(result.next_cursor)}:{})};},
  };
 }

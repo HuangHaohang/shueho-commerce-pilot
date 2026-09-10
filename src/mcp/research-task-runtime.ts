@@ -1,9 +1,10 @@
+import {ResearchRecoveryRequiredError} from '../integrations/research-recovery-error.js';
 import {hashExternalDataParameters} from '../integrations/external-data-control-client.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash,randomUUID} from 'node:crypto';
 import type {ExternalDataServiceMcpClient} from '../integrations/external-data-service-mcp-client.js';
 import type {AuthenticatedMcpPrincipal} from '../integrations/external-data-control-client.js';
-import {researchTaskOutcome} from '../integrations/research-task-outcome.js';
+import {researchTaskOutcome,researchTaskNeedsRecovery} from '../integrations/research-task-outcome.js';
 import {ProviderNotDispatchedError,notDispatchedPayload} from '../integrations/provider-dispatch-stage.js';
 import {SettlementNotPersistedError} from '../integrations/settlement-delivery-error.js';
 import {IdleBackoff} from './idle-backoff.js';
@@ -30,7 +31,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
     catch{throw new SettlementNotPersistedError();}
     return;
    }
-   if(run.control.lost && !(group==='control' && name==='settle'))throw new Error('TASK_LEASE_LOST');
+   if(run.control.lost && !(group==='control' && name==='settle'))throw new ResearchRecoveryRequiredError('TASK_LEASE_LOST');
    const actor=run.task.principal as AuthenticatedMcpPrincipal & {taskThreadId?:string;taskTurnId?:string};
    if(actor.rootThreadId){
     if(group==='control' && ['quote','reserve'].includes(String(name)))args[1]={...(args[1] as object),source:'codex_harness',threadId:actor.taskThreadId,turnId:actor.taskTurnId};
@@ -38,7 +39,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
    }
    const operationKey=(run.task.execution_version??1)<2?`${++run.sequence}:${group}.${String(name)}`:`v2:${group}.${String(name)}:${hash(args).slice(0,32)}`;
    const base={task_id:run.task.id,lease_id:run.lease,_commerce_context:scope(run.task.principal),operation_key:operationKey,operation_name:`${group}.${String(name)}`,input_hash:hash(args),...(group==='control'&&name==='reserve'?{operation_context:{source:(args[1] as any).source,callId:(args[1] as any).callId}}:{})};
-   const begun=(await journal.taskOperation('update_research_task',{...base,action:'begin_operation'})).payload;
+   const begun=(await checkpoint(journal,{...base,action:'begin_operation'})).payload;
    const op=begun.operation as {state:string;result:any};
    if(group==='control' && name==='reserve')run.reservationCallId=(args[1] as any).callId;
    if(group==='control' && name==='reserve' && op.state==='completed')run.reservationId=op.result.reservationId;
@@ -59,7 +60,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
     }}catch(error){
      const blocked=new ProviderNotDispatchedError(String((error as {code?:string}).code??'ADMISSION_REJECTED'));
      const payload=notDispatchedPayload(blocked);
-     await journal.taskOperation('update_research_task',{...base,action:'complete_operation',result:{payload,isError:true,resultBytes:Buffer.byteLength(JSON.stringify(payload))}});
+     await checkpoint(journal,{...base,action:'complete_operation',result:{payload,isError:true,resultBytes:Buffer.byteLength(JSON.stringify(payload))}});
      throw blocked;
     }
    }
@@ -68,28 +69,37 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
     // An ambiguous side effect is never sent again. Recover the original source result only.
     const input=args[0] as Record<string,any>;
     if(group==='control' && name==='dispatch' && control){
-     const live=await control.revalidate(run.task.principal,String(args[1]));
+     const live=await recoverOperation(()=>control.revalidate(run.task.principal,String(args[1])));
      const payload=args[2] as Record<string,unknown>;
      if(live.reservationId!==args[1] || !run.reservationCallId || live.sourceCallId!==run.reservationCallId ||
        live.endpointId!==payload.endpoint_id || live.parameterHash!==hashExternalDataParameters(payload.params))throw new Error('TASK_DISPATCH_RECEIPT_MISMATCH');
-     if(run.control.lost)throw new Error('TASK_LEASE_LOST');
+     if(run.control.lost)throw new ResearchRecoveryRequiredError('TASK_LEASE_LOST');
      if(live.state==='dispatched')result=null;
-     else if(live.state==='reserved'){await method.apply(object,args);result=null;}
+     else if(live.state==='reserved'){await recoverOperation(()=>method.apply(object,args));result=null;}
     }else if(name==='callEndpoint'){
-     const recovered=(await journal.taskOperation('recover_research_call',{source_call_id:input._commerce_context.source_call_id,_commerce_context:scope(run.task.principal)})).payload;
+     const recovered=(await recoverOperation(()=>journal.taskOperation('recover_research_call',{source_call_id:input._commerce_context.source_call_id,_commerce_context:scope(run.task.principal)}))).payload;
      if(recovered.terminal)result={payload:recovered.result,isError:false,resultBytes:Buffer.byteLength(JSON.stringify(recovered.result))};
     }else if(name==='executeDataRequestPlan'){
-     const recovered=await journal.getResearchResult({research_request_id:input.plan_id,_commerce_context:scope(run.task.principal)});
+     const recovered=await recoverOperation(()=>journal.getResearchResult({research_request_id:input.plan_id,_commerce_context:scope(run.task.principal)}));
      if(['completed','failed','unknown'].includes(String(recovered.payload.processing_state)))result=recovered;
     }
-    if(result===undefined){run.control.recover=true;throw new Error('TASK_OPERATION_REQUIRES_RECONCILIATION');}
-   }else result=await method.apply(object,args);
+    if(result===undefined){run.control.recover=true;throw new ResearchRecoveryRequiredError();}
+   }else {
+    try{result=await method.apply(object,args);}catch(error){
+     const e=error as {code?:string;status?:number};
+     const provider=group==='upstream'&&['callEndpoint','executeDataRequestPlan'].includes(String(name));
+     if(!provider && (!e.code || e.code==='CALL_FAILED'||e.code==='CONTROL_UNAVAILABLE'||(e.status??0)>=500))throw new ResearchRecoveryRequiredError();
+     throw error;
+    }
+   }
    if(group==='control' && name==='reserve')run.reservationId=(result as any).reservationId;
-   await journal.taskOperation('update_research_task',{...base,action:'complete_operation',result});
+   await checkpoint(journal,{...base,action:'complete_operation',result});
    return result;
   };
  }});
 }
+async function recoverOperation<T>(read:()=>Promise<T>){try{return await read();}catch(error){const e=error as {code?:string;status?:number};if(!e.code||e.code==='CALL_FAILED'||(e.status??0)>=500)throw new ResearchRecoveryRequiredError();throw error;}}
+async function checkpoint(journal:ExternalDataServiceMcpClient,args:Record<string,unknown>){try{return await journal.taskOperation('update_research_task',args);}catch{throw new ResearchRecoveryRequiredError();}}
 export async function enqueueTask(upstream:ExternalDataServiceMcpClient,p:AuthenticatedMcpPrincipal,kind:Task['kind'],inputs:Record<string,unknown>){
  return (await upstream.taskOperation('submit_research_task',{kind,source:p.rootThreadId?'codex_harness':'external_mcp',idempotency_key:inputs.idempotency_key,inputs,principal:p,_commerce_context:scope(p)})).payload;
 }
@@ -114,11 +124,12 @@ export function startResearchTaskWorker(upstream:ExternalDataServiceMcpClient,ex
    }
    finally{clearInterval(heartbeat);}
    if(run.control.lost)return;
+   if(researchTaskNeedsRecovery(response?.structuredContent??response?.payload??{}))run.control.recover=true;
    if(run.control.recover && task.attempts<5){await upstream.taskOperation('update_research_task',{...base,action:'retry'});return;}
    const payload=response?.structuredContent ?? response?.payload ?? {success:false,error:{code:'TASK_RECONCILIATION_REQUIRED',message:'任务执行中断，保留原任务及调用记录待对账。'}};
    const state=run.control.recover?'reconciliation_required':researchTaskOutcome(payload);
    await upstream.taskOperation('update_research_task',{...base,action:'finish',state,result:payload,...(state==='waiting_approval'?{approval:payload.error?.details??{}}:{})});
-  }catch{console.error(JSON.stringify({event:'research_task_worker_retry',task_id:task?.id??null}));}
+  }catch{idle.observed(false);console.error(JSON.stringify({event:'research_task_worker_retry',task_id:task?.id??null}));}
   finally{active--;}
  };
  const timer=setInterval(()=>void tick(),1000);

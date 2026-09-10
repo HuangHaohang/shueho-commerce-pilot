@@ -1,3 +1,4 @@
+import {decodeTaskCursor,encodeTaskCursor} from './task-cursor.js';
 import { database,withScope } from './database.js';
 import { sha256Json } from './canonical.js';
 import type { JsonObject } from './types.js';
@@ -58,9 +59,14 @@ export async function updateResearchTask(scope:Scope,input:JsonObject){return wi
 });}
 export async function manageResearchTask(scope:Scope,input:JsonObject):Promise<Record<string,any>>{
  if(input.action==='list')return withScope(scope,async c=>{
-  const rows=await c.query(`SELECT t.*,COALESCE(f.state,t.state) AS state FROM research_task t LEFT JOIN research_task_readback_correction f ON f.task_id=t.id WHERE user_id=$1 AND ($2::uuid IS NULL OR t.id<$2) AND ($3::text IS NULL OR principal->>'rootThreadId'=$3) ORDER BY t.id DESC LIMIT $4`,[scope.userId,input.cursor??null,scope.rootThreadId??null,Number(input.limit??20)+1]);
-  const more=rows.rows.length>Number(input.limit??20);const page=rows.rows.slice(0,Number(input.limit??20));
-  return {success:true,tasks:page.map(r=>({...taskReceipt(r),result:undefined})),next_cursor:more?page.at(-1)?.id:null};
+  const cursor=decodeTaskCursor(input.cursor),limit=Number(input.limit??20),legacy=cursor?.v===1;
+  const rows=await c.query(`SELECT t.*,COALESCE(f.state,t.state) AS state,to_char(t.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
+   FROM research_task t LEFT JOIN research_task_readback_correction f ON f.task_id=t.id WHERE user_id=$1
+   AND ($2::uuid IS NULL OR ${legacy?'t.id<$2':'(t.created_at,t.id)<($5::timestamptz,$2::uuid)'})
+   AND ($3::text IS NULL OR principal->>'rootThreadId'=$3)
+   ORDER BY ${legacy?'t.id DESC':'t.created_at DESC,t.id DESC'} LIMIT $4`,[scope.userId,cursor?.id??null,scope.rootThreadId??null,limit+1,...(legacy?[]:[cursor?.v===2?cursor.created_at:null])]);
+  const more=rows.rows.length>limit;const page=rows.rows.slice(0,limit),last=page.at(-1);
+  return {success:true,tasks:page.map(r=>({...taskReceipt(r),result:undefined})),next_cursor:more&&last?(legacy?last.id:encodeTaskCursor(last.id,last.cursor_created_at)):null};
  });
  await readResearchTask(scope,String(input.task_id));
  return withScope(scope,async c=>{

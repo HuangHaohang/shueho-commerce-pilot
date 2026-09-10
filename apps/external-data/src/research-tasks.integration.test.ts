@@ -50,4 +50,17 @@ describe.skipIf(!url||!ownerUrl)('durable research queue with PostgreSQL',()=>{
   const replacement=randomUUID();expect((await claimResearchTask(replacement)).task.id).toBe(t.task_id);
   await updateResearchTask(scope,{task_id:t.task_id,lease_id:replacement,action:'finish',state:'completed',result:{success:true}});
  });
+ it('lists newest tasks with microsecond-safe cursors and retains legacy UUID pagination',async()=>{
+  const scope={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'listing'};
+  const suffix=randomUUID().slice(8);const ids=['00000000'+suffix,'00000001'+suffix,'ffffffff'+suffix];
+  for(let n=0;n<ids.length;n++)await owner.query(`INSERT INTO research_task(id,tenant_id,workspace_id,user_id,source,idempotency_key,input_hash,kind,inputs,principal,state,created_at)
+   VALUES($1,$2,$3,$4,'external_mcp',$5,'fixture','data','{}',$6::jsonb,'completed',$7::timestamptz)`,[ids[n],scope.tenantId,scope.workspaceId,scope.userId,randomUUID(),JSON.stringify(scope),`2026-09-10T00:00:00.00000${3-n}Z`]);
+  const first=await manageResearchTask(scope,{action:'list',limit:1});expect(first.tasks[0].task_id).toBe(ids[0]);
+  const second=await manageResearchTask(scope,{action:'list',limit:1,cursor:first.next_cursor});expect(second.tasks[0].task_id).toBe(ids[1]);
+  const third=await manageResearchTask(scope,{action:'list',limit:1,cursor:second.next_cursor});expect(third.tasks[0].task_id).toBe(ids[2]);expect(third.next_cursor).toBeNull();
+  expect((await manageResearchTask({...scope,workspaceId:randomUUID()},{action:'list',cursor:first.next_cursor})).tasks).toHaveLength(0);
+  const legacy=await manageResearchTask(scope,{action:'list',cursor:ids[2],limit:1});expect(legacy.tasks[0].task_id).toBe(ids[1]);expect(legacy.next_cursor).toBe(ids[1]);
+  await expect(manageResearchTask(scope,{action:'list',cursor:'bad'})).rejects.toThrow('INVALID_TASK_CURSOR');
+ });
+
 });

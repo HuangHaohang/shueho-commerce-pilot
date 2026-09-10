@@ -27,3 +27,30 @@ test('known pre-dispatch rejection is not an unknown charge; an undurable settle
  upstream.executeDataRequestPlan=async()=>({payload:{success:true,provider_completed:true,processing_state:'completed'},isError:false,resultBytes:10});
  control.settle=async()=>{throw new SettlementNotPersistedError();};await assert.rejects(createResearchService(upstream,control).execute(task),SettlementNotPersistedError);
 });
+
+test('real research entrypoint resumes financial and journal reply loss without cancelling or recollecting',async()=>{
+ const {taskAwareClient,withResearchTaskExecution}=await import('./research-task-runtime.js');
+ const {ResearchRecoveryRequiredError}=await import('../integrations/research-recovery-error.js');
+ const {hashExternalDataParameters}=await import('../integrations/external-data-control-client.js');
+ const principal:any={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'fixture',tokenId:'fixture',scopes:['external_data.call']};
+ const task:any={id:randomUUID(),kind:'data',principal,attempts:1,execution_version:2,inputs:{capability_id:'cap_'+'a'.repeat(24),inputs:{q:'fixture'},idempotency_key:randomUUID(),research_request:'fixture'}};
+ const planId=randomUUID(),reservationId=randomUUID(),params={q:'fixture'};let dispatches=0,providerCalls=0,cancellations=0,settlements=0,loseCheckpoint=true,readbackUnavailable=true;let stored:any;
+ const ops=new Map<string,any>();
+ const journal:any={getResearchResult:async()=>stored,taskOperation:async(name:string,a:any)=>{
+  if(name==='enqueue_research_settlement'){settlements++;return {payload:{success:true}};}
+  let op=ops.get(a.operation_key);const fresh=!op;if(!op){op={state:'started'};ops.set(a.operation_key,op);}
+  if(a.action==='complete_operation'){
+   if(a.operation_name==='upstream.executeDataRequestPlan'&&loseCheckpoint){loseCheckpoint=false;throw new Error('checkpoint transport lost');}
+   op.state='completed';op.result=a.result;
+  }
+  return {payload:{success:true,fresh,operation:{...op}}};
+ }};
+ const rawUp:any={planDataRequest:async()=>({payload:{success:true,state:'ready',plan_id:planId,plan_key:'a'.repeat(64),endpoint_id:'fixture.read',platform:'fixture',normalized_inputs:params}}),claimDataRequestPlan:async()=>({payload:{success:true,source_call_id:'fixture_call',endpoint_id:'fixture.read',platform:'fixture',normalized_inputs:params}}),executeDataRequestPlan:async()=>{providerCalls++;return stored={payload:{success:true,processing_state:'completed',provider_completed:true,research_request_id:planId},isError:false,resultBytes:100};},cancelDataRequestPlan:async()=>{cancellations++;}};
+ const rawControl:any={authorizeCatalog:async()=>({allowedPlatforms:['fixture'],allowedEndpointIds:[]}),quote:async()=>({}),reserve:async()=>({reservationId,requiresApproval:false}),dispatch:async()=>{dispatches++;throw new Error('financial response lost');},settle:async()=>{},revalidate:async()=>{if(readbackUnavailable){readbackUnavailable=false;throw Object.assign(new Error('control temporarily unavailable'),{code:'CONTROL_UNAVAILABLE',status:503});}return {reservationId,sourceCallId:'fixture_call',endpointId:'fixture.read',parameterHash:hashExternalDataParameters(params),state:'dispatched',approvalState:'not_required'};}};
+ const service=createResearchService(taskAwareClient(rawUp,journal,'upstream',rawControl),taskAwareClient(rawControl,journal,'control',rawControl));
+ const run=()=>withResearchTaskExecution(task,randomUUID(),()=>service.execute(task));
+ await assert.rejects(run(),ResearchRecoveryRequiredError);assert.equal(providerCalls,0);assert.equal(cancellations,0);
+ await assert.rejects(run(),ResearchRecoveryRequiredError);assert.equal(providerCalls,0);assert.equal(cancellations,0);
+ await assert.rejects(run(),ResearchRecoveryRequiredError);assert.equal(providerCalls,1);assert.equal(settlements,0);assert.equal(cancellations,0);
+ const result=await run();assert.equal(result.structuredContent.success,true);assert.equal(dispatches,1);assert.equal(providerCalls,1);assert.equal(settlements,1);assert.equal(cancellations,0);
+});

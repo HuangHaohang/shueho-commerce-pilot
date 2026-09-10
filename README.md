@@ -369,3 +369,5 @@ Contract 9 retains MCP session capabilities for multi-request approval flows, pe
 Contract 10 adds late-reservation cancellation fences, isolated RPC transports, downstream elicitation forwarding, idle-worker backoff with expiring claim receipts, and cursor traversal beyond 10,000 records. Cross-component acceptance is documented in the [research failure matrix](docs/architecture/research-failure-matrix.md).
 
 Research recovery patch: record projection v2 preserves source-record identity and explicitly reports unverified cross-page identity. Native MCP Tasks deliver business approval elicitation through tasks/result; approval continuation is bound to the exact reservation. Lost internal financial replies recover from matching live receipts without replaying supplier calls. Codex Harness remains the sole agent runtime.
+
+Contract 11 closes recovery propagation through the complete research service, requires successful durable RPC receipts, persists cancellation before financial cleanup, reports native terminal errors consistently and lists recent tasks with opaque timestamp cursors. Agent runtime ownership remains with Codex Harness.

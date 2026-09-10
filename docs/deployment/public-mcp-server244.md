@@ -133,3 +133,7 @@ Refresh the client bridge and Skill for elicitation forwarding and `next_cursor`
 ### Recovery patch rollout
 
 Apply warehouse migration 040, drain old workers, then deploy control/warehouse/public MCP/worker from the same revision. Private task resume now requires the exact approval_reservation_id; deploy Gateway from this revision whenever enabling the workbench. Record projection v2 materializes on read while old supplied snapshot IDs retain their original content. Verify new and old snapshots, ordinary/native task contracts, worker readiness, raw hashes and quota/billing counters without paid collection. Refresh client Skill language: source-record totals are not guaranteed distinct cross-page entities.
+
+### Contract 11 rollout
+
+Apply warehouse migration 041 and deploy control, warehouse, public MCP and worker from the same commit after draining active work. Keep all provider secrets, quotas and pricing intact. Verify 13 ordinary/3 native tools, opaque task-list cursors and legacy UUID cursor compatibility, read existing tasks/snapshots, and compare raw/attempt/quota/financial baselines. Browser Harness code now requires tool contract 11 when the separate Gateway/workbench is enabled. Refresh client schema/Skill; no paid collection is needed for release checks.

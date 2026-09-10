@@ -26,6 +26,7 @@ before(async () => {
     }
     const body = await readJson(request);
     if((body as any)?.params?.arguments?.research_request_id==='network-reset'){response.destroy();return;}
+    if((body as any)?.params?.arguments?.fixture_error){const payload={success:false,error:{code:'TASK_LEASE_LOST'}};response.writeHead(200,{'content-type':'application/json'});response.end(JSON.stringify({jsonrpc:'2.0',id:(body as any).id,result:{isError:true,structuredContent:payload,content:[{type:'text',text:JSON.stringify(payload)}]}}));return;}
     const server = createMockServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
@@ -333,3 +334,5 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) raw += chunk.toString("utf8");
   return JSON.parse(raw);
 }
+
+test('structured failed task receipts cannot masquerade as persisted checkpoints',async()=>{const client=createClient(128000);try{await assert.rejects(client.taskOperation('update_research_task',{fixture_error:true}),{code:'TASK_LEASE_LOST'});}finally{await client.close();}});

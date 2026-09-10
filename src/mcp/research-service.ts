@@ -1,3 +1,4 @@
+import {rethrowResearchRecovery} from '../integrations/research-recovery-error.js';
 import {SettlementNotPersistedError} from "../integrations/settlement-delivery-error.js";
 import {ProviderNotDispatchedError,notDispatchedPayload} from "../integrations/provider-dispatch-stage.js";
 import {withTaskPage} from "./research-task-runtime.js";
@@ -202,7 +203,7 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
             requested_metrics,
             max_results,
           }, authorization);
-        } catch (error) {
+        } catch (error) {rethrowResearchRecovery(error);
           if (error instanceof ExternalDataControlError) {
             return toolError(error.code,error.message,{ providerDispatched: false,...error.details });
           }
@@ -290,7 +291,7 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
               per_call_auto_approval_micros: quote.perCallAutoApprovalMicros,
             },
           });
-        } catch (error) {
+        } catch (error) {rethrowResearchRecovery(error);
           if (error instanceof ExternalDataControlError) {
             return toolError(error.code,error.message,{ providerDispatched: false,...error.details });
           }
@@ -336,7 +337,7 @@ async function executePublicMarketplaceResearchPlan(
       source: "external_mcp",source_call_id: rootCallId,
       request_text: `Execute marketplace research plan ${planId}`,top_n: 50,business_intent: null,
     }, authorization);
-  } catch (error) {
+  } catch (error) {rethrowResearchRecovery(error);
     if (error instanceof MarketplaceProductResearchPreflightError && error.code === "PLAN_NOT_READY") {
       const existing = await repeatedPlanResult(error.code, planId, () => upstream.getResearchResult({
         research_request_id: planId,
@@ -406,7 +407,7 @@ async function executePublicMarketplaceResearchPlan(
           },
         },
       });
-    } catch (error) {
+    } catch (error) {rethrowResearchRecovery(error);
       if(error instanceof ProviderNotDispatchedError){const payload=notDispatchedPayload(error);await control.settle(principal,reservation.reservationId,{state:'business_failed',upstreamCode:null,upstreamMessage:error.message,resultBytes:null,responsePayload:payload});return {...toolSuccess(payload),isError:true};}
       const normalized = error instanceof ExternalDataServiceMcpError
         ? error
@@ -414,7 +415,7 @@ async function executePublicMarketplaceResearchPlan(
       await control.settle(principal,reservation.reservationId, {
         state: "unknown",upstreamCode: null,upstreamMessage: normalized.message,
         resultBytes: null,responsePayload: null,
-      }).catch(error=>{if(error instanceof SettlementNotPersistedError)throw error;});
+      }).catch(error=>{rethrowResearchRecovery(error);if(error instanceof SettlementNotPersistedError)throw error;});
       return toolError("UPSTREAM_RESULT_UNKNOWN",normalized.message,
         { ...normalized.details, role: step.role,targetOrdinal: instance.targetOrdinal,
           plan_id: executable.planId, workflow_execution_id: executable.executionId,
@@ -509,7 +510,7 @@ async function executePublicResearch(
         business_intent: input.preflight.businessIntent,
       },
     });
-  } catch (error) {
+  } catch (error) {rethrowResearchRecovery(error);
     if(error instanceof ProviderNotDispatchedError){const payload=notDispatchedPayload(error);await control.settle(principal,reservation.reservationId,{state:'business_failed',upstreamCode:null,upstreamMessage:error.message,resultBytes:null,responsePayload:payload});return {...toolSuccess(payload),isError:true};}
     const normalized = error instanceof ExternalDataServiceMcpError
       ? error
@@ -523,7 +524,7 @@ async function executePublicResearch(
         resultBytes: null,
         responsePayload: null,
       });
-    } catch(error) {
+    } catch(error) {rethrowResearchRecovery(error);
       if(error instanceof SettlementNotPersistedError)throw error;
       reconciliationPending = true;
     }

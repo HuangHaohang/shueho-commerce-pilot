@@ -3845,6 +3845,7 @@ async function cancelPendingExternalDataApproval(
   reason: "user_denied" | "approval_required" | "upstream_unavailable",
 ): Promise<void> {
   if(approval.researchTaskId && reason==='upstream_unavailable')return;
+  if(approval.researchTaskId){await externalDataService.taskOperation('manage_research_task',{action:'cancel',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});return;}
   await externalDataControl
     .cancel(approval.principal, approval.reservation.reservationId, reason)
     .catch(() => undefined);
@@ -3858,7 +3859,6 @@ async function cancelPendingExternalDataApproval(
       },
     }).catch(() => undefined);
   }
-  if(approval.researchTaskId)await externalDataService.taskOperation('manage_research_task',{action:'cancel',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
 }
 
 function broadcastCommerceApprovalResolved(
@@ -5383,11 +5383,11 @@ async function resolveExternalDataApproval(
 ): Promise<void> {
   const selection = answers.external_data_call?.answers[0];
   if (selection !== "允许本次调用") {
-    await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "user_denied");
     if(approval.researchTaskId){
       const result=await externalDataService.taskOperation('manage_research_task',{action:'cancel',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
       respondWithCommerceDataResult(pending.id,result.payload);return;
     }
+    await externalDataControl.cancel(approval.principal, approval.reservation.reservationId, "user_denied");
     if (typeof approval.businessIntent.data_plan_id === "string") {
       await externalDataService.cancelDataRequestPlan({plan_id:approval.businessIntent.data_plan_id,_commerce_context:{
         tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,

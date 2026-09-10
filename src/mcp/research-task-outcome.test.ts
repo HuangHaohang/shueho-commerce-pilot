@@ -12,3 +12,5 @@ test('all explicit uncertain outcomes retain reconciliation and monetary reserva
  assert.equal(researchTaskOutcome({success:false,partial_results:[{research_request_id:'existing'}]}),'partial');
  assert.equal(researchTaskOutcome({success:false,error:{code:'APPROVAL_REQUIRED'}}),'waiting_approval');
 });
+
+test('nonterminal provider acknowledgements cannot mark research completed',()=>{for(const processing_state of ['executing','running','queued','processing'])assert.equal(researchTaskOutcome({success:true,processing_state}),'reconciliation_required');});

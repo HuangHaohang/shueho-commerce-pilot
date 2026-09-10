@@ -31,3 +31,13 @@ test('SDK MCP task capability creates, reads, lists and cancels a durable task',
   state='queued';const cancelled:any=await client.request({method:'tasks/cancel',params:{taskId:id}},z.any());assert.equal(cancelled.status,'cancelled');
  }finally{await client.close();await server.close();}
 });
+
+test('native cancellation persists even if financial cancellation is unavailable; terminal error remains an error',async()=>{
+ let state='waiting_approval',financialCalls=0;const id=randomUUID(),now=new Date().toISOString();
+ const upstream:any={taskOperation:async(_:string,a:any)=>{if(a.action==='cancel')state='cancelled';return {payload:{success:true,task_id:id,state,created_at:now,updated_at:now,approval:{reservationId:randomUUID()},result:{success:false,error:{code:'APPROVAL_REQUIRED'}}}};}};
+ const control:any={authorizeCatalog:async()=>({}),cancel:async()=>{financialCalls++;throw new Error('unavailable');}};
+ const store=researchTaskStore(upstream,control,{tenantId:randomUUID(),workspaceId:randomUUID(),userId:'fixture'} as any);
+ await store.updateTaskStatus(id,'cancelled');assert.equal(financialCalls,0);assert.equal(state,'cancelled');
+ const result:any=await store.getTaskResult(id);assert.equal(result.isError,true);assert.equal(result.structuredContent.error.code,'TASK_CANCELLED');
+ assert.equal(mcpTaskView({task_id:id,state:'partial',created_at:now,updated_at:now}).status,'failed');
+});

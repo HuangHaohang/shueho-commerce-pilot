@@ -132,3 +132,5 @@ The PR description must include:
 Do not merge a PR with unresolved high-risk review findings, missing migrations, failing CI, undocumented architecture changes, or unverified external writes.
 
 - Current research contracts submit immutable durable tasks directly. Do not expose free planning/separate execution tools. Preserve internal scope receipts, live authorization/budget checks, fenced operation checkpoints, no uncertain replay and legacy readback.
+
+Recovery changes must execute the real createResearchService entrypoint with taskAwareClient and a durable journal model: financial reply loss followed by provider checkpoint loss must finish the original scope with one provider call, no plan cancellation and one settlement intent. Also exercise failed structured RPC receipts, native cancellation during financial outage, cross-session approval races and chronological cursor traversal. Adapter-only tests are insufficient acceptance evidence.

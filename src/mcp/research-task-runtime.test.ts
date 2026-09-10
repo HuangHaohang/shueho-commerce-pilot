@@ -76,7 +76,7 @@ test('financial reply loss recovers the matching receipt and sends a supplier ex
  const c=taskAwareClient({reserve:async(..._:unknown[])=>({reservationId:id,requiresApproval:false}),dispatch:async(..._:unknown[])=>{dispatches++;throw new Error('lost financial reply');}},f.journal,'control',live);
  const upstream=taskAwareClient(f.target,f.journal,'upstream',live);
  const work=async()=>{await c.reserve(f.task.principal,{source:'external_mcp',callId:'fixture_call'});await c.dispatch(f.task.principal,id,{endpoint_id:'fixture.read',params});return upstream.callEndpoint({_commerce_context:{source_call_id:'fixture_call'}});};
- const task={...f.task,execution_version:2};await assert.rejects(withResearchTaskExecution(task,randomUUID(),work),/lost financial reply/);
+ const task={...f.task,execution_version:2};await assert.rejects(withResearchTaskExecution(task,randomUUID(),work),/RECONCILIATION/);
  await withResearchTaskExecution(task,randomUUID(),work);await withResearchTaskExecution(task,randomUUID(),work);
  assert.equal(dispatches,1);assert.equal(f.calls(),1);assert(checks>=2);
 });

@@ -35,3 +35,7 @@ Before release, inspect active provider calls, task states and financial states.
 - Historical pending approvals are not cancelled merely because they are old. Only task-terminal cleanup or explicit cancellation releases known unissued reservations.
 
 Recovery acceptance also covers different reviews sharing itemId, null rateId, old snapshot readback, native Tasks input_required with related-task elicitation, concurrent result readers, approval response loss, stale approval reservation rejection, and financial response loss before provider execution. Verified source records are preserved when cross-page entity identity is unknown.
+
+Contract 11 acceptance exercises the real research entrypoint through financial reply loss and later provider checkpoint loss; the task must finish with one supplier call, no plan cancellation and one settlement intent. Failed structured RPC receipts must fail closed. Native cancellation succeeds without synchronous financial release, cross-session approval races return current state, native terminal result flags match status, and task listing preserves microsecond boundaries and legacy cursors.
+
+Nonterminal provider acknowledgements (executing/running/queued/processing) never mark a task completed; the worker reconciles the original checkpoint within its existing bounded recovery policy.
