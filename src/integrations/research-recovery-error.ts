@@ -6,3 +6,6 @@ export class ResearchRecoveryRequiredError extends Error {
 export function rethrowResearchRecovery(error:unknown):void {
  if(error instanceof ResearchRecoveryRequiredError)throw error;
 }
+
+/** Normal asynchronous processing waits separately from infrastructure failure retries. */
+export class ResearchProcessingPendingError extends ResearchRecoveryRequiredError {}

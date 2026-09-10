@@ -63,4 +63,24 @@ describe.skipIf(!url||!ownerUrl)('durable research queue with PostgreSQL',()=>{
   await expect(manageResearchTask(scope,{action:'list',cursor:'bad'})).rejects.toThrow('INVALID_TASK_CURSOR');
  });
 
+ it('operation inspection is read-only; processing waits do not consume fault retries and expire safely',async()=>{
+  const scope={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'wait-fixture'},task=randomUUID(),lease=randomUUID();
+  await owner.query(`INSERT INTO research_task(id,tenant_id,workspace_id,user_id,source,idempotency_key,input_hash,kind,inputs,principal,state,lease_id,lease_until,attempts)
+   VALUES($1,$2,$3,$4,'external_mcp',$5,'fixture','data','{}',$6::jsonb,'running',$7,clock_timestamp()+INTERVAL '90 seconds',1)`,[task,scope.tenantId,scope.workspaceId,scope.userId,randomUUID(),JSON.stringify(scope),lease]);
+  const base={task_id:task,lease_id:lease};
+  expect((await updateResearchTask(scope,{...base,action:'read_operation',operation_key:'provider',input_hash:'fixture'})).operation).toBeNull();
+  expect(Number((await owner.query('SELECT count(*) FROM research_task_operation WHERE task_id=$1',[task])).rows[0].count)).toBe(0);
+  for(let n=0;n<6;n++){
+   await updateResearchTask(scope,{...base,action:'wait'});
+   expect((await readResearchTask(scope,task)).state).toBe('queued');
+   await owner.query("UPDATE research_task SET state='running',attempts=attempts+1,lease_until=clock_timestamp()+INTERVAL '90 seconds' WHERE id=$1",[task]);
+  }
+  expect(Number((await owner.query('SELECT recovery_failures FROM research_task WHERE id=$1',[task])).rows[0].recovery_failures)).toBe(0);
+  await updateResearchTask(scope,{...base,action:'retry'});
+  expect(Number((await owner.query('SELECT recovery_failures FROM research_task WHERE id=$1',[task])).rows[0].recovery_failures)).toBe(1);
+  await owner.query("UPDATE research_task SET state='running',lease_until=clock_timestamp()+INTERVAL '90 seconds',processing_wait_started_at=clock_timestamp()-INTERVAL '16 minutes' WHERE id=$1",[task]);
+  await updateResearchTask(scope,{...base,action:'wait'});const result=await readResearchTask(scope,task);
+  expect(result.state).toBe('reconciliation_required');expect(result.result.error.code).toBe('PROCESSING_WAIT_TIMEOUT');
+ });
+
 });

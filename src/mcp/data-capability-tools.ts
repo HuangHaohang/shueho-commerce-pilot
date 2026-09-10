@@ -1,4 +1,4 @@
-import {rethrowResearchRecovery} from '../integrations/research-recovery-error.js';
+import {rethrowResearchRecovery,ResearchProcessingPendingError} from '../integrations/research-recovery-error.js';
 import {ProviderNotDispatchedError,notDispatchedPayload} from "../integrations/provider-dispatch-stage.js";
 import {SettlementNotPersistedError} from '../integrations/settlement-delivery-error.js';
 import {taskCallId} from "./research-task-runtime.js";
@@ -68,6 +68,7 @@ export function registerDataCapabilityTools(server: McpServer, principal: Authen
         return failure(Object.assign(new Error("数据请求结果不确定，请查询原计划编号并对账，禁止重新采集。"),{code:"DATA_RESULT_UNKNOWN",details:{research_request_id:planId}}));
       }
       const outcome = classifyExternalDataServiceOutcome(result.payload,result.isError);
+      if(outcome.settlementState===null)throw new ResearchProcessingPendingError();
       let settlementPending=false;
       try { await control.settle(principal,reservation.reservationId,{state:outcome.settlementState,upstreamCode:outcome.upstreamCode,
         upstreamMessage:typeof result.payload.message==="string" ? result.payload.message : null,resultBytes:result.resultBytes,responsePayload:result.payload}); }

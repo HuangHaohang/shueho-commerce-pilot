@@ -1,4 +1,5 @@
-import {ResearchRecoveryRequiredError} from '../integrations/research-recovery-error.js';
+import {researchResultPending,researchResultTerminal,transientControlFailure} from '../integrations/research-lifecycle.js';
+import {ResearchRecoveryRequiredError,ResearchProcessingPendingError} from '../integrations/research-recovery-error.js';
 import {hashExternalDataParameters} from '../integrations/external-data-control-client.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash,randomUUID} from 'node:crypto';
@@ -9,7 +10,7 @@ import {ProviderNotDispatchedError,notDispatchedPayload} from '../integrations/p
 import {SettlementNotPersistedError} from '../integrations/settlement-delivery-error.js';
 import {IdleBackoff} from './idle-backoff.js';
 
-export type Task={id:string;kind:'marketplace'|'social'|'data';inputs:Record<string,unknown>;principal:AuthenticatedMcpPrincipal;attempts:number;execution_version?:number};
+export type Task={id:string;kind:'marketplace'|'social'|'data';inputs:Record<string,unknown>;principal:AuthenticatedMcpPrincipal;attempts:number;recovery_failures?:number;execution_version?:number};
 type Run={task:Task;lease:string;sequence:number;control:{recover:boolean;lost:boolean};reservationId?:string;reservationCallId?:string;page?:number};
 const current=new AsyncLocalStorage<Run>();
 export const taskCallId=()=>{const r=current.getStore();return r?r.page?`${r.task.id.replaceAll('-','')}_p${r.page}`:r.task.id:randomUUID();};
@@ -39,30 +40,56 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
    }
    const operationKey=(run.task.execution_version??1)<2?`${++run.sequence}:${group}.${String(name)}`:`v2:${group}.${String(name)}:${hash(args).slice(0,32)}`;
    const base={task_id:run.task.id,lease_id:run.lease,_commerce_context:scope(run.task.principal),operation_key:operationKey,operation_name:`${group}.${String(name)}`,input_hash:hash(args),...(group==='control'&&name==='reserve'?{operation_context:{source:(args[1] as any).source,callId:(args[1] as any).callId}}:{})};
+   const provider=group==='upstream'&&['callEndpoint','executeDataRequestPlan'].includes(String(name));
+   if(provider){
+    const inspected=(await checkpoint(journal,{...base,action:'read_operation'})).payload.operation;
+    if(!inspected){
+     try{if(control){
+      if(!run.reservationId)throw new Error('TASK_RESERVATION_MISSING');
+      const live=await control.revalidate(run.task.principal,run.reservationId);
+      if(live.state!=='dispatched'||!['approved','not_required'].includes(live.approvalState))throw new Error('TASK_ADMISSION_REVOKED');
+     }}catch(error){
+      // No provider checkpoint exists yet, so a transient governance outage can safely retry.
+      if(transientControlFailure(error))throw new ResearchRecoveryRequiredError();
+      const blocked=new ProviderNotDispatchedError(String((error as {code?:string}).code??'ADMISSION_REJECTED'));
+      const payload=notDispatchedPayload(blocked);
+      await checkpoint(journal,{...base,action:'begin_operation'});
+      await checkpoint(journal,{...base,action:'complete_operation',result:{payload,isError:true,resultBytes:Buffer.byteLength(JSON.stringify(payload))}});
+      throw blocked;
+     }
+    }
+   }
+   const refresh=async()=>{
+    const finalBase={...base,operation_key:base.operation_key+':terminal',operation_name:base.operation_name+'.terminal'};
+    const stored=(await checkpoint(journal,{...finalBase,action:'read_operation'})).payload.operation as {state:string;result:any}|null;
+    if(stored?.state==='completed')return stored.result;
+    const input=args[0] as Record<string,any>;
+    let refreshed:any;
+    if(name==='executeDataRequestPlan')refreshed=await recoverOperation(()=>journal.getResearchResult({research_request_id:input.plan_id,_commerce_context:scope(run.task.principal)}));
+    else{
+     const recovered=(await recoverOperation(()=>journal.taskOperation('recover_research_call',{source_call_id:input._commerce_context.source_call_id,_commerce_context:scope(run.task.principal)}))).payload;
+     if(!recovered.terminal){if(researchResultPending((recovered.result??{}) as Record<string,unknown>))throw new ResearchProcessingPendingError();throw new ResearchRecoveryRequiredError();}
+     refreshed={payload:recovered.result,isError:false,resultBytes:Buffer.byteLength(JSON.stringify(recovered.result))};
+    }
+    if(researchResultPending(refreshed.payload))throw new ResearchProcessingPendingError();
+    if(!researchResultTerminal(refreshed.payload))throw new ResearchRecoveryRequiredError();
+    await checkpoint(journal,{...finalBase,action:'begin_operation'});
+    await checkpoint(journal,{...finalBase,action:'complete_operation',result:refreshed});
+    return refreshed;
+   };
    const begun=(await checkpoint(journal,{...base,action:'begin_operation'})).payload;
    const op=begun.operation as {state:string;result:any};
    if(group==='control' && name==='reserve')run.reservationCallId=(args[1] as any).callId;
    if(group==='control' && name==='reserve' && op.state==='completed')run.reservationId=op.result.reservationId;
    if(group==='control' && name==='dispatch')run.reservationId=String(args[1]);
    if(op.state==='completed'){
+    if(provider&&researchResultPending(op.result?.payload??{}))return refresh();
     if(group==='control' && name==='reserve' && op.result.requiresApproval && control){
      const live=await control.revalidate(run.task.principal,op.result.reservationId);
      return {...op.result,requiresApproval:live.approvalState==='pending',approvalState:live.approvalState};
     }
     if(op.result?.payload?.dispatch_phase==='not_dispatched')throw new ProviderNotDispatchedError(op.result.payload.error?.details?.reasonCode??'ADMISSION_REJECTED');
     return op.result;
-   }
-   if(group==='upstream' && ['callEndpoint','executeDataRequestPlan'].includes(String(name)) && begun.fresh){
-    try{if(control){
-     if(!run.reservationId)throw new Error('TASK_RESERVATION_MISSING');
-     const live=await control.revalidate(run.task.principal,run.reservationId);
-     if(live.state!=='dispatched' || !['approved','not_required'].includes(live.approvalState))throw new Error('TASK_ADMISSION_REVOKED');
-    }}catch(error){
-     const blocked=new ProviderNotDispatchedError(String((error as {code?:string}).code??'ADMISSION_REJECTED'));
-     const payload=notDispatchedPayload(blocked);
-     await checkpoint(journal,{...base,action:'complete_operation',result:{payload,isError:true,resultBytes:Buffer.byteLength(JSON.stringify(payload))}});
-     throw blocked;
-    }
    }
    let result:unknown;
    if(!begun.fresh && ['callEndpoint','executeDataRequestPlan','dispatch','executeMarketplaceProductResearchPlan'].includes(String(name))){
@@ -76,13 +103,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
      if(run.control.lost)throw new ResearchRecoveryRequiredError('TASK_LEASE_LOST');
      if(live.state==='dispatched')result=null;
      else if(live.state==='reserved'){await recoverOperation(()=>method.apply(object,args));result=null;}
-    }else if(name==='callEndpoint'){
-     const recovered=(await recoverOperation(()=>journal.taskOperation('recover_research_call',{source_call_id:input._commerce_context.source_call_id,_commerce_context:scope(run.task.principal)}))).payload;
-     if(recovered.terminal)result={payload:recovered.result,isError:false,resultBytes:Buffer.byteLength(JSON.stringify(recovered.result))};
-    }else if(name==='executeDataRequestPlan'){
-     const recovered=await recoverOperation(()=>journal.getResearchResult({research_request_id:input.plan_id,_commerce_context:scope(run.task.principal)}));
-     if(['completed','failed','unknown'].includes(String(recovered.payload.processing_state)))result=recovered;
-    }
+    }else if(provider)result=await refresh();
     if(result===undefined){run.control.recover=true;throw new ResearchRecoveryRequiredError();}
    }else {
     try{result=await method.apply(object,args);}catch(error){
@@ -94,6 +115,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
    }
    if(group==='control' && name==='reserve')run.reservationId=(result as any).reservationId;
    await checkpoint(journal,{...base,action:'complete_operation',result});
+   if(provider&&researchResultPending((result as any)?.payload??{}))throw new ResearchProcessingPendingError();
    return result;
   };
  }});
@@ -115,17 +137,18 @@ export function startResearchTaskWorker(upstream:ExternalDataServiceMcpClient,ex
    const run:Run={task,lease,sequence:0,control:{recover:false,lost:false}};
    const base={task_id:task.id,lease_id:lease,_commerce_context:scope(task.principal)};
    const heartbeat=setInterval(()=>{void upstream.taskOperation('update_research_task',{...base,action:'heartbeat'}).then(r=>{if(r.payload.cancel_requested)run.control.lost=true;}).catch(()=>{run.control.lost=true;});},20_000);
-   let response:any;
+   let response:any,processingPending=false;
    try{response=await current.run(run,()=>execute(task!));}
    catch(error){
+    if(error instanceof ResearchProcessingPendingError)processingPending=true;
     const code=(error as {code?:string;message?:string}).code??(error as Error).message;
     if(code==='TASK_CANCELLED'){run.control.lost=true;}
     else run.control.recover=true;
    }
    finally{clearInterval(heartbeat);}
    if(run.control.lost)return;
-   if(researchTaskNeedsRecovery(response?.structuredContent??response?.payload??{}))run.control.recover=true;
-   if(run.control.recover && task.attempts<5){await upstream.taskOperation('update_research_task',{...base,action:'retry'});return;}
+   if(processingPending||researchTaskNeedsRecovery(response?.structuredContent??response?.payload??{})){await upstream.taskOperation('update_research_task',{...base,action:'wait'});return;}
+   if(run.control.recover && (task.recovery_failures??0)<4){await upstream.taskOperation('update_research_task',{...base,action:'retry'});return;}
    const payload=response?.structuredContent ?? response?.payload ?? {success:false,error:{code:'TASK_RECONCILIATION_REQUIRED',message:'任务执行中断，保留原任务及调用记录待对账。'}};
    const state=run.control.recover?'reconciliation_required':researchTaskOutcome(payload);
    await upstream.taskOperation('update_research_task',{...base,action:'finish',state,result:payload,...(state==='waiting_approval'?{approval:payload.error?.details??{}}:{})});

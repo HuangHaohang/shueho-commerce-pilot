@@ -5,6 +5,7 @@ function fixture(){
  const ops=new Map<string,any>();let calls=0;
  const journal:any={taskOperation:async(name:string,a:any)=>{
   if(name==='recover_research_call')return {payload:{terminal:true,result:{success:true,processing_state:'completed',evidence:[{value:7}]}}};
+  if(a.action==='read_operation')return {payload:{success:true,operation:ops.get(a.operation_key)??null}};
   let op=ops.get(a.operation_key);const fresh=!op;if(!op){op={state:'started',input_hash:a.input_hash};ops.set(a.operation_key,op);}
   assert.equal(op.input_hash,a.input_hash);
   if(a.action==='complete_operation'){op.state='completed';op.result=a.result;}

@@ -53,3 +53,5 @@ Contract 10 forwards downstream elicitation capabilities and accept/decline resp
 The recovery patch retains the 13 ordinary tools and bridges native elicitation without translating Harness questions. Record responses expose projection_version and deduplication; unverified_records_retained means repeated appearances across pages remain possible and must not be reported as a deduplicated population. Original snapshot IDs remain readable.
 
 Contract 11 lists tasks newest first. Pass next_cursor unchanged; do not validate it as a UUID or extract a task ID from it. Native partial failures remain failures with retained evidence. A cancellation receipt may precede financial cleanup; inspect settlement state rather than resubmitting collection.
+
+Intermediate collecting/normalizing/enriching and transport processing acknowledgements are not final failure or completion. Read the original task; backend waits refresh the original result and retain its budget. PROCESSING_WAIT_TIMEOUT requires checking existing evidence rather than submitting another collection.

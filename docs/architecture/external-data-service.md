@@ -248,3 +248,13 @@ ResearchRecoveryRequiredError is an internal control-flow signal. Planning/execu
 Ordinary/native cancellation and Harness task-denial paths persist task cancellation first; the durable release outbox owns reserved-fund cleanup. Cross-session approval readers refresh task state after a competing decision; no new approval grants or custom agent loops are introduced. Native partial/error/cancelled results keep isError=true and cancelled results no longer expose stale APPROVAL_REQUIRED as their current error.
 
 Migration 041 indexes recent task lookup. New list cursors use the PostgreSQL microsecond timestamp plus UUID, order newest first and remain tenant/user/thread scoped; legacy UUID cursors continue the old ordering until that page sequence finishes. Harness threads use tool contract 11 for the opaque string cursor schema.
+
+### Intermediate result lifecycle
+
+The shared research-lifecycle adapter covers the actual SQL created/collecting/normalizing/enriching/completed/failed/unknown states plus transport acknowledgements; tests compare it with the applied database constraint. Intermediate responses are never business failures and produce no settlement intent, including when raw provider work has finished but warehouse processing is ongoing. Reserved/dispatched budget remains held until an authoritative terminal result can be settled once.
+
+An original RPC checkpoint may contain an intermediate acknowledgement. Recovery reads only the original plan/request/source-call identity and appends a separate .terminal checkpoint after completion; the original acknowledgement remains immutable. A pending-result read never dispatches the supplier. Unknown terminal results preserve uncertain settlement semantics.
+
+Lease-fenced read_operation inspects a checkpoint without inserting one. New supplier steps revalidate governance before recording possible dispatch; transient CONTROL_UNAVAILABLE/5xx failures therefore remain safely recoverable, while explicit authorization/policy denials receive a permanent not-dispatched receipt. Existing started supplier checkpoints always recover stored results and never resend.
+
+Migration 042 separates recovery_failures from claim attempts and adds processing_wait_started_at. The worker queues normal waits every 15 seconds without consuming its five-failure recovery budget. A wait lasting 15 minutes transitions to reconciliation_required with PROCESSING_WAIT_TIMEOUT; no automatic recollection or budget release of dispatched calls occurs. A completed terminal checkpoint ends that wait episode. Historical terminal tasks and old erroneous settlements are not automatically replayed or rewritten by this release.

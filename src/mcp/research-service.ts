@@ -1,4 +1,4 @@
-import {rethrowResearchRecovery} from '../integrations/research-recovery-error.js';
+import {rethrowResearchRecovery,ResearchProcessingPendingError} from '../integrations/research-recovery-error.js';
 import {SettlementNotPersistedError} from "../integrations/settlement-delivery-error.js";
 import {ProviderNotDispatchedError,notDispatchedPayload} from "../integrations/provider-dispatch-stage.js";
 import {withTaskPage} from "./research-task-runtime.js";
@@ -422,6 +422,7 @@ async function executePublicMarketplaceResearchPlan(
           research_request_id: executable.executionId, recovery_tool: "get_research_result" });
     }
     const outcome = classifyExternalDataServiceOutcome(result.payload,result.isError);
+      if(outcome.settlementState===null)throw new ResearchProcessingPendingError();
     await control.settle(principal,reservation.reservationId, {
       state: outcome.settlementState,upstreamCode: outcome.upstreamCode,
       upstreamMessage: typeof result.payload.message === "string" ? result.payload.message : null,
@@ -536,6 +537,7 @@ async function executePublicResearch(
   }
   const { upstreamCode, providerCompleted, businessUsable, settlementState } =
     classifyExternalDataServiceOutcome(result.payload, result.isError);
+  if(settlementState===null)throw new ResearchProcessingPendingError();
   await control.settle(principal, reservation.reservationId, {
     state: settlementState,
     upstreamCode,

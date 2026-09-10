@@ -46,13 +46,16 @@ export async function updateResearchTask(scope:Scope,input:JsonObject){return wi
  if(row.cancel_requested_at && !finalizing && !['heartbeat','finish'].includes(String(input.action)))throw new Error('TASK_CANCELLED');
  if(input.action==='heartbeat')await c.query(`UPDATE research_task SET lease_until=clock_timestamp()+INTERVAL '90 seconds',updated_at=clock_timestamp() WHERE id=$1`,[input.task_id]);
  else if(input.action==='finish')await c.query(`UPDATE research_task SET state=$2,result=$3::jsonb,approval=$4::jsonb,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1`,[input.task_id,input.state,JSON.stringify(input.result??{}),JSON.stringify(input.approval??null)]);
- else if(input.action==='retry')await c.query(`UPDATE research_task SET state='queued',lease_until=NULL,next_run_at=clock_timestamp()+INTERVAL '15 seconds',updated_at=clock_timestamp() WHERE id=$1`,[input.task_id]);
+ else if(input.action==='wait'){await c.query(`UPDATE research_task SET state=CASE WHEN processing_wait_started_at<clock_timestamp()-INTERVAL '15 minutes' THEN 'reconciliation_required' ELSE 'queued' END,processing_wait_started_at=COALESCE(processing_wait_started_at,clock_timestamp()),lease_until=NULL,next_run_at=clock_timestamp()+INTERVAL '15 seconds',updated_at=clock_timestamp(),result=CASE WHEN processing_wait_started_at<clock_timestamp()-INTERVAL '15 minutes' THEN '{"success":false,"error":{"code":"PROCESSING_WAIT_TIMEOUT","message":"处理等待超过期限，请核对原任务结果，不要重新采集。"}}'::jsonb ELSE '{"success":false,"processing_state":"processing","message":"后台处理尚未完成，请按原任务编号查询。"}'::jsonb END WHERE id=$1`,[input.task_id]);}
+ else if(input.action==='retry')await c.query(`UPDATE research_task SET state='queued',recovery_failures=recovery_failures+1,lease_until=NULL,next_run_at=clock_timestamp()+INTERVAL '15 seconds',updated_at=clock_timestamp() WHERE id=$1`,[input.task_id]);
  else {
+  if(input.action==='read_operation'){const op=(await c.query('SELECT * FROM research_task_operation WHERE task_id=$1 AND operation_key=$2',[input.task_id,input.operation_key])).rows[0];if(op&&op.input_hash!==String(input.input_hash))throw new Error('TASK_OPERATION_CONFLICT');return {success:true,operation:op??null};}
   const hash=String(input.input_hash);
   const inserted=await c.query(`INSERT INTO research_task_operation(task_id,operation_key,input_hash,operation_name,state,operation_context) VALUES($1,$2,$3,$4,'started',$5::jsonb) ON CONFLICT DO NOTHING RETURNING task_id`,[input.task_id,input.operation_key,hash,input.operation_name,JSON.stringify(input.operation_context??{})]);
   const op=(await c.query(`SELECT * FROM research_task_operation WHERE task_id=$1 AND operation_key=$2`,[input.task_id,input.operation_key])).rows[0];
   if(op.input_hash!==hash)throw new Error('TASK_OPERATION_CONFLICT');
   if(input.action==='complete_operation' && op.state!=='completed')await c.query(`UPDATE research_task_operation SET state='completed',result=$3::jsonb,completed_at=clock_timestamp() WHERE task_id=$1 AND operation_key=$2`,[input.task_id,input.operation_key,JSON.stringify(input.result)]);
+  if(input.action==='complete_operation' && String(input.operation_name).endsWith('.terminal'))await c.query("UPDATE research_task SET processing_wait_started_at=NULL WHERE id=$1 AND state='running'",[input.task_id]);
   return {success:true,operation:op,fresh:inserted.rowCount===1};
  }
  return {success:true,cancel_requested:!!row.cancel_requested_at};

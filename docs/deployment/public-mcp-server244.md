@@ -137,3 +137,7 @@ Apply warehouse migration 040, drain old workers, then deploy control/warehouse/
 ### Contract 11 rollout
 
 Apply warehouse migration 041 and deploy control, warehouse, public MCP and worker from the same commit after draining active work. Keep all provider secrets, quotas and pricing intact. Verify 13 ordinary/3 native tools, opaque task-list cursors and legacy UUID cursor compatibility, read existing tasks/snapshots, and compare raw/attempt/quota/financial baselines. Browser Harness code now requires tool contract 11 when the separate Gateway/workbench is enabled. Refresh client schema/Skill; no paid collection is needed for release checks.
+
+### Lifecycle correction rollout
+
+Apply warehouse migration 042, then deploy control, warehouse, public MCP and worker from the same revision after draining active tasks/calls. The internal update RPC adds lease-fenced read_operation and wait; public tools retain contract 11. Verify legacy snapshots, task pagination and native results, worker/settlement readiness and unchanged raw/attempt/quota/financial baselines. No historical terminal task is restarted by the migration. Processing waits are capped at 15 minutes per episode and fault retries retain their separate bound.

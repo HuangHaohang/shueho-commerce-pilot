@@ -38,6 +38,7 @@ test('real research entrypoint resumes financial and journal reply loss without 
  const ops=new Map<string,any>();
  const journal:any={getResearchResult:async()=>stored,taskOperation:async(name:string,a:any)=>{
   if(name==='enqueue_research_settlement'){settlements++;return {payload:{success:true}};}
+  if(a.action==='read_operation')return {payload:{success:true,operation:ops.get(a.operation_key)??null}};
   let op=ops.get(a.operation_key);const fresh=!op;if(!op){op={state:'started'};ops.set(a.operation_key,op);}
   if(a.action==='complete_operation'){
    if(a.operation_name==='upstream.executeDataRequestPlan'&&loseCheckpoint){loseCheckpoint=false;throw new Error('checkpoint transport lost');}

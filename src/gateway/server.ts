@@ -5222,6 +5222,7 @@ async function executeMarketplaceWorkflowStep(
     return;
   }
   const outcome = classifyExternalDataServiceOutcome(result.payload, result.isError);
+  if(outcome.settlementState===null){respondWithCommerceDataResult(requestId,result.payload);return;}
   await externalDataControl.settle(principal, reservation.reservationId, {
     state: outcome.settlementState,
     upstreamCode: outcome.upstreamCode,
@@ -5565,6 +5566,7 @@ async function dispatchCommerceDataCall(
 
   const { upstreamCode, providerCompleted, businessUsable, settlementState } =
     classifyExternalDataServiceOutcome(result.payload, result.isError);
+  if(settlementState===null){respondWithCommerceDataResult(requestId,result.payload);return;}
   const upstreamMessage = typeof result.payload.message === "string" ? result.payload.message : null;
   const acceptedEvidence = isRecord(result.payload.coverage) && typeof result.payload.coverage.acceptedEvidence === "number"
     ? result.payload.coverage.acceptedEvidence

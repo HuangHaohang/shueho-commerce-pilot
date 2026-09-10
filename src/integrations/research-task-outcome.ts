@@ -1,4 +1,5 @@
-export const researchTaskNeedsRecovery=(payload:Record<string,any>)=>payload.error?.code!=='APPROVAL_REQUIRED'&&['executing','running','queued','processing'].includes(payload.processing_state);
+import {researchResultPending} from './research-lifecycle.js';
+export const researchTaskNeedsRecovery=(payload:Record<string,any>)=>payload.error?.code!=='APPROVAL_REQUIRED'&&researchResultPending(payload);
 export type ResearchTaskState = 'completed' | 'partial' | 'failed' | 'reconciliation_required' | 'waiting_approval' | 'cancelled';
 export function researchTaskOutcome(payload: Record<string, any>): ResearchTaskState {
   const code = payload.error?.code ?? payload.code;
