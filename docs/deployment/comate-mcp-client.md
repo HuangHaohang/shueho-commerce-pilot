@@ -55,3 +55,5 @@ The recovery patch retains the 13 ordinary tools and bridges native elicitation 
 Contract 11 lists tasks newest first. Pass next_cursor unchanged; do not validate it as a UUID or extract a task ID from it. Native partial failures remain failures with retained evidence. A cancellation receipt may precede financial cleanup; inspect settlement state rather than resubmitting collection.
 
 Intermediate collecting/normalizing/enriching and transport processing acknowledgements are not final failure or completion. Read the original task; backend waits refresh the original result and retain its budget. PROCESSING_WAIT_TIMEOUT requires checking existing evidence rather than submitting another collection.
+
+EXTERNAL_DATA_CALL_LIMIT is a deterministic governance refusal, not an unknown supplier result. Read error.details.providerDispatched and the original task state. cleanup.state=completed only confirms cancellation cleanup, not collection or billing; financial delivery state is settlement. A failed original task remains immutable after policy changes.

@@ -16,12 +16,12 @@ const policySchema = z.object({
   approvalMode: z.enum(["always_ask", "task", "policy"]),
   allowedPlatforms: z.array(platformSchema).max(40).transform((items) => [...new Set(items)].sort()),
   allowedEndpointIds: z.array(endpointSchema).max(500).transform((items) => [...new Set(items)].sort()),
-  monthlyCallLimit: z.number().int().min(1).max(1_000_000),
+  monthlyCallLimit: z.number().int().min(1).max(1_000_000).nullable(),
   monthlySpendLimitMicros: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).nullable(),
   perCallAutoApprovalMicros: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable(),
   perTurnCallLimit: z.number().int().min(1).max(100).nullable(),
   retentionDays: z.number().int().min(30).max(730).nullable(),
-});
+}).refine(p=>p.monthlyCallLimit!==null||p.monthlySpendLimitMicros!==null,{message:"必须保留月金额预算或月调用次数上限。"});
 
 export async function GET(request: Request) {
   const access = await requireAgentContext(request, "external_data.usage.read");

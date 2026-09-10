@@ -141,3 +141,7 @@ Apply warehouse migration 041 and deploy control, warehouse, public MCP and work
 ### Lifecycle correction rollout
 
 Apply warehouse migration 042, then deploy control, warehouse, public MCP and worker from the same revision after draining active tasks/calls. The internal update RPC adds lease-fenced read_operation and wait; public tools retain contract 11. Verify legacy snapshots, task pagination and native results, worker/settlement readiness and unchanged raw/attempt/quota/financial baselines. No historical terminal task is restarted by the migration. Processing waits are capped at 15 minutes per episode and fault retries retain their separate bound.
+
+### Monthly quota incident correction
+
+Apply control migration 050 and warehouse migration 043, then deploy control/warehouse/public MCP/worker from the same revision. A user-authorized money-only policy update uses updateExternalDataPolicy so it retains an audit event and all other policy fields; verify monthlyCallLimit=null and the intended finite money amount by readback and a read-only quote. Do not reset actual usage or provider quotas. For historical reserve-only failures, match immutable governance denial audit IDs and prove no financial reservation/provider request before appending a failure resolution. No supplier call is needed for verification.

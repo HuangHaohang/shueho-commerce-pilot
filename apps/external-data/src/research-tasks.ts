@@ -21,21 +21,22 @@ export async function submitResearchTask(scope:Scope,input:JsonObject) {
    VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb) ON CONFLICT DO NOTHING`,[...args,hash,input.kind,JSON.stringify(input.inputs),JSON.stringify(principal)]);
   const row=(await c.query(`SELECT * FROM research_task WHERE tenant_id=$1 AND workspace_id=$2 AND user_id=$3 AND source=$4 AND idempotency_key=$5`,args)).rows[0];
   if(!row || row.input_hash!==hash)throw new Error('TASK_IDEMPOTENCY_CONFLICT');
-  return taskReceipt(row);
+  const resolution=(await c.query('SELECT failure_code,message FROM research_task_failure_resolution WHERE task_id=$1',[row.id])).rows[0];
+  return taskReceipt(resolution?{...row,state:'failed',result:{success:false,error:{code:resolution.failure_code,message:resolution.message,details:{providerDispatched:false}}}}:row);
  });
 }
 export async function readResearchTask(scope:Scope,id:string){return withScope(scope,async c=>{
- const row=(await c.query(`SELECT t.*,COALESCE(f.state,t.state) AS state FROM research_task t LEFT JOIN research_task_readback_correction f ON f.task_id=t.id WHERE t.id=$1 AND user_id=$2`,[id,scope.userId])).rows[0];
+ const row=(await c.query(`SELECT t.*,CASE WHEN x.task_id IS NOT NULL THEN 'failed' ELSE COALESCE(f.state,t.state) END AS state,CASE WHEN x.task_id IS NOT NULL THEN jsonb_build_object('success',false,'error',jsonb_build_object('code',x.failure_code,'message',x.message,'details',jsonb_build_object('providerDispatched',false))) ELSE t.result END AS result FROM research_task t LEFT JOIN research_task_readback_correction f ON f.task_id=t.id LEFT JOIN research_task_failure_resolution x ON x.task_id=t.id WHERE t.id=$1 AND user_id=$2`,[id,scope.userId])).rows[0];
  if(!row)throw new Error('TASK_NOT_FOUND');
  if(scope.rootThreadId && row.principal.rootThreadId!==scope.rootThreadId)throw new Error('TASK_NOT_FOUND');
  const operations=await c.query(`SELECT operation_name,state,count(*)::int AS count FROM research_task_operation WHERE task_id=$1 GROUP BY operation_name,state`,[id]);
  const partial=await c.query(`SELECT DISTINCT result#>>'{payload,research_request_id}' AS research_request_id FROM research_task_operation
   WHERE task_id=$1 AND state='completed' AND result#>>'{payload,research_request_id}' IS NOT NULL`,[id]);
- const billing=(await c.query(`SELECT count(*)::int AS total,count(*) FILTER(WHERE state='completed')::int AS completed,
- count(*) FILTER(WHERE state IN ('pending','running'))::int AS pending,count(*) FILTER(WHERE state='attention_required')::int AS attention_required
- FROM research_settlement_outbox WHERE task_id=$1`,[id])).rows[0];
- return {...taskReceipt(row),progress:operations.rows,partial_results:partial.rows,
-  settlement:{...billing,state:billing.attention_required?'attention_required':billing.pending?'pending':billing.total?'completed':'not_enqueued'}};
+ const deliveries=await c.query(`SELECT CASE WHEN payload->>'kind' IN ('cancel_source','cancel_reservation') THEN 'cleanup' ELSE 'settlement' END AS kind,
+ count(*)::int AS total,count(*) FILTER(WHERE state='completed')::int AS completed,count(*) FILTER(WHERE state IN ('pending','running'))::int AS pending,
+ count(*) FILTER(WHERE state='attention_required')::int AS attention_required FROM research_settlement_outbox WHERE task_id=$1 GROUP BY 1`,[id]);
+ const delivery=(kind:string)=>{const item=deliveries.rows.find(r=>r.kind===kind)??{total:0,completed:0,pending:0,attention_required:0};return {...item,state:item.attention_required?'attention_required':item.pending?'pending':item.total?'completed':'not_enqueued'};};
+ return {...taskReceipt(row),progress:operations.rows,partial_results:partial.rows,settlement:delivery('settlement'),cleanup:delivery('cleanup')};
 });}
 export async function claimResearchTask(leaseId:string,issuedAt?:string){const r=await database.query(issuedAt?'SELECT * FROM claim_research_task_v2($1,$2)':'SELECT * FROM claim_research_task($1)',issuedAt?[leaseId,issuedAt]:[leaseId]);return {success:true,task:r.rows[0]??null};}
 export async function updateResearchTask(scope:Scope,input:JsonObject){return withScope(scope,async c=>{
@@ -45,7 +46,7 @@ export async function updateResearchTask(scope:Scope,input:JsonObject){return wi
  if(!row)throw new Error('TASK_LEASE_LOST');
  if(row.cancel_requested_at && !finalizing && !['heartbeat','finish'].includes(String(input.action)))throw new Error('TASK_CANCELLED');
  if(input.action==='heartbeat')await c.query(`UPDATE research_task SET lease_until=clock_timestamp()+INTERVAL '90 seconds',updated_at=clock_timestamp() WHERE id=$1`,[input.task_id]);
- else if(input.action==='finish')await c.query(`UPDATE research_task SET state=$2,result=$3::jsonb,approval=$4::jsonb,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1`,[input.task_id,input.state,JSON.stringify(input.result??{}),JSON.stringify(input.approval??null)]);
+ else if(input.action==='finish')await c.query(`UPDATE research_task SET state=$2,result=$3::jsonb,approval=$4::jsonb,last_error_code=$5,lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1`,[input.task_id,input.state,JSON.stringify(input.result??{}),JSON.stringify(input.approval??null),input.error_code??null]);
  else if(input.action==='wait'){await c.query(`UPDATE research_task SET state=CASE WHEN processing_wait_started_at<clock_timestamp()-INTERVAL '15 minutes' THEN 'reconciliation_required' ELSE 'queued' END,processing_wait_started_at=COALESCE(processing_wait_started_at,clock_timestamp()),lease_until=NULL,next_run_at=clock_timestamp()+INTERVAL '15 seconds',updated_at=clock_timestamp(),result=CASE WHEN processing_wait_started_at<clock_timestamp()-INTERVAL '15 minutes' THEN '{"success":false,"error":{"code":"PROCESSING_WAIT_TIMEOUT","message":"处理等待超过期限，请核对原任务结果，不要重新采集。"}}'::jsonb ELSE '{"success":false,"processing_state":"processing","message":"后台处理尚未完成，请按原任务编号查询。"}'::jsonb END WHERE id=$1`,[input.task_id]);}
  else if(input.action==='retry')await c.query(`UPDATE research_task SET state='queued',recovery_failures=recovery_failures+1,lease_until=NULL,next_run_at=clock_timestamp()+INTERVAL '15 seconds',updated_at=clock_timestamp() WHERE id=$1`,[input.task_id]);
  else {
@@ -63,8 +64,8 @@ export async function updateResearchTask(scope:Scope,input:JsonObject){return wi
 export async function manageResearchTask(scope:Scope,input:JsonObject):Promise<Record<string,any>>{
  if(input.action==='list')return withScope(scope,async c=>{
   const cursor=decodeTaskCursor(input.cursor),limit=Number(input.limit??20),legacy=cursor?.v===1;
-  const rows=await c.query(`SELECT t.*,COALESCE(f.state,t.state) AS state,to_char(t.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
-   FROM research_task t LEFT JOIN research_task_readback_correction f ON f.task_id=t.id WHERE user_id=$1
+  const rows=await c.query(`SELECT t.*,CASE WHEN x.task_id IS NOT NULL THEN 'failed' ELSE COALESCE(f.state,t.state) END AS state,to_char(t.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_created_at
+   FROM research_task t LEFT JOIN research_task_readback_correction f ON f.task_id=t.id LEFT JOIN research_task_failure_resolution x ON x.task_id=t.id WHERE user_id=$1
    AND ($2::uuid IS NULL OR ${legacy?'t.id<$2':'(t.created_at,t.id)<($5::timestamptz,$2::uuid)'})
    AND ($3::text IS NULL OR principal->>'rootThreadId'=$3)
    ORDER BY ${legacy?'t.id DESC':'t.created_at DESC,t.id DESC'} LIMIT $4`,[scope.userId,cursor?.id??null,scope.rootThreadId??null,limit+1,...(legacy?[]:[cursor?.v===2?cursor.created_at:null])]);

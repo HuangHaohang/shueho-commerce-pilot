@@ -1,6 +1,7 @@
+import {permanentResearchFailure} from '../integrations/research-failure.js';
 import {researchResultPending,researchResultTerminal,transientControlFailure} from '../integrations/research-lifecycle.js';
 import {ResearchRecoveryRequiredError,ResearchProcessingPendingError} from '../integrations/research-recovery-error.js';
-import {hashExternalDataParameters} from '../integrations/external-data-control-client.js';
+import {hashExternalDataParameters,ExternalDataControlError} from '../integrations/external-data-control-client.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash,randomUUID} from 'node:crypto';
 import type {ExternalDataServiceMcpClient} from '../integrations/external-data-service-mcp-client.js';
@@ -110,6 +111,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
      const e=error as {code?:string;status?:number};
      const provider=group==='upstream'&&['callEndpoint','executeDataRequestPlan'].includes(String(name));
      if(!provider && (!e.code || e.code==='CALL_FAILED'||e.code==='CONTROL_UNAVAILABLE'||(e.status??0)>=500))throw new ResearchRecoveryRequiredError();
+     if(group==='control'&&name==='reserve'&&error instanceof ExternalDataControlError)throw new ExternalDataControlError(error.message,error.code,error.status,{...error.details,providerDispatched:false,scope:'current_step'});
      throw error;
     }
    }
@@ -142,7 +144,9 @@ export function startResearchTaskWorker(upstream:ExternalDataServiceMcpClient,ex
    catch(error){
     if(error instanceof ResearchProcessingPendingError)processingPending=true;
     const code=(error as {code?:string;message?:string}).code??(error as Error).message;
+    const failure=permanentResearchFailure(error);
     if(code==='TASK_CANCELLED'){run.control.lost=true;}
+    else if(failure){const currentTask=await getTask(upstream,task!.principal,task!.id);response={payload:{...failure,partial_results:currentTask.partial_results??[]}};}
     else run.control.recover=true;
    }
    finally{clearInterval(heartbeat);}
@@ -151,7 +155,7 @@ export function startResearchTaskWorker(upstream:ExternalDataServiceMcpClient,ex
    if(run.control.recover && (task.recovery_failures??0)<4){await upstream.taskOperation('update_research_task',{...base,action:'retry'});return;}
    const payload=response?.structuredContent ?? response?.payload ?? {success:false,error:{code:'TASK_RECONCILIATION_REQUIRED',message:'任务执行中断，保留原任务及调用记录待对账。'}};
    const state=run.control.recover?'reconciliation_required':researchTaskOutcome(payload);
-   await upstream.taskOperation('update_research_task',{...base,action:'finish',state,result:payload,...(state==='waiting_approval'?{approval:payload.error?.details??{}}:{})});
+   await upstream.taskOperation('update_research_task',{...base,action:'finish',state,result:payload,error_code:payload.error?.code,...(state==='waiting_approval'?{approval:payload.error?.details??{}}:{})});
   }catch{idle.observed(false);console.error(JSON.stringify({event:'research_task_worker_retry',task_id:task?.id??null}));}
   finally{active--;}
  };

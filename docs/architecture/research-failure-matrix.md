@@ -41,3 +41,5 @@ Contract 11 acceptance exercises the real research entrypoint through financial 
 Nonterminal provider acknowledgements (executing/running/queued/processing) never mark a task completed; the worker reconciles the original checkpoint within its existing bounded recovery policy.
 
 Lifecycle acceptance covers every actual SQL intermediate state as well as transport acknowledgements. All hold settlement until a terminal result, preserve the original checkpoint and refresh only the original request. Transient admission 503 leaves no supplier checkpoint; explicit denial remains terminal. Processing waits exceed five polls without consuming fault retries, then safely time out after the persisted 15-minute deadline.
+
+Quota-refusal acceptance verifies one terminal failure with the original governance code, no provider dispatch, separate cleanup/settlement readback, append-only corrections grounded in denial audits, and more than 100 DB-only reservations with the money cap still enforced.

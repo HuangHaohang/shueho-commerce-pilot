@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';import {Pool} from 'pg';import {describe,it,expect,beforeAll,afterAll} from 'vitest';
 import {config} from './config.js';import {database} from './database.js';import {readTaskRecords,readResearchRecords,readRecordPage} from './research-records.js';
 import {enqueueSettlement,claimSettlement,finishSettlement} from './research-settlements.js';
-import {submitResearchTask,manageResearchTask} from './research-tasks.js';
+import {submitResearchTask,manageResearchTask,readResearchTask} from './research-tasks.js';
 const ci=process.env.GITHUB_ACTIONS==='true'&&process.env.NODE_ENV==='test';
 const url=process.env.JUSTONEAPI_TEST_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_DATABASE_URL:undefined);
 const ownerUrl=process.env.JUSTONEAPI_TEST_MIGRATION_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_MIGRATION_DATABASE_URL:undefined);
@@ -79,4 +79,17 @@ describe.skipIf(!url||!ownerUrl)('record snapshots and settlement recovery',()=>
   do{const result=await readRecordPage(scope,{research_request_id:id,offset:0,limit:100,cursor});for(const r of result.records){expect(seen.has(r.fields.id)).toBe(false);seen.add(r.fields.id);}cursor=result.next_cursor??undefined;}while(cursor);
   expect(seen.size).toBe(10050);expect(seen.has(10049)).toBe(true);
  },30000);
+ it('resolved no-dispatch failures retain original task evidence and separate cleanup from settlement',async()=>{
+  const id=randomUUID();await owner.query('BEGIN');try{
+   await owner.query(`INSERT INTO research_task(id,tenant_id,workspace_id,user_id,source,idempotency_key,input_hash,kind,inputs,principal,state)
+    VALUES($1,$2,$3,$4,'external_mcp',$5,'fixture','social','{}',$6::jsonb,'reconciliation_required')`,[id,scope.tenantId,scope.workspaceId,scope.userId,randomUUID(),JSON.stringify(scope)]);
+   await owner.query(`INSERT INTO research_task_operation(task_id,operation_key,input_hash,operation_name,state,operation_context) VALUES($1,'reserve','fixture','control.reserve','started',$2::jsonb)`,[id,JSON.stringify({source:'external_mcp',callId:'fixture_'+randomUUID().replaceAll('-','')})]);
+   await owner.query(`UPDATE research_settlement_outbox SET state='completed' WHERE task_id=$1`,[id]);
+   await owner.query(`INSERT INTO research_task_failure_resolution(task_id,failure_code,message,evidence) VALUES($1,'EXTERNAL_DATA_CALL_LIMIT','Limit reached','{}')`,[id]);await owner.query('COMMIT');
+  }catch(e){await owner.query('ROLLBACK');throw e;}
+  const receipt=await readResearchTask(scope,id);expect(receipt.state).toBe('failed');expect(receipt.result.error.code).toBe('EXTERNAL_DATA_CALL_LIMIT');expect(receipt.settlement.total).toBe(0);expect(receipt.cleanup.state).toBe('completed');
+  expect((await owner.query('SELECT state FROM research_task WHERE id=$1',[id])).rows[0].state).toBe('reconciliation_required');
+  await expect(owner.query(`INSERT INTO research_task_failure_resolution(task_id,failure_code,message,evidence) VALUES($1,'EXTERNAL_DATA_CALL_LIMIT','Bad proof','{}')`,[task])).rejects.toThrow('NON_DISPATCH_NOT_PROVEN');
+ });
+
 });

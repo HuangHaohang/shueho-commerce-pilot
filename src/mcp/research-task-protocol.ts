@@ -15,7 +15,7 @@ export function mcpTaskView(value:Record<string,any>):McpTask {
 }
 export function taskResultPayload(task:Record<string,any>){
  const failed=['partial','failed','reconciliation_required','cancelled'].includes(task.state);
- const result={...task.result,task_id:task.task_id,state:task.state,settlement:task.settlement};
+ const result={...task.result,task_id:task.task_id,state:task.state,settlement:task.settlement,cleanup:task.cleanup};
  if(failed){result.success=false;if(task.state==='cancelled')result.error={code:'TASK_CANCELLED',message:'任务已取消，已完成的结果与结算记录仍保留。'};}
  return result;
 }

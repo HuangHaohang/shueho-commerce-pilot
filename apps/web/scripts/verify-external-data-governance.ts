@@ -389,6 +389,16 @@ try {
     "thread deletion cascaded into the independent external-data archive",
   );
 
+  const unlimitedPolicy=await updateExternalDataPolicy(context,{...(await getExternalDataGovernance(context)).policy,approvalMode:'policy',monthlyCallLimit:null,monthlySpendLimitMicros:500_000_000,perCallAutoApprovalMicros:null,perTurnCallLimit:null});
+  assert(unlimitedPolicy.monthlyCallLimit===null,'unlimited monthly call count was not retained');
+  const detachedScope={...scope,rootThreadId:null};
+  for(let n=0;n<101;n++)await reserveExternalDataCall(detachedScope,{source:'external_mcp',callId:`unlimited-${suffix}-${n}`,endpointId:'taobao.policy_v1',platform:'taobao',parameterHash:'90'.repeat(32),parameterKeys:['item_id'],requestedApprovalMode:'policy'});
+  const unlimitedQuote=await quoteExternalDataPlan(detachedScope,{planId:randomUUID(),planKey:'a'.repeat(64),source:'external_mcp',calls:[{endpointId:'taobao.policy_v1',platform:'taobao',count:1}]});
+  assert(unlimitedQuote.monthlyCallLimit===null && unlimitedQuote.callsUsed>100,'a hidden 100-call limit remains');
+  await updateExternalDataPolicy(context,{...unlimitedPolicy,monthlySpendLimitMicros:1});
+  let moneyDenied=false;try{await reserveExternalDataCall(detachedScope,{source:'external_mcp',callId:`unlimited-over-budget-${suffix}`,endpointId:'taobao.policy_v1',platform:'taobao',parameterHash:'90'.repeat(32),parameterKeys:['item_id'],requestedApprovalMode:'policy'});}catch(error){moneyDenied=(error as {code?:string}).code==='EXTERNAL_DATA_SPEND_LIMIT';}
+  assert(moneyDenied,'unlimited call count bypassed the monetary budget');
+
   console.log(JSON.stringify({
     ok: true,
     stateMachine: "reserve-approve-dispatch-settle",
@@ -396,6 +406,7 @@ try {
     planStepLineageReadback: true,
     pricedPolicyReadback: true,
     monthlyBudgetOnlyAutomation: true,
+    over100CallsWithMonetaryLimit: true,
     concurrentBudgetReservation: true,
     reservedBudgetQuoteReadback: true,
     unsentCancellationReleasesBudget: true,

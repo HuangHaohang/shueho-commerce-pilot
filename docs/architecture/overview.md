@@ -203,3 +203,5 @@ The research recovery patch keeps all agent lifecycle, native questions and perm
 Contract 11 is a commerce-tool reliability change, not an agent-runtime change. Codex Harness retains conversations, tools, native questions and permissions. Business recovery errors now propagate across tool handlers to the durable worker; terminal business failures remain distinct. Cancellation persists in the task store before asynchronous financial cleanup, and internal MCP success receipts are verified.
 
 The lifecycle correction keeps orchestration of the Agent in Codex Harness. Shared commerce lifecycle classification feeds worker outcomes and monetary settlement; normal processing waits and infrastructure recovery are durable backend concerns. No custom agent loop or fabricated Harness request is introduced.
+
+Quota refusal handling remains application-owned around Codex Harness. Known business refusals are terminal errors, not transport uncertainty; cleanup acknowledgements are distinct from financial settlement. Money-only monthly policy preserves budget reservation and live permission enforcement.

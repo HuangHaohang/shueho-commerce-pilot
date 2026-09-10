@@ -26,7 +26,7 @@ export type ExternalDataPolicyView = {
   approvalMode: ExternalDataApprovalMode;
   allowedPlatforms: string[];
   allowedEndpointIds: string[];
-  monthlyCallLimit: number;
+  monthlyCallLimit: number | null;
   monthlySpendLimitMicros: number | null;
   perCallAutoApprovalMicros: number | null;
   perTurnCallLimit: number | null;
@@ -125,7 +125,7 @@ export type ExternalDataReservation = {
   currency: string;
   vendorCostMicros: number | null;
   billableAmountMicros: number | null;
-  monthlyCallLimit: number;
+  monthlyCallLimit: number | null;
   callsUsed: number;
   monthlySpendLimitMicros: number | null;
   spendUsedMicros: number;
@@ -142,7 +142,7 @@ export type ExternalDataPlanQuote = {
   vendorCostMicros: number | null;
   billableAmountMicros: number | null;
   unpricedEndpointIds: string[];
-  monthlyCallLimit: number;
+  monthlyCallLimit: number | null;
   callsUsed: number;
   monthlySpendLimitMicros: number | null;
   spendUsedMicros: number;
@@ -164,7 +164,7 @@ type PolicyRow = {
   approval_mode: ExternalDataApprovalMode;
   allowed_platforms: string[];
   allowed_endpoint_ids: string[];
-  monthly_call_limit: number;
+  monthly_call_limit: number | null;
   monthly_spend_limit_micros: string | number | null;
   per_call_auto_approval_micros: string | number | null;
   per_turn_call_limit: number | null;
@@ -250,7 +250,7 @@ export async function quoteExternalDataPlan(
     }
     const providerCallCount = input.calls.reduce((sum, call) => sum + call.count, 0);
     const usage = await readPeriodUsage(client, scope, policy);
-    if (usage.callsUsed + providerCallCount > policy.monthly_call_limit) {
+    if (policy.monthly_call_limit !== null && usage.callsUsed + providerCallCount > policy.monthly_call_limit) {
       throw new ExternalDataGovernanceError("当前计划超过本计费周期剩余调用额度。", "EXTERNAL_DATA_CALL_LIMIT", 429, {
         providerCallCount,monthlyCallsRemaining: Math.max(0,policy.monthly_call_limit - usage.callsUsed),
         ...recommendedSampleDetails(input.calls,Math.max(0,policy.monthly_call_limit - usage.callsUsed)),
@@ -709,7 +709,7 @@ export async function reserveExternalDataCall(
 
     const rateCard = await readEffectiveRate(client, scope, input.endpointId);
     const usage = await readPeriodUsage(client, scope, policy);
-    if (usage.callsUsed >= policy.monthly_call_limit) {
+    if (policy.monthly_call_limit !== null && usage.callsUsed >= policy.monthly_call_limit) {
       throw new ExternalDataGovernanceError("本计费周期的外部数据调用额度已用尽。", "EXTERNAL_DATA_CALL_LIMIT", 429);
     }
     if (input.source === "codex_harness" && policy.per_turn_call_limit !== null) {
@@ -957,7 +957,7 @@ export async function revalidateExternalDataCall(scope: ExternalDataCallScope, r
       throw new ExternalDataGovernanceError('当前策略需要重新批准。','EXTERNAL_DATA_APPROVAL_CHANGED',403);
     }
     const usage=await readPeriodUsage(client,scope,policy);
-    if(usage.callsUsed>policy.monthly_call_limit || policy.monthly_spend_limit_micros!==null && usage.spendUsedMicros>Number(policy.monthly_spend_limit_micros)) {
+    if(policy.monthly_call_limit!==null && usage.callsUsed>policy.monthly_call_limit || policy.monthly_spend_limit_micros!==null && usage.spendUsedMicros>Number(policy.monthly_spend_limit_micros)) {
       throw new ExternalDataGovernanceError('当前预算已不足。','EXTERNAL_DATA_BUDGET_EXCEEDED',429);
     }
     return {state:row.state,approvalState:row.approval_state,endpointId:row.endpoint_id,

@@ -18,7 +18,7 @@ export type ExternalDataReservation = {
   currency: string;
   vendorCostMicros: number | null;
   billableAmountMicros: number | null;
-  monthlyCallLimit: number;
+  monthlyCallLimit: number | null;
   callsUsed: number;
   monthlySpendLimitMicros: number | null;
   spendUsedMicros: number;
@@ -40,7 +40,7 @@ export type ExternalDataPlanQuote = {
   vendorCostMicros: number | null;
   billableAmountMicros: number | null;
   unpricedEndpointIds: string[];
-  monthlyCallLimit: number;
+  monthlyCallLimit: number | null;
   callsUsed: number;
   monthlySpendLimitMicros: number | null;
   spendUsedMicros: number;
@@ -143,7 +143,7 @@ export class ExternalDataControlClient {
       vendorCostMicros: readNullableNumber(quote.vendorCostMicros),
       billableAmountMicros: readNullableNumber(quote.billableAmountMicros),
       unpricedEndpointIds: readStringArray(quote.unpricedEndpointIds),
-      monthlyCallLimit: readNumber(quote.monthlyCallLimit),
+      monthlyCallLimit: readNullableNumber(quote.monthlyCallLimit),
       callsUsed: readNumber(quote.callsUsed),
       monthlySpendLimitMicros: readNullableNumber(quote.monthlySpendLimitMicros),
       spendUsedMicros: readNumber(quote.spendUsedMicros),
@@ -353,7 +353,7 @@ function readReservation(value: Record<string, unknown>): ExternalDataReservatio
     currency: typeof value.currency === "string" ? value.currency : "CNY",
     vendorCostMicros: readNullableNumber(value.vendorCostMicros),
     billableAmountMicros: readNullableNumber(value.billableAmountMicros),
-    monthlyCallLimit: readNumber(value.monthlyCallLimit),
+    monthlyCallLimit: readNullableNumber(value.monthlyCallLimit),
     callsUsed: readNumber(value.callsUsed),
     monthlySpendLimitMicros: readNullableNumber(value.monthlySpendLimitMicros),
     spendUsedMicros: readNumber(value.spendUsedMicros),

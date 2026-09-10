@@ -373,3 +373,5 @@ Research recovery patch: record projection v2 preserves source-record identity a
 Contract 11 closes recovery propagation through the complete research service, requires successful durable RPC receipts, persists cancellation before financial cleanup, reports native terminal errors consistently and lists recent tasks with opaque timestamp cursors. Agent runtime ownership remains with Codex Harness.
 
 Research lifecycle correction unifies persisted warehouse states and transport acknowledgements. Intermediate results hold budget, refresh the original request and append a terminal checkpoint; admission 503 errors do not create a possible-dispatch checkpoint. Processing waits are separate from bounded infrastructure retries. Codex Harness remains the agent runtime.
+
+Governance call-count limits may be null when a finite monthly money budget is retained. Deterministic 4xx governance refusals finish with their original error instead of retrying into reconciliation. Task readback distinguishes financial settlement from cancellation cleanup, and audited non-dispatch failure corrections preserve original receipts.

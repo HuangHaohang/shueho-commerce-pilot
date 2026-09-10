@@ -26,7 +26,7 @@ type GovernanceResponse = {
     approvalMode: ApprovalMode;
     allowedPlatforms: string[];
     allowedEndpointIds: string[];
-    monthlyCallLimit: number;
+    monthlyCallLimit: number | null;
     monthlySpendLimitMicros: number | null;
     perCallAutoApprovalMicros: number | null;
     perTurnCallLimit: number | null;
@@ -113,7 +113,7 @@ type RuntimeHealthResponse = {
 const approvalOptions: Array<{ value: ApprovalMode; label: string; description: string }> = [
   { value: "always_ask", label: "每次询问", description: "每个收费调用都等待用户确认" },
   { value: "task", label: "允许任务授权", description: "用户可为当前任务预先授权" },
-  { value: "policy", label: "企业策略自动调用", description: "按费率和单次上限自动批准" },
+  { value: "policy", label: "企业策略自动调用", description: "按费率与企业预算自动批准" },
 ];
 
 const fieldClassName =
@@ -427,8 +427,9 @@ export function ExternalDataGovernance({ permissions }: { permissions: string[] 
                 className={fieldClassName}
                 min={1}
                 max={1_000_000}
-                value={policy.monthlyCallLimit}
-                onChange={(event) => setPolicy({ ...policy, monthlyCallLimit: Math.max(1, Number(event.target.value) || 1) })}
+                placeholder="不限次数"
+                value={policy.monthlyCallLimit ?? ""}
+                onChange={(event) => setPolicy({ ...policy, monthlyCallLimit: event.target.value === "" ? null : Math.max(1, Number(event.target.value) || 1) })}
               />
             </LabeledInput>
             <LabeledInput label="每月金额预算（元）">

@@ -258,3 +258,11 @@ An original RPC checkpoint may contain an intermediate acknowledgement. Recovery
 Lease-fenced read_operation inspects a checkpoint without inserting one. New supplier steps revalidate governance before recording possible dispatch; transient CONTROL_UNAVAILABLE/5xx failures therefore remain safely recoverable, while explicit authorization/policy denials receive a permanent not-dispatched receipt. Existing started supplier checkpoints always recover stored results and never resend.
 
 Migration 042 separates recovery_failures from claim attempts and adds processing_wait_started_at. The worker queues normal waits every 15 seconds without consuming its five-failure recovery budget. A wait lasting 15 minutes transitions to reconciliation_required with PROCESSING_WAIT_TIMEOUT; no automatic recollection or budget release of dispatched calls occurs. A completed terminal checkpoint ends that wait episode. Historical terminal tasks and old erroneous settlements are not automatically replayed or rewritten by this release.
+
+### Deterministic governance refusals
+
+A control-service 4xx refusal such as EXTERNAL_DATA_CALL_LIMIT must finish the durable task once with that error code and retain available partial results. Reservation-stage refusals carry providerDispatched=false for the current step. last_error_code is persisted for diagnosis; retrying a known exhausted monthly quota is not recovery.
+
+Task settlement counts include only financial settlement deliveries; cancel_source/cancel_reservation deliveries appear separately as cleanup. Migration 043 supports append-only, owner-inserted failure resolutions backed by governance audit receipts. Its database proof trigger rejects resolutions if supplier operations, control dispatch or a matching warehouse request exist. Original terminal task rows are never rewritten or automatically restarted.
+
+Control migration 050 allows monthly_call_limit=null while requiring a finite monthly count or amount cap. The API, UI, reservation/quote/live-revalidation paths and MCP control client preserve null. Provider Token endpoint quotas remain independent and unchanged.
