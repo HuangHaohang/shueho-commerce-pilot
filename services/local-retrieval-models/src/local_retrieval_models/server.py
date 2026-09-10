@@ -66,7 +66,7 @@ class RerankRequest(BaseModel):
     documents: list[str]
     top_n: int | None = Field(default=None, ge=1, le=MAX_RERANK_DOCUMENTS)
     instruction: str = Field(
-        default="Determine whether multilingual e-commerce evidence matches the requested target product across languages and requested market metrics.",
+        default="Determine whether the document is relevant to the query topic. Judge semantic scope only, independently of dates, metrics and report requirements.",
         min_length=1,
         max_length=500,
     )
@@ -143,6 +143,7 @@ class ModelRuntime:
                 pairs,
                 batch_size=RERANK_INFERENCE_BATCH_SIZE,
                 activation_fn=torch.nn.Sigmoid(),
+                prompt=instruction,
                 show_progress_bar=False,
             )
         scores = np.asarray(values, dtype=np.float32).reshape(-1)

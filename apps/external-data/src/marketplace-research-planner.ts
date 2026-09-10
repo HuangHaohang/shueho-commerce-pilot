@@ -19,6 +19,7 @@ export type MarketplaceResearchMetric = "price_band" | "sales_level" | "brand_co
 export type MarketplaceResearchRequest = {
   platform: string;
   keyword: string;
+  semanticScope?: { include: string[]; exclude: string[] };
   localizedKeyword: string | null;
   localizedKeywords?: string[];
   market: string | null;
@@ -131,6 +132,7 @@ export function selectMarketplaceProductResearchPlan(
     kind: "marketplace_product_research",
     platform: request.platform,
     target_product: request.keyword,
+    ...(request.semanticScope ? { semantic_scope: request.semanticScope } : {}),
     objective: "product_details_by_keyword",
     requested_metrics: request.requestedMetrics,
     time_range: null,

@@ -44,7 +44,7 @@ export class LocalModelClient {
     const response = await this.post("/v1/rerank", {
       query,
       documents,
-      instruction: "Determine whether each multilingual e-commerce record matches the target product across languages and supports the requested market metrics. Treat equivalent local-market terms and translations as matches. Reject cross-category contamination.",
+      instruction: "Determine whether the document is relevant to the query topic and satisfies its explicit semantic inclusions and exclusions. Treat equivalent terms across languages as matches. Judge topical relevance only; do not require the document to answer a research task or report dates, counts, prices, sales, or other metrics.",
     });
     if (!Array.isArray(response.results)) throw new LocalModelError("Local reranker response is invalid.", "INVALID_RESPONSE");
     const scores = new Array<number>(documents.length).fill(Number.NaN);

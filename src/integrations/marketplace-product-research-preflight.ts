@@ -3,6 +3,7 @@ import type { ExternalDataServiceMcpClient } from "./external-data-service-mcp-c
 export type MarketplaceProductResearchInput = {
   platform: string;
   keyword: string;
+  semantic_scope?: { include: string[]; exclude: string[] };
   localized_keyword: string | null;
   market: string | null;
   tmall_only: boolean;

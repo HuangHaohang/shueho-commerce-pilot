@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { enrichCandidates, buildEnrichmentQueryText } from "./enrichment.js";
+import { enrichCandidates, buildEnrichmentQueryText, buildEnrichmentQueries } from "./enrichment.js";
 import type { LocalModelClient } from "./local-model-client.js";
 
 describe("AI enrichment promotion", () => {
@@ -22,22 +22,20 @@ describe("AI enrichment promotion", () => {
     expect(result.decisions[2]?.decision).toBe("promote");
   });
 
-  it("uses only the immutable user scope and never injects category exclusions", () => {
-    for (const [target, request] of [
-      ["砂锅", "研究砂锅"], ["电脑", "研究适合户外携带的电脑，包括二合一设备"],
-      ["双肩包", "研究双肩包，排除真皮，不排除电脑夹层"],
-    ]) {
-      const query = buildEnrichmentQueryText("untrusted replacement request", {
-        platform: "jd", targetProduct: target!, originalRequest: request!, metrics: ["sales_level"],
-        expectedCategories: [target!], excludedCategories: [], currency: "CNY", requestedTopN: 10,
-      });
-      expect(query).toContain(request);
-      expect(query).not.toContain("untrusted replacement");
-      expect(query).not.toContain("研究范围排除：");
-      expect(query).not.toContain("需要支持的指标：");
-      expect(query).not.toContain("电炖锅");
-      expect(query).not.toContain("煎药");
+  it("keeps structured semantic constraints but never turns report requirements into search terms", () => {
+    const intent = {
+      platform: "fixture", targetProduct: "双肩包", originalRequest: "调研双肩包，最近30天，价格销量TOP50",
+      metrics: ["sales_level"], expectedCategories: ["双肩包", "轻量通勤"], excludedCategories: ["真皮"],
+      currency: "CNY", requestedTopN: 50,
+    };
+    const queries = buildEnrichmentQueries(intent);
+    expect(queries).toContain("双肩包\nRequired scope: 轻量通勤");
+    for (const query of queries) {
+      expect(query).not.toMatch(/最近|30天|价格|销量|TOP|研究范围|等价检索词/);
+      expect(query).not.toContain("真皮"); // evaluated as a separate positive exclusion query
     }
+    expect(buildEnrichmentQueryText("untrusted replacement", intent)).toBe(queries[0]);
+    expect(buildEnrichmentQueries({...intent, targetProduct:null, expectedCategories:[], excludedCategories:[]})).toEqual([]);
   });
 
   it("holds unsupported scope across categories without deleting valid source data", async () => {
@@ -136,7 +134,7 @@ describe("AI enrichment promotion", () => {
       }],
       models,
     });
-    expect(observedQuery).toContain("目标市场当地语言");
+    expect(observedQuery).not.toContain("目标市场当地语言");
     expect(result.decisions[0]?.decision).toBe("promote");
     expect(result.decisions[0]?.reasonCodes).toContain("MODEL_SCOPE_SUPPORTED");
   });
@@ -191,4 +189,19 @@ describe("AI enrichment promotion", () => {
     expect(result.decisions[0]?.entityMatch).not.toBe("irrelevant");
     expect(result.decisions[0]?.reasonCodes).toContain("SCOPE_UNCONFIRMED");
   });
+});
+
+it("never manufactures a passing pair from two different language variants", async () => {
+  const models = {
+    embed: async (_texts: string[], type: string) => type === "query" ? [[1, 0], [0, 1]] : [[1, 0]],
+    rerank: async (query: string) => [query === "target" ? 0.01 : 0.99],
+  } as unknown as LocalModelClient;
+  const result = await enrichCandidates({ requestText: "target", intent: {
+    platform: "fixture", targetProduct: "target", localizedKeyword: "translated", metrics: [], expectedCategories: [],
+    excludedCategories: [], currency: null, requestedTopN: 1, originalRequest: "target",
+  }, models, candidates: [{
+    entityType: "generic_record", entityId: "pair", sourceJsonPointer: "/data/0", content: "target",
+    quality: { status: "valid", reasons: [], normalizedValue: "target" }, supportsPrice: false, supportsSales: false, metadata: {},
+  }] });
+  expect(result.decisions[0]?.decision).toBe("hold");
 });

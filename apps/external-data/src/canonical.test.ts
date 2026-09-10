@@ -39,3 +39,22 @@ describe("stable external-data identities", () => {
     expect(canonicalJson({ z: 1, a: { y: 2, b: 3 } })).toBe('{"a":{"b":3,"y":2},"z":1}');
   });
 });
+
+it("pins explicit semantic restrictions separately from report wording", () => {
+  const base = {
+    endpointId: "fixture.search", schemaVersion: "v1", platform: "fixture", topN: 20,
+    requestText: "研究通勤双肩包近30天互动TOP20，不要真皮", params: {keyword:"双肩包"},
+    businessIntent: {
+      kind:"social_content_research",platform:"fixture",targetProduct:"双肩包",objective:"interaction_ranked",
+      requestedMetrics:["likes"],timeRange:null,windowEnforcement:null,requestedTopN:20,
+      semanticScope:{include:["通勤"],exclude:["真皮"]},
+    },
+  };
+  const first=buildQueryIdentity(base);
+  expect(first.intent.expectedCategories).toEqual(["双肩包","通勤"]);
+  expect(first.intent.excludedCategories).toEqual(["真皮"]);
+  const changed=buildQueryIdentity({...base,businessIntent:{...base.businessIntent,semanticScope:{include:["通勤"],exclude:[]}}});
+  expect(changed.intentKey).not.toBe(first.intentKey);
+  const paraphrase=buildQueryIdentity({...base,requestText:"请给出点赞排行和缺失字段"});
+  expect(paraphrase.intentKey).toBe(first.intentKey);
+});

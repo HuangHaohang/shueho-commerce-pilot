@@ -6,7 +6,7 @@ import {
   type TaskCategory,
 } from "@/lib/agent/task-category";
 
-export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 11;
+export const CURRENT_AGENT_TOOL_CONTRACT_VERSION = 12;
 export const SUPPORTED_AGENT_TOOL_CONTRACT_VERSIONS = new Set([CURRENT_AGENT_TOOL_CONTRACT_VERSION]);
 
 export function isSupportedAgentToolContractVersion(version: number): boolean {

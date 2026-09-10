@@ -18,15 +18,18 @@ export async function enrichCandidates(input: {
     ...(input.intent.localizedKeywords ?? []),
     ...(input.additionalQueryTerms ?? []),
   ]);
-  const queryText = buildEnrichmentQueryText(input.requestText, input.intent, queryTerms);
+  const queries = buildEnrichmentQueries(input.intent, queryTerms);
   const eligible = input.candidates.filter((candidate) => candidate.quality.status !== "rejected" && candidate.content.trim());
   const embeddings = new Map<string, number[]>();
-  const embeddingScores = new Map<string, number>();
-  const rerankScores = new Map<string, number>();
+  const excludedMatches = new Set<string>();
+  const scopeVectors = new Map<string, number[]>();
+  const variantScores = new Map<string, Array<{ embedding: number; rerank: number }>>();
+  const embeddingMinScore = policyNumber(input.intent.qualityPolicy?.embeddingMinScore, config.localModels.embeddingMinScore);
+  const rerankMinScore = policyNumber(input.intent.qualityPolicy?.rerankMinScore, config.localModels.rerankMinScore);
 
-  if (eligible.length) {
-    const queryEmbedding = (await input.models.embed([queryText], "query"))[0];
-    if (!queryEmbedding) throw new Error("Local embedding model returned no query embedding.");
+  if (eligible.length && queries.length) {
+    const queryEmbeddings = await input.models.embed(queries, "query");
+    if (queryEmbeddings.length !== queries.length) throw new Error("Local query embedding batch is incomplete.");
     for (const batch of batches(eligible, 64)) {
       const vectors = await input.models.embed(batch.map(scopeDocument), "document");
       for (let index = 0; index < batch.length; index += 1) {
@@ -34,7 +37,7 @@ export async function enrichCandidates(input: {
         const vector = vectors[index];
         if (!candidate || !vector) throw new Error("Local embedding batch response is incomplete.");
         embeddings.set(candidate.entityId, vector);
-        embeddingScores.set(candidate.entityId, cosine(queryEmbedding, vector));
+        scopeVectors.set(candidate.entityId, vector);
       }
       // Retrieval vectors must still correspond to the complete stored content.
       // Scope admission uses descriptive text so metric presence cannot change it.
@@ -49,14 +52,30 @@ export async function enrichCandidates(input: {
         }
       }
     }
-    for (const batch of batches(eligible, 50)) {
-      const scores = await input.models.rerank(queryText, batch.map(scopeDocument));
-      for (let index = 0; index < batch.length; index += 1) {
-        const candidate = batch[index];
-        const score = scores[index];
-        if (!candidate || score === undefined) throw new Error("Local reranker batch response is incomplete.");
-        rerankScores.set(candidate.entityId, score);
+    for (let variant = 0; variant < queries.length; variant += 1) {
+      for (const batch of batches(eligible, 50)) {
+        const scores = await input.models.rerank(queries[variant]!, batch.map(scopeDocument));
+        for (let index = 0; index < batch.length; index += 1) {
+          const candidate = batch[index];
+          const score = scores[index];
+          if (!candidate || score === undefined) throw new Error("Local reranker batch response is incomplete.");
+          const pairs = variantScores.get(candidate.entityId) ?? [];
+          pairs.push({ embedding: cosine(queryEmbeddings[variant]!, scopeVectors.get(candidate.entityId)!), rerank: score });
+          variantScores.set(candidate.entityId, pairs);
+        }
       }
+    }
+  }
+
+  // Exclusions are positive classification questions of their own, not negated
+  // terms inside a retrieval query (which can score the excluded material highly).
+  for (const exclusion of queries.length ? expandMultilingualQueryTerms(input.intent.excludedCategories) : []) {
+    for (const batch of batches(eligible, 50)) {
+      const scores = await input.models.rerank(exclusion, batch.map(scopeDocument));
+      if (scores.length !== batch.length) throw new Error("Local exclusion batch is incomplete.");
+      batch.forEach((candidate, index) => {
+        if (scores[index]! >= rerankMinScore) excludedMatches.add(candidate.entityId);
+      });
     }
   }
 
@@ -66,24 +85,24 @@ export async function enrichCandidates(input: {
       : candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value"
       ? candidate.quality.normalizedValue ?? ""
       : candidate.content;
-    const lexicalScore = lexicalRelevanceMany(queryTerms, input.requestText, lexicalDocument);
-    const embeddingScore = embeddingScores.get(candidate.entityId) ?? null;
-    const rerankScore = rerankScores.get(candidate.entityId) ?? null;
-    const semanticScore = embeddingScore === null ? 0 : clamp((embeddingScore + 1) / 2);
-    const relevanceScore = clamp((lexicalScore * 0.25) + (semanticScore * 0.25) + ((rerankScore ?? 0) * 0.5));
+    const lexicalScore = lexicalRelevanceMany(queryTerms, "", lexicalDocument);
+    const supported = (pair: { embedding: number; rerank: number }) =>
+      pair.rerank >= rerankMinScore && pair.embedding >= embeddingMinScore;
+    // Both gates must pass on the SAME query variant; never combine unrelated maxima.
+    const pairs = variantScores.get(candidate.entityId) ?? [];
+    const best = [...pairs].sort((a, b) => Number(supported(b)) - Number(supported(a)) || b.rerank - a.rerank)[0];
+    const embeddingScore = best?.embedding ?? null;
+    const rerankScore = best?.rerank ?? null;
+    const relevanceScore = rerankScore ?? 0;
     const zeroCount = (candidate.entityType === "taobao_brand" || candidate.entityType === "taobao_property_value") &&
       typeof candidate.metadata.itemCount === "number" && candidate.metadata.itemCount <= 0;
     const metrics = candidateMetricAssessment(candidate);
-    const embeddingMinScore = policyNumber(input.intent.qualityPolicy?.embeddingMinScore, config.localModels.embeddingMinScore);
-    const rerankMinScore = policyNumber(input.intent.qualityPolicy?.rerankMinScore, config.localModels.rerankMinScore);
-    const lexicalPromoteMinScore = policyNumber(input.intent.qualityPolicy?.lexicalPromoteMinScore, 0.6);
-    // Admission does not use the weighted rank. A lexical hit cannot bypass the reranker.
-    const modelSupported = (rerankScore ?? 0) >= rerankMinScore &&
-      ((embeddingScore ?? -1) >= embeddingMinScore ||
-        (lexicalScore >= lexicalPromoteMinScore && (embeddingScore ?? -1) >= embeddingMinScore - 0.08));
+    const modelSupported = best !== undefined && supported(best);
     const reasons = new Set(candidate.quality.reasons);
     if (lexicalScore >= 0.999) reasons.add("LEXICAL_TARGET_MENTION");
-    reasons.add(modelSupported ? "MODEL_SCOPE_SUPPORTED" : "SCOPE_UNCONFIRMED");
+    if (candidate.quality.status !== "rejected") reasons.add(modelSupported ? "MODEL_SCOPE_SUPPORTED" : "SCOPE_UNCONFIRMED");
+    if (!queries.length) reasons.add("SEMANTIC_SCOPE_MISSING");
+    if (excludedMatches.has(candidate.entityId)) reasons.add("EXCLUDED_SCOPE_MATCH");
     if (zeroCount) reasons.add("ZERO_PROVIDER_COUNT");
     if (metrics.price.status === "available") reasons.add("SUPPORTS_PRICE_ANALYSIS");
     if (metrics.sales.status === "available") reasons.add("SUPPORTS_SALES_ANALYSIS");
@@ -91,7 +110,7 @@ export async function enrichCandidates(input: {
     if (product && metrics.sales.status !== "available") reasons.add(String(metrics.sales.reason));
 
     const decision = candidate.quality.status === "rejected" ? "reject"
-      : candidate.quality.status === "suspicious" || zeroCount || !modelSupported ? "hold" : "promote";
+      : candidate.quality.status === "suspicious" || zeroCount || !modelSupported || excludedMatches.has(candidate.entityId) ? "hold" : "promote";
     // The legacy numeric column is not a calibrated probability. Public responses return null.
     const confidence = 0;
     const entityMatch = modelSupported ? "adjacent" : "unknown";
@@ -99,13 +118,16 @@ export async function enrichCandidates(input: {
       version: ENRICHMENT_VERSION,
       scope: {
         status: candidate.quality.status === "rejected" ? "invalid_record"
+          : excludedMatches.has(candidate.entityId) ? "excluded_scope_match"
           : decision === "promote" ? "model_supported" : "uncertain",
-        basis: "immutable_research_request_and_model_relevance",
+        basis: "immutable_structured_scope_and_model_relevance",
+        queryContract: "semantic_variants_v1",
+        variantCount: queries.length,
         homogeneousCohortVerified: false,
-        thresholds: { embeddingMinScore, rerankMinScore, lexicalPromoteMinScore, lexicalEmbeddingAllowance: 0.08 },
+        thresholds: { embeddingMinScore, rerankMinScore },
       },
       metrics,
-      ranking: { kind: "relevance_only", weights: { lexical: 0.25, embedding: 0.25, reranker: 0.5 }, calibratedProbability: false },
+      ranking: { kind: "relevance_only", basis: "reranker_score", calibratedProbability: false },
     };
     return {
       ...candidate,
@@ -133,25 +155,30 @@ function scopeDocument(candidate: EnrichmentCandidate): string {
     .filter(Boolean).join("；").slice(0, 4096);
 }
 
-export function buildEnrichmentQueryText(
-  requestText: string,
-  intent: ResearchIntent,
-  queryTerms: string[] = [],
-): string {
-  const allTerms = expandMultilingualQueryTerms([
-    intent.targetProduct,
-    intent.localizedKeyword,
-    ...(intent.localizedKeywords ?? []),
-    ...queryTerms,
+/**
+ * Queries contain semantic scope only. Instructions belong in the model's instruction
+ * channel; dates, output size, ranking and requested metrics are independent checks.
+ * Localized/script-equivalent terms are alternatives, never a conjunctive checklist.
+ */
+export function buildEnrichmentQueries(intent: ResearchIntent, queryTerms: string[] = []): string[] {
+  const terms = expandMultilingualQueryTerms([
+    intent.targetProduct, intent.localizedKeyword, ...(intent.localizedKeywords ?? []), ...queryTerms,
   ]);
-  return [
-    `用户确认的研究范围：${intent.originalRequest.trim() || requestText.trim()}`,
-    intent.targetProduct ? `目标商品：${intent.targetProduct}` : "",
-    ...allTerms.map((term) => `等价检索词：${term}`),
-    ...intent.expectedCategories.map((category) => `研究范围包含：${category}`),
-    ...intent.excludedCategories.map((category) => `研究范围排除：${category}`),
-    "仅判断记录与用户研究范围的相关性。范围限制只来自用户要求，不自行缩小到某个子类；证据可能使用目标市场当地语言，跨语言等价商品词应视为匹配。价格、销量等指标是否存在另行核验，不能提高或降低商品范围相关性。",
-  ].filter(Boolean).join("；").slice(0, 4096);
+  const scopes = intent.expectedCategories.filter(category =>
+    !terms.includes(category.normalize("NFKC").trim()));
+  const base = terms.length ? terms : scopes.splice(0);
+  return base.map(term => [
+    term,
+    ...scopes.map(scope => `Required scope: ${scope}`),
+
+  ].join("\n")).filter(Boolean);
+}
+
+/** Compatibility helper for callers needing the primary semantic query. */
+export function buildEnrichmentQueryText(
+  _requestText: string, intent: ResearchIntent, queryTerms: string[] = [],
+): string {
+  return buildEnrichmentQueries(intent, queryTerms)[0] ?? "";
 }
 
 function policyNumber(value: unknown, fallback: number): number {
@@ -178,8 +205,4 @@ function batches<T>(values: T[], size: number): T[][] {
   const result: T[][] = [];
   for (let index = 0; index < values.length; index += size) result.push(values.slice(index, index + size));
   return result;
-}
-
-function clamp(value: number): number {
-  return Math.min(1, Math.max(0, value));
 }

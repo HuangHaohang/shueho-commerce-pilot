@@ -212,6 +212,7 @@ function readStoredRequest(value: JsonObject): MarketplaceResearchRequest {
   return {
     platform: stringValue(value.platform),
     keyword: stringValue(value.keyword),
+    ...(isRecord(value.semanticScope) ? { semanticScope: { include: stringArray(value.semanticScope.include), exclude: stringArray(value.semanticScope.exclude) } } : {}),
     localizedKeyword: nullableString(value.localizedKeyword),
     localizedKeywords: stringArray(value.localizedKeywords),
     market: nullableString(value.market),

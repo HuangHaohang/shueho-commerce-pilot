@@ -8,6 +8,7 @@ import {
 export type MarketplaceProductResearchPlanInput = {
   platform: string;
   keyword: string;
+  semantic_scope?: { include: string[]; exclude: string[] };
   localized_keywords: string[];
   market: string | null;
   tmall_only: boolean;

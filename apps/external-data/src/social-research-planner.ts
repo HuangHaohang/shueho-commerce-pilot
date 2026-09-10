@@ -8,6 +8,7 @@ export type SocialResearchMetric = "views" | "likes" | "comments" | "shares" | "
 export type SocialResearchRequest = {
   platform: string;
   keyword: string;
+  semanticScope?: { include: string[]; exclude: string[] };
   startDate: string;
   endDate: string;
   objective: SocialResearchObjective;
@@ -92,6 +93,7 @@ export function selectSocialContentResearchPlan(
     kind: "social_content_research",
     platform: request.platform,
     target_product: request.keyword,
+    ...(request.semanticScope ? { semantic_scope: request.semanticScope } : {}),
     objective: request.objective,
     requested_metrics: request.requestedMetrics,
     time_range: {

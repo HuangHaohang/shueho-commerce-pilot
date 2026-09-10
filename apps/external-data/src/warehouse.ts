@@ -1,3 +1,4 @@
+import { researchQualitySummary, sourcePagination } from "./research-quality-summary.js";
 import {normalizeSocialMetricFields,socialMetricCoverage} from "./social-metric-coverage.js";
 import type { PoolClient } from "pg";
 
@@ -1438,8 +1439,11 @@ export async function loadCompactResearchResult(
       provider_message: string | null;
       observed_at: Date;
       structured_intent: JsonObject;
+      pagination_payload: JsonObject;
+      requested_limit: number;
     }>(client, `
-      SELECT request.status, request.structured_intent, query_row.query_key, query_row.endpoint_id,
+      SELECT request.status, request.structured_intent, request.top_n AS requested_limit, query_row.query_key, query_row.endpoint_id,
+             jsonb_build_object('data',jsonb_build_object('pagination',raw.response_payload #> '{data,pagination}','has_more',raw.response_payload #> '{data,has_more}','hasMore',raw.response_payload #> '{data,hasMore}','hasNextPage',raw.response_payload #> '{data,hasNextPage}')) AS pagination_payload,
              raw.id AS raw_call_id, raw.state AS raw_state, raw.provider_code, raw.provider_message,
              dispatch.state AS dispatch_state,dispatch.deadline_at,dispatch.next_attempt_at,
              dispatch.wait_reason,CASE WHEN dispatch.raw_call_id IS NULL THEN NULL ELSE
@@ -1591,8 +1595,8 @@ export async function loadCompactResearchResult(
       JOIN external_query query_row ON query_row.id=snapshot.external_query_id
       JOIN ai_enrichment_result enrichment ON enrichment.id=content.enrichment_result_id
       WHERE content.research_request_id=$1 AND enrichment.job_id=$2
-      ORDER BY content.relevance_score DESC,content.published_at DESC NULLS LAST LIMIT 50
-    `, [researchRequestId, latestJobId]);
+      ORDER BY content.relevance_score DESC,content.published_at DESC NULLS LAST LIMIT $3
+    `, [researchRequestId, latestJobId, request.requested_limit]);
     const genericEvidence = await client.query<JsonObject>(`
       SELECT evidence.id AS evidence_id,evidence.research_request_id,
              evidence.endpoint_id,evidence.source_platform,evidence.evidence_kind,
@@ -1605,8 +1609,8 @@ export async function loadCompactResearchResult(
       FROM business_evidence_observation evidence
       JOIN ai_enrichment_result enrichment ON enrichment.id=evidence.enrichment_result_id
       WHERE evidence.research_request_id=$1 AND enrichment.job_id=$2
-      ORDER BY evidence.relevance_score DESC,evidence.published_at DESC NULLS LAST LIMIT 50
-    `, [researchRequestId, latestJobId]);
+      ORDER BY evidence.relevance_score DESC,evidence.published_at DESC NULLS LAST LIMIT $3
+    `, [researchRequestId, latestJobId, request.requested_limit]);
     const storedMetrics = await client.query<{ metric_name: string; metric_value: JsonObject; sample_count: number; confidence: number }>(`
       SELECT metric_name, metric_value, sample_count, confidence
       FROM research_metric WHERE research_request_id=$1 AND sample_count>0 ORDER BY metric_name
@@ -1617,6 +1621,17 @@ export async function loadCompactResearchResult(
       GROUP BY result.decision
     `, [researchRequestId, latestJobId]);
     const decisionCounts = Object.fromEntries(decisions.rows.map((row) => [row.decision, Number(row.count)]));
+    const sourceRecords = await client.query<{
+      metrics: JsonObject; published_at: unknown; decision: string; reason_codes: string[];
+    }>(`
+      SELECT COALESCE(generic.metrics,'{}'::jsonb) AS metrics,
+             COALESCE(generic.published_at,social.published_at) AS published_at,
+             result.decision,result.reason_codes
+      FROM ai_enrichment_result result
+      LEFT JOIN generic_source_record generic ON result.entity_type='generic_record' AND generic.id=result.entity_id
+      LEFT JOIN social_search_item social ON result.entity_type='social_item' AND social.id=result.entity_id
+      WHERE result.research_request_id=$1 AND result.job_id=$2
+    `, [researchRequestId, latestJobId]);
     const intent = isRecord(request.structured_intent) ? request.structured_intent : {};
     const requestedMetrics = stringArray(intent.metrics);
     const metricValues: JsonObject = Object.fromEntries(storedMetrics.rows
@@ -1686,7 +1701,7 @@ export async function loadCompactResearchResult(
     }
     const evidence = [...contentEvidence.rows, ...genericEvidence.rows].map((row): JsonObject => {const projected=projectAssessedEvidence(row);return {...projected,metrics:normalizeSocialMetricFields(isRecord(projected.metrics)?projected.metrics:{})};})
       .sort((left, right) => Number(right.relevance_score ?? 0) - Number(left.relevance_score ?? 0))
-      .slice(0, 50);
+      .slice(0, request.requested_limit);
     const availableMetricFields = [...new Set(
       evidence.flatMap((row) => isRecord(row.metrics) ? Object.keys(row.metrics) : []),
     )].sort();
@@ -1694,6 +1709,11 @@ export async function loadCompactResearchResult(
     const availableMetrics = new Set([...Object.keys(metricValues),...socialCoverage.available]);
     const availableMetricNames = [...availableMetrics].sort();
     const missingRequestedMetrics = requestedMetrics.filter((metric) => !availableMetrics.has(metric));
+    const qualitySummary = researchQualitySummary({
+      records: sourceRecords.rows, acceptedCount: products.length + evidence.filter(row => row.evidence_kind !== "product").length,
+      requestedCount: request.requested_limit,
+    });
+    const pagination = sourcePagination(request.pagination_payload ?? {});
     const success = request.status === "completed";
     const execution = providerExecutionStatus({
       rawState: request.raw_state, processingState: request.status, dispatchState: request.dispatch_state,
@@ -1707,7 +1727,7 @@ export async function loadCompactResearchResult(
       code: success ? 0 : execution.phase === "reconciliation_required" ? 502
         : request.raw_state === "dispatched" ? 202 : request.provider_code ?? 500,
       message: success
-        ? "SHUEHO 外部数据服务已完成采集、完整归档、质量判断和业务层晋级。"
+        ? (qualitySummary.acceptedCount ? "本次调用已归档并完成质量判断；可交付样本与采集覆盖见 coverage。" : "本次调用已归档并完成质量判断，但没有合格样本；具体原因见 coverage.exclusionReasons。")
         : request.raw_state === "succeeded"
           ? `JustOneAPI 调用已完成并完整归档，但 SHUEHO 数据处理状态为 ${request.status}。`
           : request.provider_message ?? `Research state: ${request.status}`,
@@ -1717,10 +1737,13 @@ export async function loadCompactResearchResult(
       query_key: request.query_key,
       observed_at: request.observed_at.toISOString(),
       coverage: {
+        ...qualitySummary,
+        sourcePagination: pagination,
+        collectionComplete: typeof pagination.hasMore === "boolean" ? !pagination.hasMore : null,
         acceptedProducts: products.length,
         acceptedBrands: brands.rowCount,
         acceptedProperties: properties.rowCount,
-        acceptedContent: contentEvidence.rowCount,
+        acceptedContent: evidence.filter(row => row.evidence_kind === "content").length,
         acceptedEvidence: evidence.length,
         promoted: decisionCounts.promote ?? 0,
         held: decisionCounts.hold ?? 0,
@@ -1748,11 +1771,15 @@ export async function loadCompactResearchResult(
         "结果仅来自本次查询及通过质量和相关性判断的证据。",
         "相关性分数仅用于排序，不是准确率、销量或同类可比性证明；范围只按用户要求判断，不自动排除未指定的子类。",
         "价格分布仅描述返回样本；同类商品范围、销量周期和统计口径未核实前，不支持热卖排行或同类新品定价结论。",
-        ...(isRecord(intent.timeRange)
-          ? ["缺少可验证发布时间或位于请求时间范围外的记录不会进入业务证据层。"]
-          : []),
+        ...(qualitySummary.exclusionReasons.PUBLISHED_AT_MISSING
+          ? [`有 ${qualitySummary.exclusionReasons.PUBLISHED_AT_MISSING} 条记录缺少发布时间。`] : []),
+        ...(qualitySummary.exclusionReasons.OUTSIDE_REQUESTED_WINDOW
+          ? [`有 ${qualitySummary.exclusionReasons.OUTSIDE_REQUESTED_WINDOW} 条记录超出请求时间窗。`] : []),
+        ...(qualitySummary.exclusionReasons.SCOPE_UNCONFIRMED
+          ? [`有 ${qualitySummary.exclusionReasons.SCOPE_UNCONFIRMED} 条记录的主题相关性未确认；不表示原始数据无效或字段缺失。`] : []),
+        ...(pagination.hasMore === true ? ["供应商仍有后续页，本次调用不代表完整采集。"] : []),
         ...(missingRequestedMetrics.length
-          ? [`供应商本次可用证据未覆盖这些请求指标：${missingRequestedMetrics.join("、")}。`]
+          ? [`当前合格样本未覆盖这些请求指标（原始字段覆盖另见 sourceMetricCoverageByField）：${missingRequestedMetrics.join("、")}。`]
           : []),
         ...(hasSalesEvidence
           ? ["销量区间保留供应商原始口径；例如 1000+ 只表示下界，不代表精确销量。"]

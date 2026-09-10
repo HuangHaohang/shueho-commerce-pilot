@@ -1,6 +1,6 @@
 import type { EnrichmentCandidate, JsonObject } from "./types.js";
 
-export const ENRICHMENT_VERSION = "commerce-relevance-v4";
+export const ENRICHMENT_VERSION = "commerce-relevance-v5";
 
 type MetricStatus = "available" | "missing" | "invalid";
 export type ProductMetricAssessment = {
@@ -66,7 +66,7 @@ export function publicEvidenceAssessment(metadata: unknown): JsonObject {
     version: typeof stored.promptVersion === "string" ? stored.promptVersion : null,
     scope: {
       status: scope.status ?? "legacy_unassessed",
-      basis: "immutable_research_request_and_model_relevance",
+      basis: scope.basis ?? "immutable_research_request_and_model_relevance",
       homogeneousCohortVerified: false,
     },
     ...(isObject(assessment.metrics) ? { metrics: assessment.metrics } : {}),

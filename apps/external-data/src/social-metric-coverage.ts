@@ -14,7 +14,7 @@ export function socialMetricCoverage(evidence:JsonObject[]){
  const perField:JsonObject={};const available:string[]=[];
  for(const name of names){
   const present=evidence.filter(e=>{const m=e.metrics as JsonObject|undefined;return m&&count(m[name]);}).length;
-  perField[name]={presentSamples:present,totalSamples:evidence.length,status:present===0?'missing':present===evidence.length?'complete':'partial',timeBasis:'provider_observed_count_not_period_increment'};
+  perField[name]={presentSamples:present,totalSamples:evidence.length,status:evidence.length===0?'no_samples':present===0?'missing':present===evidence.length?'complete':'partial',timeBasis:'provider_observed_count_not_period_increment'};
   if(present>0)available.push(name);
  }
  return {available,perField};

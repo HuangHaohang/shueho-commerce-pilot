@@ -176,6 +176,11 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
         inputSchema: {
           platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
           keyword: z.string().min(1).max(500),
+          semantic_scope: z.object({
+            include: z.array(z.string().min(1).max(500)).max(8),
+            exclude: z.array(z.string().min(1).max(500)).max(8),
+          }).strict().optional().describe("User-stated semantic constraints only, such as materials, uses and exclusions. Preserve every explicit scope restriction here; omit dates, metrics, ranking and report instructions."),
+
           start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
           end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
           objective: z.enum(["latest_content", "interaction_ranked"]),
@@ -190,13 +195,14 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
           openWorldHint: true,
         },
       },
-      async ({ platform, keyword, start_date, end_date, objective, requested_metrics, max_results, research_request }) => {
+      async ({ platform, keyword, semantic_scope, start_date, end_date, objective, requested_metrics, max_results, research_request }) => {
         const authorization = await control.authorizeCatalog(principal);
         let preflight;
         try {
           preflight = await preflightSocialContentResearch(upstream, {
             platform,
             keyword,
+            semantic_scope,
             start_date,
             end_date,
             objective,
@@ -230,6 +236,11 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
         inputSchema: {
           platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
           keyword: z.string().min(1).max(500),
+          semantic_scope: z.object({
+            include: z.array(z.string().min(1).max(500)).max(8),
+            exclude: z.array(z.string().min(1).max(500)).max(8),
+          }).strict().optional().describe("User-stated semantic constraints only, such as materials, uses and exclusions. Preserve every explicit scope restriction here; omit dates, metrics, ranking and report instructions."),
+
           localized_keywords: z.array(z.string().min(1).max(500)).max(8).default([]),
           market: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).nullable().default(null),
           tmall_only: z.boolean(),
@@ -249,14 +260,14 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
         },
       },
       async ({
-        platform,keyword,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
+        platform,keyword,semantic_scope,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
         requested_metrics,max_results,detail_sample_size,idempotency_key,research_request,
       }) => {
         const authorization = await control.authorizeCatalog(principal);
         const sourceCallId = `mcp_plan_${idempotency_key.replaceAll("-", "")}`;
         try {
           const planned = await createMarketplaceProductResearchPlan(upstream, {
-            platform,keyword,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
+            platform,keyword,semantic_scope,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
             requested_metrics,max_results,detail_sample_size,
           }, {
             tenant_id: principal.tenantId,workspace_id: principal.workspaceId,user_id: principal.userId,

@@ -61,7 +61,13 @@ const firstPartySubjectSchema = z.object({
   }
 });
 
+const semanticScopeSchema = z.object({
+  include: z.array(z.string().min(1).max(500)).max(8),
+  exclude: z.array(z.string().min(1).max(500)).max(8),
+}).strict().optional();
+
 const businessIntentSchema = z.object({
+  semantic_scope: semanticScopeSchema,
   kind: z.string().min(1).max(100),
   platform: z.string().min(1).max(64),
   target_product: z.string().min(1).max(500).nullable(),
@@ -272,6 +278,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       inputSchema: {
         platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
         keyword: z.string().min(1).max(500),
+        semantic_scope: semanticScopeSchema,
         localized_keywords: z.array(z.string().min(1).max(500)).max(8).default([]),
         market: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).nullable().default(null),
         tmall_only: z.boolean(),
@@ -287,13 +294,14 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({
-      platform,keyword,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
+      platform,keyword,semantic_scope,localized_keywords,market,tmall_only,min_price_yuan,max_price_yuan,
       requested_metrics,max_results,detail_sample_size,allowed_catalog_platforms,
       allowed_endpoint_ids,_commerce_context,
     }) => {
       const request = {
         platform,
         keyword,
+        semanticScope: semantic_scope,
         localizedKeyword: localized_keywords[0] ?? null,
         localizedKeywords: localized_keywords,
         market,
@@ -428,6 +436,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       inputSchema: {
         platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
         keyword: z.string().min(1).max(500),
+        semantic_scope: semanticScopeSchema,
         localized_keyword: z.string().min(1).max(500).nullable().default(null),
         market: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).nullable().default(null),
         tmall_only: z.boolean(),
@@ -441,13 +450,14 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({
-      platform, keyword, localized_keyword, market, tmall_only, min_price_yuan, max_price_yuan, requested_metrics, max_results,
+      platform, keyword, semantic_scope, localized_keyword, market, tmall_only, min_price_yuan, max_price_yuan, requested_metrics, max_results,
       allowed_catalog_platforms, allowed_endpoint_ids,
     }) => {
       try {
         const plan = await planMarketplaceProductResearch({
           platform,
           keyword,
+          semanticScope: semantic_scope,
           localizedKeyword: localized_keyword,
           market,
           tmallOnly: tmall_only,
@@ -500,6 +510,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       inputSchema: {
         platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
         keyword: z.string().min(1).max(500),
+        semantic_scope: semanticScopeSchema,
         localized_keyword: z.string().min(1).max(500).nullable().default(null),
         market: z.string().regex(/^[A-Za-z0-9_-]{2,32}$/).nullable().default(null),
         tmall_only: z.boolean(),
@@ -514,13 +525,14 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({
-      platform, keyword, localized_keyword, market, tmall_only, min_price_yuan, max_price_yuan,
+      platform, keyword, semantic_scope, localized_keyword, market, tmall_only, min_price_yuan, max_price_yuan,
       requested_metrics, max_results, workflow_id, research_plan_key, _commerce_context,
     }) => {
       try {
         const plan = await planMarketplaceProductResearch({
           platform,
           keyword,
+          semanticScope: semantic_scope,
           localizedKeyword: localized_keyword,
           market,
           tmallOnly: tmall_only,
@@ -624,6 +636,7 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       inputSchema: {
         platform: z.string().regex(/^[A-Za-z0-9_]{2,64}$/),
         keyword: z.string().min(1).max(500),
+        semantic_scope: semanticScopeSchema,
         start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
         objective: z.enum(["latest_content", "interaction_ranked"]),
@@ -635,13 +648,14 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async ({
-      platform, keyword, start_date, end_date, objective, requested_metrics, max_results,
+      platform, keyword, semantic_scope, start_date, end_date, objective, requested_metrics, max_results,
       allowed_catalog_platforms, allowed_endpoint_ids,
     }) => {
       try {
         const plan = await planSocialContentResearch({
           platform,
           keyword,
+          semanticScope: semantic_scope,
           startDate: start_date,
           endDate: end_date,
           objective,
@@ -847,6 +861,7 @@ function mapScope(value: z.infer<typeof scopeSchema>): ExternalDataScope {
       kind: value.business_intent.kind,
       platform: value.business_intent.platform,
       targetProduct: value.business_intent.target_product,
+      semanticScope: value.business_intent.semantic_scope,
       objective: value.business_intent.objective,
       requestedMetrics: value.business_intent.requested_metrics,
       timeRange: value.business_intent.time_range ? {

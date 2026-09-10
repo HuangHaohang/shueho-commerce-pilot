@@ -1,3 +1,4 @@
+import { evaluateProductionRelevance } from "./relevance-evaluation.js";
 import assert from "node:assert/strict";
 
 import { config } from "./config.js";
@@ -5,6 +6,7 @@ import { database } from "./database.js";
 import { LocalModelClient } from "./local-model-client.js";
 
 const models = new LocalModelClient();
+await evaluateProductionRelevance(models);
 const health = await models.health();
 assert.equal(health.fake, false, "quality evaluation requires the real local models");
 const cases = await database.query<{

@@ -3,6 +3,7 @@ import type { ExternalDataServiceMcpClient } from "./external-data-service-mcp-c
 export type SocialContentResearchInput = {
   platform: string;
   keyword: string;
+  semantic_scope?: { include: string[]; exclude: string[] };
   start_date: string;
   end_date: string;
   objective: "latest_content" | "interaction_ranked";

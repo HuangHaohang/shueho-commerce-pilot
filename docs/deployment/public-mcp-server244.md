@@ -145,3 +145,9 @@ Apply warehouse migration 042, then deploy control, warehouse, public MCP and wo
 ### Monthly quota incident correction
 
 Apply control migration 050 and warehouse migration 043, then deploy control/warehouse/public MCP/worker from the same revision. A user-authorized money-only policy update uses updateExternalDataPolicy so it retains an audit event and all other policy fields; verify monthlyCallLimit=null and the intended finite money amount by readback and a read-only quote. Do not reset actual usage or provider quotas. For historical reserve-only failures, match immutable governance denial audit IDs and prove no financial reservation/provider request before appending a failure resolution. No supplier call is needed for verification.
+
+### Relevance v5 rollout
+
+Deploy warehouse, public MCP/Gateway definitions and model service together for assessment v5 / Harness tool contract 12. The Mac model service must include per-request predict(prompt=...); a warehouse-only change leaves cached-instruction behavior. Model IDs, weights, thresholds, token quotas and pricing remain unchanged. No warehouse schema migration is required: existing immutable JSON and intent arrays carry optional semantic scope; decisions append under v5. No task execution-version or automatic pagination change is included.
+
+Run the validation matrix, real production-path Qwen regression and isolated SQL source/coverage readback. Inspect active work before release; verify identity, schema, source versus delivered metrics, actual exclusions and old-task readback afterward. Explicitly reprocess existing archives only through the existing repair command with raw-hash and no-dispatch checks; never silently rewrite completed tasks or recollect. Remaining limitations are in the hardcoding audit.

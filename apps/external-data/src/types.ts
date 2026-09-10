@@ -33,6 +33,7 @@ export type ExternalDataScope = {
 };
 
 export type ExternalDataBusinessIntent = {
+  semanticScope?: { include: string[]; exclude: string[] } | null;
   kind: string;
   platform: string;
   targetProduct: string | null;

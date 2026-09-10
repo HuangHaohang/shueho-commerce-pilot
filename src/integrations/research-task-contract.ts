@@ -5,7 +5,11 @@ export function taskToolContract(spec:any):any{
  const tools=spec.tools.filter((t:any)=>!['execute_marketplace_research','execute_data_request','research_marketplace_products'].includes(t.name)).map((t:any)=>{
   if(!renamed[t.name])return t;
   return {...t,name:renamed[t.name],description:'Submit a fixed-scope durable research task and immediately receive task_id. The backend validates pricing, permissions and budget and owns collection, retries and recovery. No planning tool or separate execution call. Reuse idempotency_key for the same request.',inputSchema:{...t.inputSchema,
-   properties:{...t.inputSchema.properties,idempotency_key:{type:'string',format:'uuid'},...(t.name==='plan_data_request'?{pagination:{type:'object',additionalProperties:false,properties:{max_pages:{type:'integer',minimum:1,maximum:100}},required:['max_pages']}}:{})},required:[...new Set([...(t.inputSchema.required??[]),'idempotency_key'])]}};
+   properties:{...t.inputSchema.properties,...(t.name!=='plan_data_request'?{semantic_scope:{
+    type:'object',additionalProperties:false,
+    description:'All user-stated semantic inclusions and exclusions (materials, uses, categories). Do not put dates, metric requests, ranking or report instructions here. Preserve qualifiers here even when the search keyword is shorter.',
+    properties:{include:{type:'array',maxItems:8,items:{type:'string',minLength:1,maxLength:500}},exclude:{type:'array',maxItems:8,items:{type:'string',minLength:1,maxLength:500}}},required:['include','exclude']
+   }}:{}),idempotency_key:{type:'string',format:'uuid'},...(t.name==='plan_data_request'?{pagination:{type:'object',additionalProperties:false,properties:{max_pages:{type:'integer',minimum:1,maximum:100}},required:['max_pages']}}:{})},required:[...new Set([...(t.inputSchema.required??[]),'idempotency_key'])]}};
  });
  tools.push({type:'function',name:'get_research_task',description:'Read durable task progress and results by task_id. Does not dispatch supplier requests. Follow polling instructions and stop on terminal status.',deferLoading:false,inputSchema:{type:'object',additionalProperties:false,properties:{task_id:{type:'string',format:'uuid'}},required:['task_id']}});
  tools.push(...[

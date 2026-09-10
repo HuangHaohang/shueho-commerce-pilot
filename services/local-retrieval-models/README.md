@@ -31,3 +31,5 @@ Copy the non-secret defaults from `.env.example`; keep the inference batches sma
 Embedding requests execute internally in batches of 4 and reranking in batches of 1 by default. These values bound unified-memory pressure while preserving the larger HTTP batch contract.
 
 Inference endpoints require a bearer token. No CORS configuration is enabled, request bodies are not logged by application code, and a model error is returned to the warehouse pipeline rather than replaced with a lower-quality fallback.
+
+Reranker instructions are passed per inference through Sentence Transformers predict(prompt=...). Caching the model must not freeze the first caller's instruction. Run python -m unittest discover -s services/local-retrieval-models/tests from the repository root to verify this without weights. Warehouse real relevance evaluation also exercises query construction and admission; score gates are not calibrated probabilities.
