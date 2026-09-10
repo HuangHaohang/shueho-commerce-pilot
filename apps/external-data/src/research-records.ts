@@ -1,8 +1,17 @@
 import {withScope} from './database.js';
 import type {JsonObject} from './types.js';
 import {sha256Json} from './canonical.js';
+import {decodeRecordCursor,encodeRecordCursor} from './record-cursor.js';
 
 type Scope={tenantId:string;workspaceId:string;userId:string;rootThreadId?:string|null};
+export async function readRecordPage(scope:Scope,input:{task_id?:string;research_request_id?:string;cursor?:string;snapshot_id?:string;offset:number;limit:number}){
+ if(!!input.task_id===!!input.research_request_id)throw new Error('Exactly one task_id or research_request_id is required');
+ const kind=input.task_id?'task':'research',id=(input.task_id??input.research_request_id)!;
+ const cursor=input.cursor?decodeRecordCursor(input.cursor,kind,id):null;
+ if(cursor&&input.snapshot_id&&input.snapshot_id!==cursor.snapshot_id)throw new Error('RECORD_CURSOR_SNAPSHOT_CONFLICT');
+ const result=kind==='task'?await readTaskRecords(scope,id,cursor?.offset??input.offset,input.limit,cursor?.snapshot_id??input.snapshot_id):await readResearchRecords(scope,id,cursor?.offset??input.offset,input.limit);
+ return {...result,next_cursor:result.next_offset===null?null:encodeRecordCursor({version:1,kind,id,offset:result.next_offset,...('snapshot_id' in result?{snapshot_id:result.snapshot_id}:{})})};
+}
 function assign(target:JsonObject,path:string[],value:unknown){
  let node:any=target;
  for(let i=0;i<path.length;i++){

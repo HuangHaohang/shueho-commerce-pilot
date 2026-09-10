@@ -14,7 +14,7 @@ export async function enqueueSettlement(scope:Scope,taskId:string,reservationId:
   if(!row||row.payload_hash!==hash)throw new Error('SETTLEMENT_PAYLOAD_CONFLICT');return {success:true,state:row.state};
  });
 }
-export async function claimSettlement(id:string){return {success:true,job:(await database.query('SELECT * FROM claim_research_settlement($1)',[id])).rows[0]??null};}
+export async function claimSettlement(id:string,issuedAt?:string){return {success:true,job:(await database.query(issuedAt?'SELECT * FROM claim_research_settlement_v2($1,$2)':'SELECT * FROM claim_research_settlement($1)',issuedAt?[id,issuedAt]:[id])).rows[0]??null};}
 export async function finishSettlement(scope:Scope,reservationId:string,leaseId:string,success:boolean,code:string|null){
  return withScope(scope,async c=>{
   const result=await c.query(`UPDATE research_settlement_outbox SET state=CASE WHEN $3 THEN 'completed' WHEN attempts>=20 THEN 'attention_required' ELSE 'pending' END,

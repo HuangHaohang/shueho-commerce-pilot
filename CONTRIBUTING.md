@@ -81,6 +81,8 @@ npm run jobs:thread-deletion
 
 ## Required Validation
 
+Research changes must also satisfy the cross-component [research failure matrix](docs/architecture/research-failure-matrix.md), including cancellation before/after dispatch, actual compatibility-bridge approvals, connection isolation and complete large-result traversal. Isolated PostgreSQL budget tests use `BUDGET_TEST_DATABASE_URL` pointing to an explicitly disposable owner database; CI supplies its external-data test database. Never use production data for destructive fixture tests or paid supplier smoke calls.
+
 Run the checks relevant to every code pull request:
 
 ```bash

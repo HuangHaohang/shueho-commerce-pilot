@@ -643,6 +643,9 @@ export async function reserveExternalDataCall(
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
       `external-call:${scope.tenantId}:${input.source}:${input.callId}`,
     ]);
+    if((await client.query('SELECT 1 FROM commerce_external_call_cancel_fence WHERE tenant_id=$1 AND source=$2 AND call_id=$3',[scope.tenantId,input.source,input.callId])).rowCount) {
+      throw new ExternalDataGovernanceError('此调用所属任务已取消。','EXTERNAL_DATA_CALL_CANCELLED',409);
+    }
     if (!(await hasEffectivePermission(client, scope, "external_data.call"))) {
       throw new ExternalDataGovernanceError(
         "当前角色没有调用外部付费数据源的权限。",
@@ -1061,6 +1064,20 @@ export async function cancelExternalDataCall(
       reason,
     });
   });
+}
+
+/** Serialize with reservation creation: a late request cannot allocate after cancellation. */
+export async function cancelExternalDataSource(scope:ExternalDataCallScope,source:ExternalDataCallSource,callId:string){
+ return withEnterpriseTenantDatabaseContext(scope,async client=>{
+  await client.query('SELECT pg_advisory_xact_lock(hashtext($1))',[`external-call:${scope.tenantId}:${source}:${callId}`]);
+  const row=(await client.query('SELECT id,user_id,workspace_id,state FROM commerce_external_data_call WHERE tenant_id=$1 AND source=$2 AND call_id=$3 FOR UPDATE',[scope.tenantId,source,callId])).rows[0];
+  if(row&&(row.user_id!==scope.userId||row.workspace_id!==scope.workspaceId))throw new ExternalDataGovernanceError('调用不属于当前用户。','EXTERNAL_DATA_CALL_NOT_FOUND',404);
+  await client.query(`INSERT INTO commerce_external_call_cancel_fence(tenant_id,workspace_id,user_id,source,call_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING`,[scope.tenantId,scope.workspaceId,scope.userId,source,callId]);
+  const updated=await client.query(`UPDATE commerce_external_data_call SET state='cancelled',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+   WHERE tenant_id=$1 AND workspace_id=$2 AND user_id=$3 AND source=$4 AND call_id=$5 AND state='reserved' RETURNING id`,[scope.tenantId,scope.workspaceId,scope.userId,source,callId]);
+  await insertAudit(client,scope,'external_data.call.cancel_fence','external_data_call',row?.id??callId,'succeeded',{source,callId,released:updated.rowCount===1});
+  return {released:updated.rowCount===1,state:updated.rowCount?'cancelled':row?.state??'fenced_before_reservation'};
+ });
 }
 
 async function ensurePolicy(

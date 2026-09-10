@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';import {Pool} from 'pg';import {describe,it,expect,beforeAll,afterAll} from 'vitest';
-import {config} from './config.js';import {database} from './database.js';import {readTaskRecords,readResearchRecords} from './research-records.js';
+import {config} from './config.js';import {database} from './database.js';import {readTaskRecords,readResearchRecords,readRecordPage} from './research-records.js';
 import {enqueueSettlement,claimSettlement,finishSettlement} from './research-settlements.js';
+import {submitResearchTask,manageResearchTask} from './research-tasks.js';
 const ci=process.env.GITHUB_ACTIONS==='true'&&process.env.NODE_ENV==='test';
 const url=process.env.JUSTONEAPI_TEST_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_DATABASE_URL:undefined);
 const ownerUrl=process.env.JUSTONEAPI_TEST_MIGRATION_DATABASE_URL??(ci?process.env.EXTERNAL_DATA_MIGRATION_DATABASE_URL:undefined);
@@ -40,4 +41,33 @@ describe.skipIf(!url||!ownerUrl)('record snapshots and settlement recovery',()=>
   expect((await finishSettlement(scope,reservation,replacement,true,null)).state).toBe('completed');
   expect((await database.query('SELECT * FROM research_settlement_outbox')).rowCount).toBe(0);
  });
+ it('cancellation durably fences a reservation even when the control response has not returned',async()=>{
+  const t=await submitResearchTask(scope,{source:'external_mcp',kind:'data',idempotency_key:randomUUID(),inputs:{},principal:scope});
+  const callId='late_'+randomUUID().replaceAll('-','');
+  await owner.query(`INSERT INTO research_task_operation(task_id,operation_key,input_hash,operation_name,state,operation_context)
+    VALUES($1,'pending-reserve','fixture','control.reserve','started',$2::jsonb)`,[t.task_id,JSON.stringify({source:'external_mcp',callId})]);
+  await manageResearchTask(scope,{task_id:t.task_id,action:'cancel'});
+  const job=(await owner.query('SELECT payload,reservation_id FROM research_settlement_outbox WHERE task_id=$1',[t.task_id])).rows[0];
+  expect(job.payload).toEqual({kind:'cancel_source',source:'external_mcp',callId});
+  await owner.query(`UPDATE research_task_operation SET state='completed',result=$2::jsonb WHERE task_id=$1`,[t.task_id,JSON.stringify({reservationId:randomUUID()})]);
+  expect(Number((await owner.query('SELECT count(*) FROM research_settlement_outbox WHERE task_id=$1',[t.task_id])).rows[0].count)).toBe(1);
+  const lease=randomUUID();await claimSettlement(lease,new Date().toISOString());await finishSettlement(scope,job.reservation_id,lease,true,null);
+ });
+ it('expired v2 claim requests cannot become new claims after operational receipt cleanup',async()=>{
+  const issued=new Date(Date.now()-11*60000).toISOString();await expect(claimSettlement(randomUUID(),issued)).rejects.toThrow('CLAIM_EXPIRED');
+  const id=randomUUID();await claimSettlement(id,new Date().toISOString());
+  await owner.query("UPDATE research_settlement_claim SET issued_at=clock_timestamp()-INTERVAL '2 days' WHERE id=$1",[id]);
+  await owner.query('SELECT clean_research_claim_receipts()');
+  expect(Number((await owner.query('SELECT count(*) FROM research_settlement_claim WHERE id=$1',[id])).rows[0].count)).toBe(0);
+  await expect(claimSettlement(id,issued)).rejects.toThrow('CLAIM_EXPIRED');
+ });
+ it('reads every record past 10000 using a stable cursor without omissions or duplicates',async()=>{
+  const id=await source([]);
+  await owner.query(`INSERT INTO research_record_index(research_request_id,ordinal,collection,source_index,identity_key,record)
+   SELECT $1::uuid,n,'/data/items',n,('large-'||n),jsonb_build_object('collection','/data/items','source_index',n,'fields',jsonb_build_object('id',n)) FROM generate_series(0,10049) n`,[id]);
+  await owner.query(`INSERT INTO research_record_manifest(research_request_id,pagination,record_count,truncated) VALUES($1,'{}',10050,false)`,[id]);
+  let cursor:string|undefined;const seen=new Set<number>();
+  do{const result=await readRecordPage(scope,{research_request_id:id,offset:0,limit:100,cursor});for(const r of result.records){expect(seen.has(r.fields.id)).toBe(false);seen.add(r.fields.id);}cursor=result.next_cursor??undefined;}while(cursor);
+  expect(seen.size).toBe(10050);expect(seen.has(10049)).toBe(true);
+ },30000);
 });

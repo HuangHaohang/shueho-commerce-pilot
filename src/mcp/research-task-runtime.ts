@@ -5,6 +5,7 @@ import type {AuthenticatedMcpPrincipal} from '../integrations/external-data-cont
 import {researchTaskOutcome} from '../integrations/research-task-outcome.js';
 import {ProviderNotDispatchedError,notDispatchedPayload} from '../integrations/provider-dispatch-stage.js';
 import {SettlementNotPersistedError} from '../integrations/settlement-delivery-error.js';
+import {IdleBackoff} from './idle-backoff.js';
 
 export type Task={id:string;kind:'marketplace'|'social'|'data';inputs:Record<string,unknown>;principal:AuthenticatedMcpPrincipal;attempts:number;execution_version?:number};
 type Run={task:Task;lease:string;sequence:number;control:{recover:boolean;lost:boolean};reservationId?:string;page?:number};
@@ -35,7 +36,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
     if(group==='upstream' && (args[0] as any)?._commerce_context)args[0]={...(args[0] as any),_commerce_context:{...(args[0] as any)._commerce_context,source:'codex_harness',root_thread_id:actor.rootThreadId,thread_id:actor.taskThreadId,turn_id:actor.taskTurnId}};
    }
    const operationKey=(run.task.execution_version??1)<2?`${++run.sequence}:${group}.${String(name)}`:`v2:${group}.${String(name)}:${hash(args).slice(0,32)}`;
-   const base={task_id:run.task.id,lease_id:run.lease,_commerce_context:scope(run.task.principal),operation_key:operationKey,operation_name:`${group}.${String(name)}`,input_hash:hash(args)};
+   const base={task_id:run.task.id,lease_id:run.lease,_commerce_context:scope(run.task.principal),operation_key:operationKey,operation_name:`${group}.${String(name)}`,input_hash:hash(args),...(group==='control'&&name==='reserve'?{operation_context:{source:(args[1] as any).source,callId:(args[1] as any).callId}}:{})};
    const begun=(await journal.taskOperation('update_research_task',{...base,action:'begin_operation'})).payload;
    const op=begun.operation as {state:string;result:any};
    if(group==='control' && name==='reserve' && op.state==='completed')run.reservationId=op.result.reservationId;
@@ -85,11 +86,12 @@ export async function enqueueTask(upstream:ExternalDataServiceMcpClient,p:Authen
 export async function getTask(upstream:ExternalDataServiceMcpClient,p:AuthenticatedMcpPrincipal,id:string){return (await upstream.taskOperation('read_research_task',{task_id:id,_commerce_context:scope(p)})).payload;}
 export function startResearchTaskWorker(upstream:ExternalDataServiceMcpClient,execute:(task:Task)=>Promise<any>){
  let active=0,stopped=false;
+ const idle=new IdleBackoff();
  const tick=async()=>{
-  if(stopped || active>=2)return;active++;
+  if(stopped || active>=2||!idle.ready())return;active++;
   let task:Task|undefined,lease=randomUUID();
   try{
-   const claimed=(await upstream.taskOperation('claim_research_task',{lease_id:lease})).payload;task=claimed.task as Task|undefined;if(!task)return;
+   const claimed=(await upstream.taskOperation('claim_research_task',{lease_id:lease,issued_at:new Date().toISOString()})).payload;task=claimed.task as Task|undefined;idle.observed(!!task);if(!task)return;
    const run:Run={task,lease,sequence:0,control:{recover:false,lost:false}};
    const base={task_id:task.id,lease_id:lease,_commerce_context:scope(task.principal)};
    const heartbeat=setInterval(()=>{void upstream.taskOperation('update_research_task',{...base,action:'heartbeat'}).then(r=>{if(r.payload.cancel_requested)run.control.lost=true;}).catch(()=>{run.control.lost=true;});},20_000);

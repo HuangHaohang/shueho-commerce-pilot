@@ -113,8 +113,7 @@ export class ExternalDataServiceMcpClient {
   cancelDataRequestPlan(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> { return this.callCatalog("cancel_data_request_plan",args); }
   async executeDataRequestPlan(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
     this.assertConfigured();
-    await this.ensureConnected();
-    try { return await this.callOnce("execute_data_request_plan",args); }
+    try { return await this.isolatedCall("execute_data_request_plan",args); }
     catch(error) {throw normalizeError(error,true);}
   }
 
@@ -172,9 +171,8 @@ export class ExternalDataServiceMcpClient {
 
   async callEndpoint(args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
     this.assertConfigured();
-    await this.ensureConnected();
     try {
-      const result = await this.callOnce("call_endpoint", args);
+      const result = await this.isolatedCall("call_endpoint", args);
       if (result.payload.processing_state === "unknown") {
         throw new ExternalDataServiceMcpError(
           typeof result.payload.message === "string" ? safeMessage(new Error(result.payload.message)) : "Provider result is uncertain.",
@@ -201,18 +199,28 @@ export class ExternalDataServiceMcpClient {
 
   private async callCatalog(name: string, args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {
     this.assertConfigured();
-    await this.ensureConnected();
     try {
-      return await this.callOnce(name, args);
+      return await this.isolatedCall(name, args);
     } catch (firstError) {
-      await this.close();
       try {
-        await this.ensureConnected();
-        return await this.callOnce(name, args);
+        return await this.isolatedCall(name, args);
       } catch (secondError) {
         throw normalizeError(secondError, false, firstError);
       }
     }
+  }
+
+  /** A failed RPC closes only its own transport, never another request's provider stream. */
+  private async isolatedCall(name:string,args:Record<string,unknown>):Promise<ExternalDataServiceToolResult>{
+    const client=new Client({name:'shueho-commerce-rpc',version:'1'});
+    const transport=new StreamableHTTPClientTransport(new URL(this.config.url),{requestInit:{headers:{Authorization:`Bearer ${this.config.token}`}}});
+    const timeout=name==='call_endpoint'||name==='execute_data_request_plan'?this.config.timeoutMs:
+      name==='update_research_task'&&args.action==='heartbeat'?10000:Math.min(this.config.timeoutMs??30000,30000);
+    try{
+      await client.connect(transport,{timeout:10000});
+      const result=await client.callTool({name,arguments:args},undefined,{timeout,maxTotalTimeout:timeout});
+      return parseResult(result,this.config.maxResultBytes);
+    }finally{await client.close().catch(()=>undefined);await transport.close().catch(()=>undefined);}
   }
 
   private async callOnce(name: string, args: Record<string, unknown>): Promise<ExternalDataServiceToolResult> {

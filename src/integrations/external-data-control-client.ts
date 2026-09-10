@@ -73,6 +73,7 @@ export class ExternalDataControlClient {
   get configured(): boolean {
     return Boolean(this.config.controlUrl && this.config.internalToken);
   }
+  async cancelSource(principal:ExternalDataPrincipal,source:'codex_harness'|'external_mcp',callId:string){return this.post(this.requireControlUrl(),{...principal,action:'cancel_source',source,callId});}
 
   async revalidate(principal:ExternalDataPrincipal,reservationId:string):Promise<Record<string,any>> {
     const result=await this.post(this.requireControlUrl(),{...principal,action:'revalidate',reservationId});

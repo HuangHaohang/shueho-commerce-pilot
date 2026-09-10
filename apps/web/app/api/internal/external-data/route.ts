@@ -7,6 +7,7 @@ import {
   approveExternalDataCall,
   authorizeExternalDataCatalog,
   cancelExternalDataCall,
+  cancelExternalDataSource,
   dispatchExternalDataCall,
   ExternalDataGovernanceError,
   quoteExternalDataPlan,
@@ -88,6 +89,7 @@ const settleSchema = scopeSchema.extend({
 });
 
 const bodySchema = z.discriminatedUnion("action", [
+  scopeSchema.extend({action:z.literal('cancel_source'),source:z.enum(['codex_harness','external_mcp']),callId:z.string().regex(/^[A-Za-z0-9_-]{8,128}$/)}),
   scopeSchema.extend({action:z.literal('revalidate'),reservationId:z.string().uuid()}),
   reserveSchema,
   catalogSchema,
@@ -119,6 +121,7 @@ export async function POST(request: Request) {
     mcpAccessTokenId: parsed.data.mcpAccessTokenId,
   };
   try {
+    if(parsed.data.action==='cancel_source')return NextResponse.json(await cancelExternalDataSource(scope,parsed.data.source,parsed.data.callId));
     if(parsed.data.action==='revalidate')return NextResponse.json({verified:true,receipt:await revalidateExternalDataCall(scope,parsed.data.reservationId)});
     if (parsed.data.action === "catalog") {
       const authorization = await authorizeExternalDataCatalog(scope);

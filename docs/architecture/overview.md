@@ -1,5 +1,7 @@
 # Architecture Overview
 
+Research tool contract 10 retains Codex Harness ownership and adds isolated internal RPC connections, durable cancellation fences, compatibility-bridge elicitation, bounded claim receipts and snapshot-bound result cursors. Release acceptance follows the cross-component [research failure matrix](research-failure-matrix.md).
+
 ## Product
 
 SHUEHO Commerce Pilot is an Enterprise, browser-based e-commerce Agent for research, content, catalog, order, inventory, support, reporting, and operational workflows. It is not a generic chat demo and not a local coding-agent UI.

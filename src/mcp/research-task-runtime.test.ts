@@ -46,17 +46,17 @@ test('task instrumentation preserves synchronous client status methods',()=>{
 test('v2 checkpoint identity is independent of unrelated call order and live checks run before dispatch',async()=>{
  const f=fixture();let validations=0;const task={...f.task,execution_version:2};
  const live={revalidate:async()=>{validations++;return {state:'dispatched',approvalState:'not_required'};}};
- const control=taskAwareClient({reserve:async()=>({reservationId:'reservation',requiresApproval:false}),quote:async()=>({priced:true})},f.journal,'control',live);
+ const control=taskAwareClient({reserve:async(..._args:unknown[])=>({reservationId:'reservation',requiresApproval:false}),quote:async()=>({priced:true})},f.journal,'control',live);
  const provider=taskAwareClient(f.target,f.journal,'upstream',live);
- await withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve();await provider.callEndpoint({_commerce_context:{source_call_id:'stable'}});});
- await withResearchTaskExecution(task,randomUUID(),async()=>{await control.quote();await control.reserve();await provider.callEndpoint({_commerce_context:{source_call_id:'stable'}});});
+ await withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve({}, {source:"external_mcp",callId:"fixture_call"});await provider.callEndpoint({_commerce_context:{source_call_id:'stable'}});});
+ await withResearchTaskExecution(task,randomUUID(),async()=>{await control.quote();await control.reserve({}, {source:"external_mcp",callId:"fixture_call"});await provider.callEndpoint({_commerce_context:{source_call_id:'stable'}});});
  assert.equal(f.calls(),1);assert.equal(validations,1);
 });
 test('revoked admission prevents a new supplier dispatch',async()=>{
  const f=fixture();const task={...f.task,execution_version:2};const live={revalidate:async()=>{throw new Error('REVOKED');}};
- const control=taskAwareClient({reserve:async()=>({reservationId:'r'})},f.journal,'control',live);
+ const control=taskAwareClient({reserve:async(..._args:unknown[])=>({reservationId:'r'})},f.journal,'control',live);
  const provider=taskAwareClient(f.target,f.journal,'upstream',live);
- await assert.rejects(withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve();await provider.callEndpoint({});}),/blocked before dispatch/);assert.equal(f.calls(),0);
+ await assert.rejects(withResearchTaskExecution(task,randomUUID(),async()=>{await control.reserve({}, {source:"external_mcp",callId:"fixture_call"});await provider.callEndpoint({});}),/blocked before dispatch/);assert.equal(f.calls(),0);
 });
 
 test('page scopes share lease invalidation with the parent and subsequent pages',async()=>{

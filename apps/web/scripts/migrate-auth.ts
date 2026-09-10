@@ -279,6 +279,7 @@ async function runCommerceMigrations(): Promise<void> {
       version: "20260901_048_creative_campaign_review_methods",
       path: resolve(process.cwd(), "migrations/048_creative_campaign_review_methods.sql"),
     },
+    {version:"20260910_049_external_call_cancellation_fence",path:resolve(process.cwd(),"migrations/049_external_call_cancellation_fence.sql")},
   ];
 
   for (const migration of migrations) {

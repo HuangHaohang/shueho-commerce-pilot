@@ -10,6 +10,7 @@ import { ExternalDataServiceMcpClient, ExternalDataServiceMcpError, EXTERNAL_DAT
 let origin = "";
 let upstreamServer: ReturnType<typeof createServer>;
 let paidDispatches = 0;
+let slowStarted:(()=>void)|null=null,finishSlow:(()=>void)|null=null;
 
 before(async () => {
   upstreamServer = createServer(async (request, response) => {
@@ -24,6 +25,7 @@ before(async () => {
       return;
     }
     const body = await readJson(request);
+    if((body as any)?.params?.arguments?.research_request_id==='network-reset'){response.destroy();return;}
     const server = createMockServer();
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
@@ -144,6 +146,14 @@ test("plain-text SDK errors retain their cause instead of causing JSON parse err
     });
     assert.equal(paidDispatches - before, 1);
   } finally { await client.close(); }
+});
+test('a failing read and its reconnect cannot interrupt an in-flight supplier call',async()=>{
+ const client=createClient(128000);const before=paidDispatches;
+ const started=new Promise<void>(r=>{slowStarted=r;});
+ const paid=client.callEndpoint({endpoint_id:'fixture.slow'});let rejected=false;paid.catch(()=>{rejected=true;});
+ await started;
+ await assert.rejects(client.getResearchResult({research_request_id:'network-reset'}));
+ assert.equal(rejected,false);finishSlow!();assert.equal((await paid).payload.success,true);assert.equal(paidDispatches-before,1);await client.close();
 });
 
 function createClient(maxResultBytes: number): ExternalDataServiceMcpClient {
@@ -289,6 +299,7 @@ function createMockServer(): McpServer {
     { inputSchema: { endpoint_id: z.string(), params: z.record(z.unknown()).default({}) } },
     async ({ endpoint_id }) => {
       paidDispatches += 1;
+      if(endpoint_id==='fixture.slow'){slowStarted?.();await new Promise<void>(r=>{finishSlow=r;});}
       if (endpoint_id === "taobao.text_error_v1") throw new Error("Provider transport interrupted.");
       if (endpoint_id === "taobao.uncertain_v1") return result({
         success: false, processing_state: "unknown", provider_completed: false,

@@ -79,6 +79,8 @@ const server = createServer(async (request, response) => {
   }
 });
 
+const claimCleanupTimer=setInterval(()=>{void database.query('SELECT clean_research_claim_receipts()').catch(()=>console.error(JSON.stringify({event:'claim_receipt_cleanup_failed'})));},3600000);
+claimCleanupTimer.unref();
 const indexTimer = setInterval(() => {
   void drainIndexOutbox(100).catch(() => undefined);
 }, config.indexWorkerIntervalMs);
@@ -93,6 +95,7 @@ process.on("SIGTERM", shutdown);
 
 async function shutdown(): Promise<void> {
   clearInterval(indexTimer);
+  clearInterval(claimCleanupTimer);
   server.close();
   await closeJustOneApiProxyPool();
   await database.end().catch(() => undefined);
