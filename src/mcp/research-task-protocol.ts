@@ -35,8 +35,9 @@ export function researchTaskStore(upstream:ExternalDataServiceMcpClient,control:
 }
 
 /** Database workers do not share the SDK's process-local task wakeup queue. */
-export function registerDurableTaskResult(server:McpServer,store:TaskStore){
+export function registerDurableTaskResult(server:McpServer,store:TaskStore,resolveInput?:(id:string,signal:AbortSignal,seen:Set<string>)=>Promise<void>){
  server.server.setRequestHandler(GetTaskPayloadRequestSchema,async(request,extra)=>{
+  const seenInputs=new Set<string>();
   while(!extra.signal.aborted){
    const task=await store.getTask(request.params.taskId);
    if(!task)throw new Error('TASK_NOT_FOUND');
@@ -44,6 +45,7 @@ export function registerDurableTaskResult(server:McpServer,store:TaskStore){
     const result=await store.getTaskResult(task.taskId);
     return {...result,_meta:{...result._meta,'io.modelcontextprotocol/related-task':{taskId:task.taskId}}};
    }
+   if(task.status==='input_required'&&resolveInput){await resolveInput(task.taskId,extra.signal,seenInputs);const refreshed=await store.getTask(task.taskId);if(refreshed?.status!=='input_required')continue;}
    await new Promise<void>(resolve=>{const done=()=>{clearTimeout(timer);extra.signal.removeEventListener('abort',done);resolve();};const timer=setTimeout(done,15000);extra.signal.addEventListener('abort',done,{once:true});});
   }
   throw new Error('TASK_RESULT_WAIT_CANCELLED');

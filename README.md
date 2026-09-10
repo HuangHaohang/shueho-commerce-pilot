@@ -367,3 +367,5 @@ Research contract 8 adds idempotent task claims, current authorization checks, p
 Contract 9 retains MCP session capabilities for multi-request approval flows, persists settlement intents independently of task completion and uses immutable record snapshots for stable pagination. Known pre-dispatch denials remain distinct from uncertain provider outcomes; all page workers share the parent lease state.
 
 Contract 10 adds late-reservation cancellation fences, isolated RPC transports, downstream elicitation forwarding, idle-worker backoff with expiring claim receipts, and cursor traversal beyond 10,000 records. Cross-component acceptance is documented in the [research failure matrix](docs/architecture/research-failure-matrix.md).
+
+Research recovery patch: record projection v2 preserves source-record identity and explicitly reports unverified cross-page identity. Native MCP Tasks deliver business approval elicitation through tasks/result; approval continuation is bound to the exact reservation. Lost internal financial replies recover from matching live receipts without replaying supplier calls. Codex Harness remains the sole agent runtime.

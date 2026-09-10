@@ -1,3 +1,4 @@
+import {hashExternalDataParameters} from '../integrations/external-data-control-client.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {createHash,randomUUID} from 'node:crypto';
 import type {ExternalDataServiceMcpClient} from '../integrations/external-data-service-mcp-client.js';
@@ -8,7 +9,7 @@ import {SettlementNotPersistedError} from '../integrations/settlement-delivery-e
 import {IdleBackoff} from './idle-backoff.js';
 
 export type Task={id:string;kind:'marketplace'|'social'|'data';inputs:Record<string,unknown>;principal:AuthenticatedMcpPrincipal;attempts:number;execution_version?:number};
-type Run={task:Task;lease:string;sequence:number;control:{recover:boolean;lost:boolean};reservationId?:string;page?:number};
+type Run={task:Task;lease:string;sequence:number;control:{recover:boolean;lost:boolean};reservationId?:string;reservationCallId?:string;page?:number};
 const current=new AsyncLocalStorage<Run>();
 export const taskCallId=()=>{const r=current.getStore();return r?r.page?`${r.task.id.replaceAll('-','')}_p${r.page}`:r.task.id:randomUUID();};
 export async function withTaskPage<T>(page:number,operation:()=>Promise<T>):Promise<T>{const r=current.getStore();return r?current.run({...r,page},operation):operation();}
@@ -39,6 +40,7 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
    const base={task_id:run.task.id,lease_id:run.lease,_commerce_context:scope(run.task.principal),operation_key:operationKey,operation_name:`${group}.${String(name)}`,input_hash:hash(args),...(group==='control'&&name==='reserve'?{operation_context:{source:(args[1] as any).source,callId:(args[1] as any).callId}}:{})};
    const begun=(await journal.taskOperation('update_research_task',{...base,action:'begin_operation'})).payload;
    const op=begun.operation as {state:string;result:any};
+   if(group==='control' && name==='reserve')run.reservationCallId=(args[1] as any).callId;
    if(group==='control' && name==='reserve' && op.state==='completed')run.reservationId=op.result.reservationId;
    if(group==='control' && name==='dispatch')run.reservationId=String(args[1]);
    if(op.state==='completed'){
@@ -65,7 +67,15 @@ export function taskAwareClient<T extends object>(target:T,journal:ExternalDataS
    if(!begun.fresh && ['callEndpoint','executeDataRequestPlan','dispatch','executeMarketplaceProductResearchPlan'].includes(String(name))){
     // An ambiguous side effect is never sent again. Recover the original source result only.
     const input=args[0] as Record<string,any>;
-    if(name==='callEndpoint'){
+    if(group==='control' && name==='dispatch' && control){
+     const live=await control.revalidate(run.task.principal,String(args[1]));
+     const payload=args[2] as Record<string,unknown>;
+     if(live.reservationId!==args[1] || !run.reservationCallId || live.sourceCallId!==run.reservationCallId ||
+       live.endpointId!==payload.endpoint_id || live.parameterHash!==hashExternalDataParameters(payload.params))throw new Error('TASK_DISPATCH_RECEIPT_MISMATCH');
+     if(run.control.lost)throw new Error('TASK_LEASE_LOST');
+     if(live.state==='dispatched')result=null;
+     else if(live.state==='reserved'){await method.apply(object,args);result=null;}
+    }else if(name==='callEndpoint'){
      const recovered=(await journal.taskOperation('recover_research_call',{source_call_id:input._commerce_context.source_call_id,_commerce_context:scope(run.task.principal)})).payload;
      if(recovered.terminal)result={payload:recovered.result,isError:false,resultBytes:Buffer.byteLength(JSON.stringify(recovered.result))};
     }else if(name==='executeDataRequestPlan'){

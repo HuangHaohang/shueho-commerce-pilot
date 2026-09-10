@@ -17,7 +17,7 @@ Commerce Pilot uses the open-source Codex Harness for conversations, reasoning, 
 | Actual compatibility bridge / server restart | Forward accept/decline by native elicitation; renegotiate lost session without resubmitting collection | `commerce-client-bridge.test.ts` |
 | Native MCP task client | Negotiated create/get/result/list/cancel use durable task IDs | `research-task-protocol.test.ts` |
 | New pages arrive while results are read | Previous snapshot membership/order remains fixed | `research-delivery.integration.test.ts` |
-| More than 10,000 records | Traverse all records using snapshot-bound cursors, without duplicates or omissions | 10,050-record PostgreSQL traversal and cursor tests |
+| More than 10,000 records | Traverse all records using snapshot-bound cursors, without duplicates or omissions | 10,050-record PostgreSQL traversal built from observations (not a prefilled index), and cursor tests |
 | Empty queue over time | Exponential idle backoff; bounded v2 receipt retention with expired request rejection | `idle-backoff.test.ts`, PostgreSQL claim-expiry tests |
 | Cross-tenant/user/session attempts | RLS, owner checks and session identity prevent access | SQL task/record tests, MCP session test |
 
@@ -33,3 +33,5 @@ Before release, inspect active provider calls, task states and financial states.
 - Settlement/release jobs enter `attention_required` after 20 failed deliveries. Their original immutable intent remains available for reconciliation.
 - Legacy empty-claim receipts without a timestamp are retained. New issued-at claims expire after ten minutes and their operational receipts are cleaned after one day; raw/business records are not cleaned by this mechanism.
 - Historical pending approvals are not cancelled merely because they are old. Only task-terminal cleanup or explicit cancellation releases known unissued reservations.
+
+Recovery acceptance also covers different reviews sharing itemId, null rateId, old snapshot readback, native Tasks input_required with related-task elicitation, concurrent result readers, approval response loss, stale approval reservation rejection, and financial response loss before provider execution. Verified source records are preserved when cross-page entity identity is unknown.

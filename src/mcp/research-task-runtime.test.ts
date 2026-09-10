@@ -67,3 +67,23 @@ test('page scopes share lease invalidation with the parent and subsequent pages'
   await assert.rejects(provider.callEndpoint({}),/LEASE_LOST/);
  });assert.equal(f.calls(),0);
 });
+
+test('financial reply loss recovers the matching receipt and sends a supplier exactly once',async()=>{
+ const f=fixture();let dispatches=0,checks=0;const id=randomUUID();const params={q:'fixture'};
+ const {hashExternalDataParameters}=await import('../integrations/external-data-control-client.js');
+ const receipt={reservationId:id,sourceCallId:'fixture_call',endpointId:'fixture.read',parameterHash:hashExternalDataParameters(params),state:'dispatched',approvalState:'not_required'};
+ const live={revalidate:async()=>{checks++;return receipt;}};
+ const c=taskAwareClient({reserve:async(..._:unknown[])=>({reservationId:id,requiresApproval:false}),dispatch:async(..._:unknown[])=>{dispatches++;throw new Error('lost financial reply');}},f.journal,'control',live);
+ const upstream=taskAwareClient(f.target,f.journal,'upstream',live);
+ const work=async()=>{await c.reserve(f.task.principal,{source:'external_mcp',callId:'fixture_call'});await c.dispatch(f.task.principal,id,{endpoint_id:'fixture.read',params});return upstream.callEndpoint({_commerce_context:{source_call_id:'fixture_call'}});};
+ const task={...f.task,execution_version:2};await assert.rejects(withResearchTaskExecution(task,randomUUID(),work),/lost financial reply/);
+ await withResearchTaskExecution(task,randomUUID(),work);await withResearchTaskExecution(task,randomUUID(),work);
+ assert.equal(dispatches,1);assert.equal(f.calls(),1);assert(checks>=2);
+});
+test('mismatched financial receipt cannot authorize a supplier call',async()=>{
+ const f=fixture();const id=randomUUID();let readback=false;
+ const live={revalidate:async()=>{readback=true;return {state:'dispatched',reservationId:'other'};}};
+ const c=taskAwareClient({reserve:async(..._:unknown[])=>({reservationId:id}),dispatch:async(..._:unknown[])=>{throw new Error('lost');}},f.journal,'control',live);
+ const work=async()=>{await c.reserve({}, {source:'external_mcp',callId:'fixture_call'});await c.dispatch({},id,{endpoint_id:'fixture.read',params:{}});};
+ await assert.rejects(withResearchTaskExecution(f.task,randomUUID(),work));await assert.rejects(withResearchTaskExecution(f.task,randomUUID(),work),/MISMATCH/);assert(readback);assert.equal(f.calls(),0);
+});

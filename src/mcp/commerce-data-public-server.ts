@@ -1,3 +1,4 @@
+import {researchApprovalHandler} from './research-approval.js';
 import {registerDurableTaskResult,researchTaskStore,mcpTaskView,mcpResult,mcpFailure,taskOutputSchema} from "./research-task-protocol.js";
 import {McpSessionPool} from './mcp-session-pool.js';
 import {startResearchSettlementWorker} from './research-settlement-worker.js';
@@ -161,21 +162,13 @@ function createCommerceDataMcpServer(principal: AuthenticatedMcpPrincipal,native
     return register(name,options,handler);
   };
   const owner={tenant_id:principal.tenantId,workspace_id:principal.workspaceId,user_id:principal.userId};
-  register('get_research_task',{title:'读取后台任务',description:'读取任务、部分结果和审批状态；仅在客户端支持正式 elicitation 时请求批准。',inputSchema:{task_id:z.string().uuid()},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},async({task_id}:{task_id:string})=>{
-    await control.authorizeCatalog(principal);let task=await getTask(taskStore,principal,task_id);
-    if(task.state==='waiting_approval' && (task.approval as any)?.reservationId && server.server.getClientCapabilities()?.elicitation?.form){
-      const approval=task.approval as any;
-      const response=await server.server.elicitInput({mode:'form',message:`此任务需要批准一次数据调用，费用 ${Number(approval.billableAmountMicros??0)/1000000} ${approval.currency??'CNY'}。`,requestedSchema:{type:'object',properties:{approve:{type:'boolean',title:'批准本次调用'}},required:['approve']}});
-      if(response.action==='accept' && response.content?.approve===true){await rawControl.approve(principal,approval.reservationId);await taskStore.taskOperation('manage_research_task',{action:'resume',task_id,_commerce_context:owner});task=await getTask(taskStore,principal,task_id);}
-      else if(response.action==='decline'){await rawControl.cancel(principal,approval.reservationId,'user_denied');await taskStore.taskOperation('manage_research_task',{action:'cancel',task_id,_commerce_context:owner});task=await getTask(taskStore,principal,task_id);}
-    }
-    return mcpResult(task);
-  });
+  const resolveApproval=researchApprovalHandler(server,taskStore,rawControl,principal);
+  register('get_research_task',{title:'读取后台任务',description:'读取任务、部分结果和审批状态；通过原生 elicitation 请求批准。',inputSchema:{task_id:z.string().uuid()},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true,openWorldHint:false}},async({task_id}:{task_id:string},extra:any)=>mcpResult(await resolveApproval(task_id,extra.signal)));
   register('list_research_tasks',{title:'列出研究任务',description:'找回自己的任务，无需重新提交。',inputSchema:{cursor:z.string().uuid().optional(),limit:z.number().int().min(1).max(50).default(20)},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);return mcpResult((await taskStore.taskOperation('manage_research_task',{...args,action:'list',_commerce_context:owner})).payload);});
   register('cancel_research_task',{title:'取消研究任务',description:'停止尚未发出的步骤；已发出的请求仍需保留结果与结算，不自动退款或重采。',inputSchema:{task_id:z.string().uuid()},annotations:{readOnlyHint:false,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);const task=await getTask(taskStore,principal,args.task_id);if((task.approval as any)?.reservationId)await rawControl.cancel(principal,(task.approval as any).reservationId,'user_denied');return mcpResult((await taskStore.taskOperation('manage_research_task',{...args,action:'cancel',_commerce_context:owner})).payload);});
   register('get_research_records',{title:'按记录读取研究结果',description:'分页读取完整评价/商品/内容记录，保留来源；不重新采集。',inputSchema:{cursor:z.string().max(512).optional(),snapshot_id:z.string().uuid().optional(),task_id:z.string().uuid().optional(),research_request_id:z.string().uuid().optional(),offset:z.number().int().min(0).max(2147483647).default(0),limit:z.number().int().min(1).max(100).default(50)},annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true}},async(args:any)=>{await control.authorizeCatalog(principal);return mcpResult((await taskStore.taskOperation('read_research_records',{...args,_commerce_context:owner})).payload);});
   for(const d of researchService.definitions(principal))registerDefinition(d.name,d.config,d.handler);
-  if(nativeTasks)registerDurableTaskResult(server,researchTaskStore(taskStore,rawControl,principal));
+  if(nativeTasks)registerDurableTaskResult(server,researchTaskStore(taskStore,rawControl,principal),async(id,signal,seen)=>{await resolveApproval(id,signal,true,seen);});
   return server;
 }
 

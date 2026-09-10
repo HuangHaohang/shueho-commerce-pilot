@@ -5444,7 +5444,7 @@ async function resolveExternalDataApproval(
   }
   await externalDataControl.approve(approval.principal, approval.reservation.reservationId);
   if(approval.researchTaskId){
-    const result=await externalDataService.taskOperation('manage_research_task',{action:'resume',task_id:approval.researchTaskId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
+    const result=await externalDataService.taskOperation('manage_research_task',{action:'resume',task_id:approval.researchTaskId,approval_reservation_id:approval.reservation.reservationId,_commerce_context:{tenant_id:approval.principal.tenantId,workspace_id:approval.principal.workspaceId,user_id:approval.principal.userId,root_thread_id:approval.principal.rootThreadId}});
     respondWithCommerceDataResult(pending.id,result.payload);return;
   }
   if (approval.workflow && approval.workflowStep) {

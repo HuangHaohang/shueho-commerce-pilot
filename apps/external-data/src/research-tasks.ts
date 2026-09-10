@@ -65,6 +65,8 @@ export async function manageResearchTask(scope:Scope,input:JsonObject):Promise<R
  await readResearchTask(scope,String(input.task_id));
  return withScope(scope,async c=>{
   const task=(await c.query('SELECT * FROM research_task WHERE id=$1 FOR UPDATE',[input.task_id])).rows[0];
+  if(input.action==='resume' && typeof input.approval_reservation_id!=='string')throw new Error('TASK_APPROVAL_RECEIPT_REQUIRED');
+  if((input.action==='resume'||input.approval_reservation_id) && task.approval?.reservationId!==input.approval_reservation_id)throw new Error('TASK_APPROVAL_RECEIPT_MISMATCH');
   if(input.action==='cancel' && ['queued','waiting_approval','running'].includes(task.state)){
    await c.query(`UPDATE research_task SET cancel_requested_at=clock_timestamp(),state='cancelled',lease_until=NULL,updated_at=clock_timestamp() WHERE id=$1`,[task.id]);
   }else if(input.action==='resume' && task.state==='waiting_approval'){

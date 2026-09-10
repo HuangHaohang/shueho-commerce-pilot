@@ -41,9 +41,12 @@ describe.skipIf(!url||!ownerUrl)('durable research queue with PostgreSQL',()=>{
   const scope={tenantId:randomUUID(),workspaceId:randomUUID(),userId:'fixture'};
   const t=await submitResearchTask(scope,{source:'external_mcp',kind:'data',idempotency_key:randomUUID(),inputs:{},principal:scope});
   const lease=randomUUID();await claimResearchTask(lease);
-  await updateResearchTask(scope,{task_id:t.task_id,lease_id:lease,action:'finish',state:'waiting_approval',approval:{reservationId:randomUUID()},result:{success:false,error:{code:'APPROVAL_REQUIRED'}}});
+  const reservationId=randomUUID();
+  await updateResearchTask(scope,{task_id:t.task_id,lease_id:lease,action:'finish',state:'waiting_approval',approval:{reservationId},result:{success:false,error:{code:'APPROVAL_REQUIRED'}}});
   expect((await readResearchTask(scope,t.task_id)).state).toBe('waiting_approval');
-  expect((await manageResearchTask(scope,{action:'resume',task_id:t.task_id})).state).toBe('queued');
+  await expect(manageResearchTask(scope,{action:'resume',task_id:t.task_id})).rejects.toThrow('RECEIPT_REQUIRED');
+  await expect(manageResearchTask(scope,{action:'resume',task_id:t.task_id,approval_reservation_id:randomUUID()})).rejects.toThrow('RECEIPT_MISMATCH');
+  expect((await manageResearchTask(scope,{action:'resume',task_id:t.task_id,approval_reservation_id:reservationId})).state).toBe('queued');
   const replacement=randomUUID();expect((await claimResearchTask(replacement)).task.id).toBe(t.task_id);
   await updateResearchTask(scope,{task_id:t.task_id,lease_id:replacement,action:'finish',state:'completed',result:{success:true}});
  });
