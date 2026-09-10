@@ -61,12 +61,14 @@ test('social research traverses qualified coverage with independent paid receipt
  const calls:number[]=[],settled:string[]=[];
  const upstream:any={
   preflightSocialContentResearch:async()=>({payload:{success:true,business_tool:'research_social_content',endpoint_id:'fixture.social',platform:'fixture',research_plan_key:'a'.repeat(64),normalized_params:{page:1},business_intent:{},coverage:{collection:{policy_receipt_id:randomUUID()}}}}),
-  callEndpoint:async(a:any)=>{calls.push(a.params.page);return {payload:{success:true,provider_completed:true,processing_state:'completed',research_request_id:'r'+a.params.page,evidence:a.params.page===1?[]:[{provider_entity_id:'one',source_platform:'fixture'}]},isError:false,resultBytes:10};},
+  callEndpoint:async(a:any)=>{calls.push(a.params.page);return {payload:{success:true,provider_completed:true,processing_state:'completed',research_request_id:'r'+a.params.page,coverage:{sourceRecords:10,held:9,promoted:1},evidence:a.params.page===1?[]:[{provider_entity_id:'one',source_platform:'fixture'}]},isError:false,resultBytes:10};},
   taskOperation:async(_name:string,a:any)=>({payload:{success:true,next_params:{page:a.research_request_id==='r1'?2:2},signature:a.research_request_id,reason:'continue'}}),
  };
- const control:any={authorizeCatalog:async()=>({allowedPlatforms:['fixture'],allowedEndpointIds:[]}),reserve:async()=>({reservationId:randomUUID(),requiresApproval:false}),dispatch:async()=>{},settle:async(_p:any,id:string)=>{settled.push(id);}};
+ const control:any={authorizeCatalog:async()=>({allowedPlatforms:['fixture'],allowedEndpointIds:[]}),reserve:async()=>({reservationId:randomUUID(),requiresApproval:false,billableAmountMicros:200000,currency:'CNY'}),dispatch:async()=>{},settle:async(_p:any,id:string)=>{settled.push(id);}};
  const r=await createResearchService(upstream,control).execute({id:randomUUID(),kind:'social',principal,attempts:1,execution_version:3,inputs:{platform:'fixture',max_results:3,research_request:'fixture'}});
  assert.deepEqual(calls,[1,2]);assert.equal(settled.length,2);assert.equal(r.structuredContent.coverage.stop_reason,'source_repeated_cursor');
  assert.equal(r.structuredContent.evidence.length,1);
  assert.equal(r.structuredContent.research_plan.collection,undefined);
+ assert.equal(r.structuredContent.coverage.sourceRecords,20);assert.equal(r.structuredContent.coverage.held,18);
+ assert.equal(r.structuredContent.call_receipts.length,2);assert.equal(r.structuredContent.billing_scope,'per_call');assert.equal(r.structuredContent._commercePilot,undefined);
 });

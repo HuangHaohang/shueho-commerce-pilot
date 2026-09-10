@@ -33,7 +33,7 @@ export async function runHarnessModel(input:{model:string;prompt:string;instruct
   if(event.type==="server_request"){client.rejectServerRequest(event.id,{code:-32601,message:"No client tools or permission grants are available to this bounded operation."});return;}
   if(event.type!=="notification" || !event.params || typeof event.params!=="object")return;
   const p=event.params as any;if(p.threadId!==threadId)return;
-  if(event.method==="thread/tokenUsage/updated"){const u=p.tokenUsage?.last;usage=u?{input_tokens:u.inputTokens,output_tokens:u.outputTokens,total_tokens:u.totalTokens,input_tokens_details:{cached_tokens:u.cachedInputTokens},output_tokens_details:{reasoning_tokens:u.reasoningOutputTokens}}:null;}
+  if(event.method==="thread/tokenUsage/updated"){const u=p.tokenUsage?.total;usage=u?{input_tokens:u.inputTokens,output_tokens:u.outputTokens,total_tokens:u.totalTokens,input_tokens_details:{cached_tokens:u.cachedInputTokens},output_tokens_details:{reasoning_tokens:u.reasoningOutputTokens}}:null;}
   if(event.method==="item/completed" && p.item?.type==="agentMessage")messages.set(p.item.id,p.item.text);
   if(event.method==="item/completed" && p.item?.type==="webSearch"){
    sawNativeSearch=true;

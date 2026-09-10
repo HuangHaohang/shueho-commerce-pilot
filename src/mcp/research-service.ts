@@ -477,9 +477,35 @@ async function executeSocialResearch(principal:AuthenticatedMcpPrincipal,args:Re
  if(!pages.length&&failure)return failure;
  const last=pages.at(-1)??{};
  const publicPlan={...preflight.coverage};delete publicPlan.collection;
- const payload={...last,...(failure?.structuredContent??{}),research_plan:publicPlan,evidence:[...evidence.values()].slice(0,args.max_results),
+ const selected=[...evidence.values()].slice(0,args.max_results);
+ const sum=(key:string)=>pages.reduce((n,p)=>n+Number(p.coverage?.[key]??0),0);
+ const reasonCounts:Record<string,number>={};
+ for(const p of pages)for(const [reason,count] of Object.entries(p.coverage?.exclusionReasons??{}))reasonCounts[reason]=(reasonCounts[reason]??0)+Number(count);
+ const names=[...new Set<string>(pages.flatMap(p=>Object.keys(p.coverage?.metricCoverageByField??{})).concat(args.requested_metrics??[]))];
+ const fields=Object.fromEntries(names.map(name=>{
+  const present=selected.filter(row=>Number.isSafeInteger(row.metrics?.[name])&&row.metrics[name]>=0).length;
+  return [name,{presentSamples:present,totalSamples:selected.length,status:selected.length===0?"no_samples":present===0?"missing":present===selected.length?"complete":"partial",timeBasis:"provider_observed_count_not_period_increment"}];
+ }));
+ const sourceFields=Object.fromEntries(names.map(name=>{
+  const present=pages.reduce((n,p)=>n+Number(p.coverage?.sourceMetricCoverageByField?.[name]?.presentSamples??0),0);
+  const total=pages.reduce((n,p)=>n+Number(p.coverage?.sourceMetricCoverageByField?.[name]?.totalSamples??0),0);
+  return [name,{presentSamples:present,totalSamples:total,status:total===0?"no_samples":present===0?"missing":present===total?"complete":"partial",timeBasis:"provider_observed_count_not_period_increment"}];
+ }));
+ const available=names.filter(name=>fields[name]!.presentSamples>0);
+ const missing=(args.requested_metrics??[]).filter((name:string)=>!available.includes(name));
+ const {_commercePilot:_lastCall,...lastPublic}=last;
+ const payload={...lastPublic,...(failure?.structuredContent??{}),research_plan:publicPlan,evidence:selected,
+  billing_scope:"per_call",call_receipts:pages.map(p=>p._commercePilot).filter(Boolean),
+  exclusions:{hold:sum("held"),reject:sum("rejected"),promote:sum("promoted")},
   research_requests:pages.map(p=>({research_request_id:p.research_request_id,observed_at:p.observed_at})),
   coverage:{...last.coverage,pages_completed:pages.length,stop_reason:stop,collectionComplete:stop==="source_end",
+   sourceRecords:sum("sourceRecords"),sourceRecordsWithPublishTime:sum("sourceRecordsWithPublishTime"),
+   sourceCountBasis:"page_observations",acceptedCount:selected.length,requestedCount:args.max_results,promoted:sum("promoted"),held:sum("held"),rejected:sum("rejected"),
+   exclusionReasons:reasonCounts,metricCoverageByField:fields,sourceMetricCoverageByField:sourceFields,
+   availableMetrics:available,missingRequestedMetrics:missing,acceptedContent:selected.filter(row=>row.evidence_kind==="content").length,
+   sampleStatus:selected.length===0?"no_qualified_samples":selected.length<args.max_results?"below_requested_count":"requested_count_reached",
+   analysisReadiness:{...last.coverage?.analysisReadiness,processingComplete:!failure,missingRequestedMetrics:missing,
+    requestedMetricCoverage:!(args.requested_metrics??[]).length?"not_requested":missing.length===0?"complete":missing.length===(args.requested_metrics??[]).length?"none":"partial"},
    acceptedEvidence:Math.min(evidence.size,args.max_results),rankingScope:"collected_qualified_samples",
    pageCoverage:pages.map(p=>({research_request_id:p.research_request_id,...p.coverage}))},
   message:failure?"后续采集未完成，已归档结果保留；查看当前错误。":`本任务处理了 ${pages.length} 页、获得 ${Math.min(evidence.size,args.max_results)} 条合格证据；覆盖和结束原因见 coverage。`};
