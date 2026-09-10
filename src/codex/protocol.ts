@@ -56,6 +56,8 @@ export type AppServerClientOptions = {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   requestTimeoutMs?: number;
+  /** App-owned pinned model metadata for standard Responses compatibility. */
+  modelCatalogPath?: string;
 };
 
 export type ThreadStartInput = {

@@ -6552,8 +6552,8 @@ function createCommerceDataToolSpec(): DynamicToolSpec {
               description: "Requested public content platform in uppercase form, for example DOUYIN or XIAOHONGSHU.",
             },
             keyword: { type: "string", description: "Concise product, category, brand or topic keyword." },
-            start_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive start date in Asia/Shanghai, YYYY-MM-DD." },
-            end_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive end date in Asia/Shanghai, YYYY-MM-DD." },
+            start_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive start date in the imported platform timezone, YYYY-MM-DD." },
+            end_date: { type: "string", pattern: "^\\d{4}-\\d{2}-\\d{2}$", description: "Inclusive end date in the imported platform timezone, YYYY-MM-DD." },
             objective: {
               type: "string",
               enum: ["latest_content", "interaction_ranked"],

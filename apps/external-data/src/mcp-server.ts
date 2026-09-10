@@ -1,3 +1,4 @@
+import {researchContinuation} from "./research-continuation.js";
 import {enqueueSettlement,claimSettlement,finishSettlement} from "./research-settlements.js";
 import {readRecordPage} from "./research-records.js";
 import {withScope as taskWithScope} from "./database.js";
@@ -628,6 +629,11 @@ export function createExternalDataMcpServer(pipeline = new ExternalDataPipeline(
       return toolSuccess({ success: true, workflow_execution_id, processing_state: "cancelled" });
     },
   );
+  server.registerTool("get_research_continuation",{
+    inputSchema:{research_request_id:z.string().uuid(),policy_id:z.string().uuid(),platform:z.string(),objective:z.string(),
+      _commerce_context:z.object({tenant_id:z.string().uuid(),workspace_id:z.string().uuid(),user_id:z.string()})},
+    annotations:{readOnlyHint:true,destructiveHint:false,idempotentHint:true,openWorldHint:false},
+  },async a=>toolSuccess(await researchContinuation({tenantId:a._commerce_context.tenant_id,workspaceId:a._commerce_context.workspace_id,userId:a._commerce_context.user_id},a.research_request_id,a.policy_id,a.platform,a.objective)));
   server.registerTool(
     "preflight_social_content_research",
     {

@@ -1,3 +1,4 @@
+import {loadResearchPolicy} from "./research-policy.js";
 import { assessProductMetrics, publicEvidenceAssessment } from "./evidence-assessment.js";
 import { config } from "./config.js";
 import { currentPromotedEvidence } from "./current-evidence.js";
@@ -39,11 +40,14 @@ export async function hybridBusinessSearch(input: HybridSearchInput): Promise<Js
 
 async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<JsonObject[]> {
   const models = input.models ?? new LocalModelClient();
+  const policy=(await loadResearchPolicy()).retrieval;
+  const candidateLimit=Math.max(input.limit,policy.candidateLimit);
+  const rerankLimit=Math.max(input.limit,policy.rerankLimit);
   const queryVector = (await models.embed([input.query.slice(0, 4096)], "query"))[0];
   if (!queryVector) throw new Error("Local embedding model returned no search vector.");
   const vectorRows = await withScope(input, async (client) => {
     await client.query("SET LOCAL hnsw.iterative_scan = strict_order");
-    await client.query("SET LOCAL hnsw.ef_search = 100");
+    await client.query("SELECT set_config('hnsw.ef_search',$1,true)",[String(policy.efSearch)]);
     const result = await client.query<JsonObject>(`
       WITH nearest AS (
         SELECT document.entity_type, document.entity_id,document.research_request_id,enrichment.id AS enrichment_result_id,
@@ -58,7 +62,7 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
             WHERE job.research_request_id=document.research_request_id AND job.state='completed'
             ORDER BY job.completed_at DESC NULLS LAST,job.created_at DESC LIMIT 1)
         ORDER BY document.embedding <=> $1::vector
-        LIMIT 50
+        LIMIT $2
       )
       SELECT 'product:' || product.id::text AS result_key, 'product' AS entity_type,
              product.id, product.title, NULL::text AS summary, product.shop_name,
@@ -139,15 +143,15 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
         ON nearest.entity_type='generic_record' AND evidence.source_record_id=nearest.entity_id
        AND evidence.research_request_id=nearest.research_request_id AND evidence.enrichment_result_id=nearest.enrichment_result_id
       ORDER BY vector_score DESC
-      LIMIT 50
-    `, [vectorLiteral(queryVector)]);
+      LIMIT $2
+    `, [vectorLiteral(queryVector),candidateLimit]);
     return result.rows;
   });
   const elasticRows = await searchBusinessIndex({
     tenantId: input.tenantId,
     workspaceId: input.workspaceId,
     query: input.query,
-    limit: 50,
+    limit: candidateLimit,
   });
 
   const merged = new Map<string, HybridCandidate>();
@@ -167,16 +171,17 @@ async function executeHybridBusinessSearch(input: HybridSearchInput): Promise<Js
       ...candidate,
       enrichment_metadata: permittedEvidence.get(candidate.result_key),
       reciprocal_rank_score:
-        (candidate.vector_rank ? 1 / (60 + candidate.vector_rank) : 0) +
-        (candidate.elastic_rank ? 1 / (60 + candidate.elastic_rank) : 0),
+        (candidate.vector_rank ? 1 / (policy.rrfK + candidate.vector_rank) : 0) +
+        (candidate.elastic_rank ? 1 / (policy.rrfK + candidate.elastic_rank) : 0),
     }))
     .sort((left, right) => right.reciprocal_rank_score - left.reciprocal_rank_score)
-    .slice(0, 20);
+    .slice(0, rerankLimit);
   if (!ranked.length) return [];
-  const rerankScores = await models.rerank(
-    input.query.slice(0, 4096),
-    ranked.map((candidate) => [candidate.title, candidate.summary, candidate.shop_name].filter(Boolean).join("；").slice(0, 4096)),
-  );
+  const rerankScores:number[]=[];
+  for(let offset=0;offset<ranked.length;offset+=50){
+    rerankScores.push(...await models.rerank(input.query.slice(0,4096),ranked.slice(offset,offset+50).map(candidate=>[candidate.title,candidate.summary,candidate.shop_name].filter(Boolean).join("；").slice(0,4096))));
+  }
+
   return ranked
     .map((candidate, index) => ({ ...candidate, rerank_score: rerankScores[index] ?? 0 }))
     .filter((candidate) => Number(candidate.rerank_score) >= config.localModels.rerankMinScore)

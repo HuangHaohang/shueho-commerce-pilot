@@ -107,7 +107,10 @@ export async function getEndpoint(endpointId: string, client?: PoolClient): Prom
   `, [endpointId]);
   const row = result.rows[0];
   if (!row) throw new EndpointRegistryError(`Unknown or disabled endpoint ${endpointId}.`, "ENDPOINT_NOT_FOUND");
-  return mapEndpointRow(row);
+  const endpoint=mapEndpointRow(row);
+  const profile=await executor.query<{timezone:string|null}>("SELECT source_document->'providerTimezones'->>$1 AS timezone FROM research_policy_import_receipt ORDER BY created_at DESC,id DESC LIMIT 1",[endpointId]);
+  if(profile.rows[0]?.timezone)endpoint.requestCodec={...endpoint.requestCodec,timezone:profile.rows[0].timezone};
+  return endpoint;
 }
 
 export async function providerCatalogHealth(): Promise<Record<string, unknown>> {
@@ -210,13 +213,13 @@ function applyParameterTransforms(params: JsonObject, codec: JsonObject): JsonOb
   if (!transforms || typeof transforms !== "object" || Array.isArray(transforms)) return params;
   for (const [key, transform] of Object.entries(transforms)) {
     if (transform === "provider_datetime" && typeof params[key] === "string") {
-      params[key] = providerDateTime(params[key] as string, key);
+      params[key] = providerDateTime(params[key] as string, key, typeof codec.timezone==="string"?codec.timezone:null);
     }
   }
   return params;
 }
 
-function providerDateTime(value: string, key: string): string {
+function providerDateTime(value: string, key: string, timezone: string|null): string {
   const trimmed = value.trim();
   if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(trimmed)) return trimmed;
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return `${trimmed} ${/^end$/i.test(key) ? "23:59:59" : "00:00:00"}`;
@@ -224,8 +227,9 @@ function providerDateTime(value: string, key: string): string {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(trimmed)) return trimmed;
   const parsed = new Date(trimmed);
   if (Number.isNaN(parsed.getTime())) return trimmed;
+  if(!timezone)throw new EndpointRegistryError("Timezone-qualified input requires an imported provider timezone.","PROVIDER_TIMEZONE_REQUIRED");
   const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+    timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
   }).formatToParts(parsed).map((part) => [part.type, part.value]));
   return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;

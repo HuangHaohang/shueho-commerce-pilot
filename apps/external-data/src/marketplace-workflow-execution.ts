@@ -1,3 +1,4 @@
+import {loadResearchPolicy} from "./research-policy.js";
 import { createHash } from "node:crypto";
 
 import { workflowPolling } from "./provider-execution-status.js";
@@ -348,8 +349,8 @@ export async function resolveMarketplaceWorkflowBindings(
         source_research_request_id: source.research_request_id,
       };
     }
-    const sampleSizeResult = await client.query<{ detail_sample_size: number; research_plan_id: string | null }>(`
-      SELECT execution.research_plan_id,
+    const sampleSizeResult = await client.query<{ detail_sample_size: number; research_plan_id: string | null; research_policy: any }>(`
+      SELECT execution.research_plan_id,plan.business_intent->'research_policy' AS research_policy,
              COALESCE(plan.detail_sample_size,(execution.business_input->>'detail_sample_size')::integer,1) AS detail_sample_size
       FROM research_workflow_execution execution
       LEFT JOIN marketplace_research_plan plan ON plan.id=execution.research_plan_id
@@ -397,7 +398,8 @@ export async function resolveMarketplaceWorkflowBindings(
         source_research_request_id: source.research_request_id,
       };
     }
-    const resolvedTargets = selectDiversifiedBindingTargets(candidates, sampleSize);
+    const policy=sampleSizeResult.rows[0]?.research_policy?.sampling ?? (await loadResearchPolicy(true)).sampling;
+    const resolvedTargets = selectDiversifiedBindingTargets(candidates, sampleSize, policy);
     if (!resolvedTargets.length) {
       await client.query(`
         UPDATE research_workflow_step_execution
@@ -934,6 +936,7 @@ async function readExecutableStepInstances(
 function selectDiversifiedBindingTargets(
   entries: Array<{ candidate: BindingCandidate; values: Record<string, string | number> }>,
   limit: number,
+  policy: {relevanceWeight:number;sameShopPenalty:number},
 ): Array<{
   candidate: BindingCandidate;
   values: Record<string, string | number>;
@@ -959,8 +962,8 @@ function selectDiversifiedBindingTargets(
         : 0;
       const sameShop = selected.some((chosen) =>
         entry.values.shop_id !== undefined && entry.values.shop_id === chosen.values.shop_id);
-      const diversity = Math.max(0, 1 - similarity - (sameShop ? 0.2 : 0));
-      const selectionScore = Math.min(1, Math.max(0, entry.candidate.relevanceScore * 0.8 + diversity * 0.2));
+      const diversity = Math.max(0, 1 - similarity - (sameShop ? policy.sameShopPenalty : 0));
+      const selectionScore = Math.min(1, Math.max(0, entry.candidate.relevanceScore * policy.relevanceWeight + diversity * (1-policy.relevanceWeight)));
       return {
         entry,
         selectionScore,

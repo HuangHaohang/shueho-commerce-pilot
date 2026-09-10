@@ -1,3 +1,6 @@
+import {readFileSync} from "node:fs";
+import {researchPolicySchema,localDateBoundary} from "./research-policy.js";
+const policy=researchPolicySchema.parse(JSON.parse(readFileSync(new URL("../catalog/research-policy.v1.json",import.meta.url),"utf8")));
 import { describe, expect, it } from "vitest";
 
 import {
@@ -19,7 +22,7 @@ describe("social content research planning", () => {
         keyword: { type: "string" },
         sortType: { type: "string", enum: ["COMPREHENSIVE", "HIGH_INTERACTION"] },
       }),
-    ], request("latest_content"));
+    ], request("latest_content"),policy);
 
     expect(plan.endpoint.endpointId).toBe("search.search_v1");
     expect(plan.normalizedParams).toMatchObject({
@@ -38,23 +41,23 @@ describe("social content research planning", () => {
         keyword: { type: "string" },
         sortType: { type: "string", enum: ["COMPREHENSIVE", "HIGH_INTERACTION"] },
       }),
-    ], request("interaction_ranked"));
+    ], request("interaction_ranked"),policy);
 
     expect(plan.endpoint.endpointId).toBe("douyin.hot_search_v1");
     expect(plan.normalizedParams).toMatchObject({ keyword: "轻量通勤双肩包", sortType: "HIGH_INTERACTION", page: 1 });
-    expect(plan.coverage).toMatchObject({ window_enforcement: "warehouse_post_filter", provider_calls: 1 });
+    expect(plan.coverage).toMatchObject({ window_enforcement: "warehouse_post_filter", collection: {pagination:{kind:"page"}} });
   });
 
   it("maps actual popularity sort fields without claiming an exact interaction sum", () => {
     const plan=selectSocialContentResearchPlan([endpoint("xiaohongshu.search_note_v4","xiaohongshu",{
-      keyword:{type:"string"},sort:{type:"string",enum:["general","popularity_descending"]},
-    })],{...request("interaction_ranked"),platform:"XIAOHONGSHU"});
-    expect(plan.normalizedParams).toMatchObject({sort:"popularity_descending"});
+      keyword:{type:"string"},sortType:{type:"string",enum:["general","popularity_descending"]},
+    })],{...request("interaction_ranked"),platform:"XIAOHONGSHU"},policy);
+    expect(plan.normalizedParams).toMatchObject({sortType:"popularity_descending"});
     expect(plan.coverage.ranking_basis).toBe("provider_popularity_not_exact_interaction_sum");
   });
 
   it("fails closed when no endpoint satisfies the requested business capability", () => {
-    expect(() => selectSocialContentResearchPlan([], request("latest_content"))).toThrowError(SocialResearchPlanningError);
+    expect(() => selectSocialContentResearchPlan([], request("latest_content"),policy)).toThrowError(SocialResearchPlanningError);
   });
 });
 
@@ -96,3 +99,10 @@ function endpoint(endpointId: string, platformId: string, properties: JsonObject
     openapiUrl: null,
   };
 }
+
+it("uses IANA calendar boundaries including DST rather than a fixed eight-hour offset",()=>{
+ expect(localDateBoundary("2026-03-08","America/New_York")).toBe("2026-03-08T05:00:00.000Z");
+ expect(localDateBoundary("2026-03-08","America/New_York",true)).toBe("2026-03-09T03:59:59.999Z");
+ const unknown={...policy,social:[]};
+ expect(()=>selectSocialContentResearchPlan([],request("latest_content"),unknown)).toThrow(SocialResearchPlanningError);
+});

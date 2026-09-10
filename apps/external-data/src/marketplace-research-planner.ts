@@ -1,3 +1,4 @@
+import {loadResearchPolicy} from "./research-policy.js";
 import { sha256Json } from "./canonical.js";
 import type {
   ProviderBusinessWorkflow,
@@ -87,7 +88,11 @@ export async function planMarketplaceProductResearch(
     (!constraints.allowedCatalogPlatforms?.length || constraints.allowedCatalogPlatforms.includes(workflow.platformId)) &&
     (!constraints.allowedEndpointIds?.length || workflow.steps.every((step) => constraints.allowedEndpointIds!.includes(step.endpoint.endpointId)))
   );
-  return selectMarketplaceProductResearchPlan(workflows, input, firstPartySubject);
+  const plan=selectMarketplaceProductResearchPlan(workflows,input,firstPartySubject);
+  const policy=await loadResearchPolicy();
+  plan.businessIntent.research_policy={receiptId:policy.receiptId,sampling:policy.sampling};
+  plan.planKey=sha256Json({planKey:plan.planKey,researchPolicy:plan.businessIntent.research_policy});
+  return plan;
 }
 
 export function selectMarketplaceProductResearchPlan(

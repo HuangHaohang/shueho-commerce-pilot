@@ -6,6 +6,7 @@ COPY apps/external-data/package.json apps/external-data/package.json
 RUN npm ci --no-audit --no-fund
 COPY tsconfig.json ./
 COPY src ./src
+COPY vendor/codex/models.json ./vendor/codex/models.json
 COPY apps ./apps
 COPY designs ./designs
 COPY deploy/production-mcp/tsconfig.json ./deploy/production-mcp/tsconfig.json
@@ -39,6 +40,7 @@ RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack 
 COPY --from=production-dependencies /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist ./dist
+COPY --from=build /app/vendor/codex/models.json ./vendor/codex/models.json
 COPY --from=build /app/apps/external-data/package.json ./apps/external-data/package.json
 COPY --from=build /app/apps/external-data/dist ./apps/external-data/dist
 COPY --from=build /app/apps/web/package.json ./apps/web/package.json

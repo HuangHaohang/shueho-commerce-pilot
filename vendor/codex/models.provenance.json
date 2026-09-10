@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/openai/codex",
+  "commit": "90854393966b21e9ebfd21b122334eb09a20c93d",
+  "path": "codex-rs/models-manager/models.json",
+  "sha256": "eb0d7b9a5dcaf103895c5f8a14c16b269df46e039b375a55ba97f6238542d2ed",
+  "usage": "Unmodified upstream metadata. Bounded custom-provider hosted search overrides only use_responses_lite in an app-owned runtime copy; model ids and weights are unchanged."
+}

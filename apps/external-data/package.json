@@ -22,7 +22,8 @@
     "verify:sql": "tsx src/verify-sql.ts",
     "verify:catalog": "tsx src/verify-catalog.ts",
     "verify": "tsx src/verify.ts",
-    "repair:research": "tsx src/reprocess-research-request.ts"
+    "repair:research": "tsx src/reprocess-research-request.ts",
+    "import:research-policy": "tsx src/import-research-policy.ts"
   },
   "dependencies": {
     "@elastic/elasticsearch": "^9.5.0",

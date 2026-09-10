@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 export const EXTERNAL_DATA_SERVICE_REQUIRED_TOOLS = [
-  "enqueue_research_settlement","claim_research_settlement","finish_research_settlement","read_research_records","manage_research_task","research_queue_health","submit_research_task","read_research_task","claim_research_task","update_research_task","recover_research_call",
+  "enqueue_research_settlement","claim_research_settlement","finish_research_settlement","read_research_records","manage_research_task","research_queue_health","submit_research_task","read_research_task","claim_research_task","update_research_task","recover_research_call", "get_research_continuation",
   "search_data_capabilities","get_data_capability","plan_data_request","claim_data_request_plan","execute_data_request_plan","cancel_data_request_plan",
   "list_platforms",
   "list_marketplace_research_platforms",
@@ -108,7 +108,7 @@ export class ExternalDataServiceMcpClient {
     return this.callCatalog("get_marketplace_options", args);
   }
 
-  async taskOperation(name: "submit_research_task"|"read_research_task"|"claim_research_task"|"update_research_task"|"recover_research_call"|"manage_research_task"|"research_queue_health"|"read_research_records"|"enqueue_research_settlement"|"claim_research_settlement"|"finish_research_settlement",args:Record<string,unknown>):Promise<ExternalDataServiceToolResult>{
+  async taskOperation(name: "get_research_continuation"|"submit_research_task"|"read_research_task"|"claim_research_task"|"update_research_task"|"recover_research_call"|"manage_research_task"|"research_queue_health"|"read_research_records"|"enqueue_research_settlement"|"claim_research_settlement"|"finish_research_settlement",args:Record<string,unknown>):Promise<ExternalDataServiceToolResult>{
     const result=await this.callCatalog(name,args);
     if(result.isError||result.payload.success!==true){
       const code=(result.payload.error as any)?.code??result.payload.code;

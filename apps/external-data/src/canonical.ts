@@ -70,29 +70,7 @@ export function buildQueryIdentity(input: {
 }
 
 export function normalizeEndpointParams(endpointId: string, params: JsonObject): JsonObject {
-  const normalized = canonicalize(params) as JsonObject;
-  if (endpointId === "taobao.search_item_list_v1") {
-    return {
-      keyword: normalizeText(normalized.keyword),
-      sort: typeof normalized.sort === "string" && normalized.sort ? normalized.sort : "_sale",
-      tmall: normalized.tmall === true,
-      ...(normalized.startPrice === undefined || normalized.startPrice === null ? {} : { startPrice: String(normalized.startPrice) }),
-      ...(normalized.endPrice === undefined || normalized.endPrice === null ? {} : { endPrice: String(normalized.endPrice) }),
-      page: normalizePositiveInteger(normalized.page, 1),
-      ...unknownParams(normalized, new Set(["keyword", "sort", "tmall", "startPrice", "endPrice", "page"])),
-    };
-  }
-  if (endpointId === "search.search_v1") {
-    return {
-      ...(normalized.keyword === undefined ? {} : { keyword: normalizeText(normalized.keyword) }),
-      source: typeof normalized.source === "string" && normalized.source ? normalized.source.toUpperCase() : "ALL",
-      ...(normalized.start === undefined ? {} : { start: normalizeText(normalized.start) }),
-      ...(normalized.end === undefined ? {} : { end: normalizeText(normalized.end) }),
-      ...(normalized.nextCursor === undefined ? {} : { nextCursor: normalizeText(normalized.nextCursor) }),
-      ...unknownParams(normalized, new Set(["keyword", "source", "start", "end", "nextCursor"])),
-    };
-  }
-  return normalized;
+  return canonicalize(params) as JsonObject;
 }
 
 function buildResearchIntent(input: {

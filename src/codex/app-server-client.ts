@@ -72,7 +72,7 @@ export class CodexAppServerClient extends EventEmitter {
       throw new Error("Codex app-server process exists but is not ready.");
     }
 
-    const args = ["app-server", "--listen", "stdio://"];
+    const args = [...(this.options.modelCatalogPath ? ["-c", `model_catalog_json=${JSON.stringify(this.options.modelCatalogPath)}`] : []), "app-server", "--listen", "stdio://"];
     this.child = spawn(this.options.codexBin, args, {
       cwd: this.options.cwd,
       env: this.options.env ?? process.env,

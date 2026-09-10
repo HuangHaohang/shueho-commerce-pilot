@@ -35,6 +35,7 @@ test("generates structured outcome titles with the configured Spark model", asyn
   };
 
   try {
+    let harnessModel="";
     const client = new CommerceProviderClient({
       id: "test-provider",
       name: "Test Provider",
@@ -47,7 +48,7 @@ test("generates structured outcome titles with the configured Spark model", asyn
       modelCacheTtlMs: 60_000,
       webSearchTimeoutMs: 30_000,
       webSearchMaxAttempts: 1,
-    });
+    },async input=>{harnessModel=input.model;return {text:JSON.stringify({title:"轻量通勤包小红书上新",category:"creative"}),turnId:"turn-title",usage:null,sources:[]};});
     const generated = await client.generateThreadTitle({
       model: "gpt-5.3-codex-spark",
       userText: "给轻量通勤双肩包写一套上新文案",
@@ -58,8 +59,8 @@ test("generates structured outcome titles with the configured Spark model", asyn
     assert.equal(generated.category, "creative");
     assert.equal(generated.model, "gpt-5.3-codex-spark");
     const titleRequest = requests.find((request) => request.url.endsWith("/responses"));
-    assert.ok(titleRequest);
-    assert.equal((titleRequest.body as { model?: string }).model, "gpt-5.3-codex-spark");
+    assert.equal(titleRequest,undefined);
+    assert.equal(harnessModel,"gpt-5.3-codex-spark");
   } finally {
     globalThis.fetch = originalFetch;
   }

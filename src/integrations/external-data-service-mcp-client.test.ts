@@ -168,7 +168,7 @@ function createClient(maxResultBytes: number): ExternalDataServiceMcpClient {
 
 function createMockServer(): McpServer {
   const server = new McpServer({ name: "mock-shueho-external-data", version: "2.0.0" });
-  for (const name of ["enqueue_research_settlement","claim_research_settlement","finish_research_settlement","read_research_records","manage_research_task","research_queue_health","submit_research_task","read_research_task","claim_research_task","update_research_task","recover_research_call","search_data_capabilities","get_data_capability","plan_data_request","claim_data_request_plan","execute_data_request_plan","cancel_data_request_plan"]) {
+  for (const name of ["enqueue_research_settlement","claim_research_settlement","finish_research_settlement","read_research_records","manage_research_task","research_queue_health","submit_research_task","read_research_task","claim_research_task","update_research_task","recover_research_call","get_research_continuation","search_data_capabilities","get_data_capability","plan_data_request","claim_data_request_plan","execute_data_request_plan","cancel_data_request_plan"]) {
     server.registerTool(name,{inputSchema:{}},async()=>result({success:true}));
   }
   server.registerTool(

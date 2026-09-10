@@ -1,0 +1,268 @@
+{
+  "version": 1,
+  "sampling": {
+    "relevanceWeight": 0.8,
+    "sameShopPenalty": 0.2
+  },
+  "retrieval": {
+    "candidateLimit": 50,
+    "rerankLimit": 20,
+    "rrfK": 60,
+    "efSearch": 100
+  },
+  "social": [
+    {
+      "platform": "ALL",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "ALL"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "NEWS",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "NEWS"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "WEIBO",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "WEIBO"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "WEIXIN",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "WEIXIN"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "ZHIHU",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "ZHIHU"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "DOUYIN",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "DOUYIN"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "XIAOHONGSHU",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "XIAOHONGSHU"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "BILIBILI",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "BILIBILI"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "KUAISHOU",
+      "objective": "latest_content",
+      "endpointId": "search.search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "source": "KUAISHOU"
+      },
+      "dateParameters": {
+        "start": "start",
+        "end": "end"
+      },
+      "pagination": {
+        "parameter": "nextCursor",
+        "kind": "cursor",
+        "responseCursorPath": [
+          "data",
+          "nextCursor"
+        ]
+      },
+      "rankingBasis": null,
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/social-media/cross-platform-search-v1"
+    },
+    {
+      "platform": "DOUYIN",
+      "objective": "interaction_ranked",
+      "endpointId": "douyin.hot_search_v1",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "sortType": "HIGH_INTERACTION"
+      },
+      "dateParameters": null,
+      "pagination": {
+        "parameter": "page",
+        "kind": "page"
+      },
+      "rankingBasis": "provider_high_interaction",
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/douyin-tiktok-china/hot-search-v1"
+    },
+    {
+      "platform": "XIAOHONGSHU",
+      "objective": "interaction_ranked",
+      "endpointId": "xiaohongshu.search_note_v4",
+      "timezone": "Asia/Shanghai",
+      "keywordParameter": "keyword",
+      "fixedParameters": {
+        "sortType": "popularity_descending"
+      },
+      "dateParameters": null,
+      "pagination": {
+        "parameter": "page",
+        "kind": "page"
+      },
+      "rankingBasis": "provider_popularity_not_exact_interaction_sum",
+      "documentationUrl": "https://docs.justoneapi.com/zh/api/xiaohongshu-rednote/note-search-v4"
+    }
+  ],
+  "providerTimezones": {
+    "search.search_v1": "Asia/Shanghai"
+  }
+}

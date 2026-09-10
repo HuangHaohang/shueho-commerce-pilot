@@ -1,3 +1,4 @@
+import {loadResearchPolicy,localDateBoundary,type ResearchPolicy} from "./research-policy.js";
 import { sha256Json } from "./canonical.js";
 import { listEnabledEndpoints, validateEndpointParams } from "./endpoint-registry.js";
 import type { JsonObject, ProviderEndpoint } from "./types.js";
@@ -49,17 +50,17 @@ export async function planSocialContentResearch(
     (!constraints.allowedCatalogPlatforms?.length || constraints.allowedCatalogPlatforms.includes(endpoint.platformId)) &&
     (!constraints.allowedEndpointIds?.length || constraints.allowedEndpointIds.includes(endpoint.endpointId))
   );
-  return selectSocialContentResearchPlan(endpoints, input);
+  return selectSocialContentResearchPlan(endpoints, input, await loadResearchPolicy());
 }
 
 export function selectSocialContentResearchPlan(
   endpoints: ProviderEndpoint[],
   input: SocialResearchRequest,
+  policy: ResearchPolicy,
 ): SocialResearchPlan {
   const request = normalizeRequest(input);
-  const selected = request.objective === "latest_content"
-    ? selectLatestContentEndpoint(endpoints, request.platform)
-    : selectInteractionEndpoint(endpoints, request.platform);
+  const profile=policy.social.find(p=>p.platform===request.platform && p.objective===request.objective);
+  const selected=profile ? endpoints.find(e=>e.endpointId===profile.endpointId) : null;
   if (!selected) {
     throw new SocialResearchPlanningError(
       request.objective === "latest_content"
@@ -74,21 +75,13 @@ export function selectSocialContentResearchPlan(
     );
   }
 
-  const params = request.objective === "latest_content"
-    ? {
-        keyword: request.keyword,
-        source: request.platform,
-        start: `${request.startDate} 00:00:00`,
-        end: `${request.endDate} 23:59:59`,
-      }
-    : {
-        keyword: request.keyword,
-        [socialSortBinding(selected)!.parameter]: socialSortBinding(selected)!.value,
-      };
-  const normalizedParams = validateEndpointParams(selected, params);
-  const start = new Date(`${request.startDate}T00:00:00+08:00`).toISOString();
-  const end = new Date(`${request.endDate}T23:59:59.999+08:00`).toISOString();
-  const windowEnforcement = request.objective === "latest_content" ? "provider_exact" : "warehouse_post_filter";
+  if(!profile)throw new SocialResearchPlanningError("未导入该平台的研究能力档案。","CAPABILITY_UNAVAILABLE");
+  const params:JsonObject={...profile.fixedParameters,[profile.keywordParameter]:request.keyword,
+    ...(profile.dateParameters?{[profile.dateParameters.start]:request.startDate+" 00:00:00",[profile.dateParameters.end]:request.endDate+" 23:59:59"}:{})};
+  const normalizedParams=validateEndpointParams(selected,params);
+  const start=localDateBoundary(request.startDate,profile.timezone);
+  const end=localDateBoundary(request.endDate,profile.timezone,true);
+  const windowEnforcement=profile.dateParameters?"provider_exact":"warehouse_post_filter";
   const businessIntent: JsonObject = {
     kind: "social_content_research",
     platform: request.platform,
@@ -101,7 +94,7 @@ export function selectSocialContentResearchPlan(
       end,
       start_date: request.startDate,
       end_date: request.endDate,
-      timezone: "Asia/Shanghai",
+      timezone: profile.timezone,
     },
     window_enforcement: windowEnforcement,
     requested_top_n: request.maxResults,
@@ -117,12 +110,13 @@ export function selectSocialContentResearchPlan(
     metric_coverage: request.objective === "interaction_ranked"
       ? "provider_reported_when_present"
       : "not_guaranteed_by_endpoint_contract",
-    provider_calls: 1,
-    ranking_basis: request.objective === "interaction_ranked" ? socialSortBinding(selected)?.basis ?? null : null,
+    collection: { policy_receipt_id:policy.receiptId??null, pagination:profile.pagination, first_params:normalizedParams },
+    ranking_basis: profile.rankingBasis,
   };
   return {
     planKey: sha256Json({
-      contractVersion: 1,
+      contractVersion: 2,
+      policyReceiptId:policy.receiptId,
       businessTool: "research_social_content",
       endpointId: selected.endpointId,
       schemaVersion: selected.schemaVersion,
@@ -137,50 +131,13 @@ export function selectSocialContentResearchPlan(
   };
 }
 
-function selectLatestContentEndpoint(endpoints: ProviderEndpoint[], platform: string): ProviderEndpoint | null {
-  return endpoints
-    .filter((endpoint) => {
-      const properties = schemaProperties(endpoint.requestSchema);
-      const source = record(properties.source);
-      return properties.keyword !== undefined && properties.start !== undefined && properties.end !== undefined &&
-        properties.source !== undefined && stringArray(source.enum).includes(platform);
-    })
-    .sort(compareEndpointSpecificity)[0] ?? null;
-}
-
-function selectInteractionEndpoint(endpoints: ProviderEndpoint[], platform: string): ProviderEndpoint | null {
-  const platformId = platform.toLowerCase();
-  return endpoints
-    .filter((endpoint) => {
-      const properties = schemaProperties(endpoint.requestSchema);
-      return endpoint.platformId === platformId && properties.keyword !== undefined && socialSortBinding(endpoint) !== null;
-    })
-    .sort(compareEndpointSpecificity)[0] ?? null;
-}
-
-function socialSortBinding(endpoint: ProviderEndpoint): { parameter: string; value: string; basis: string } | null {
-  for (const [parameter, schema] of Object.entries(schemaProperties(endpoint.requestSchema))) {
-    if (!/sort/i.test(parameter)) continue;
-    const values = stringArray(record(schema).enum);
-    if (values.includes("HIGH_INTERACTION")) return { parameter,value:"HIGH_INTERACTION",basis:"provider_high_interaction" };
-    if (values.includes("popularity_descending")) return { parameter,value:"popularity_descending",basis:"provider_popularity_not_exact_interaction_sum" };
-  }
-  return null;
-}
-
-function compareEndpointSpecificity(left: ProviderEndpoint, right: ProviderEndpoint): number {
-  const leftCount = Object.keys(schemaProperties(left.requestSchema)).length;
-  const rightCount = Object.keys(schemaProperties(right.requestSchema)).length;
-  return rightCount - leftCount || left.endpointId.localeCompare(right.endpointId);
-}
-
 function normalizeRequest(input: SocialResearchRequest): SocialResearchRequest {
   const platform = input.platform.normalize("NFKC").trim().toUpperCase();
   const keyword = input.keyword.normalize("NFKC").trim().replace(/\s+/g, " ");
   const startDate = validDate(input.startDate);
   const endDate = validDate(input.endDate);
-  const start = Date.parse(`${startDate}T00:00:00+08:00`);
-  const end = Date.parse(`${endDate}T23:59:59.999+08:00`);
+  const start = Date.parse(`${startDate}T00:00:00Z`);
+  const end = Date.parse(`${endDate}T23:59:59.999Z`);
   const days = Math.floor((end - start) / 86_400_000) + 1;
   if (!/^[A-Z0-9_]{2,64}$/.test(platform) || !keyword || keyword.length > 500) {
     throw new SocialResearchPlanningError("社交内容研究的平台或关键词无效。", "INVALID_RESEARCH_REQUEST");

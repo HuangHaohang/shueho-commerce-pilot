@@ -23,7 +23,7 @@ const canonical=(v:any):any=>Array.isArray(v)?v.map(canonical):v&&typeof v==='ob
 const hash=(v:unknown)=>createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex');
 const scope=(p:AuthenticatedMcpPrincipal)=>({tenant_id:p.tenantId,workspace_id:p.workspaceId,user_id:p.userId,root_thread_id:p.rootThreadId??null});
 export function taskAwareClient<T extends object>(target:T,journal:ExternalDataServiceMcpClient,group:string,control?:{revalidate:(principal:AuthenticatedMcpPrincipal,id:string)=>Promise<Record<string,any>>}):T {
- const tracked=new Set(group==='control'?['quote','reserve','dispatch','settle','cancel']:['planDataRequest','claimDataRequestPlan','executeDataRequestPlan','planMarketplaceProductResearch','executeMarketplaceProductResearchPlan','resolveMarketplaceProductBindings','completeMarketplaceProductResearch','cancelMarketplaceProductResearch','callEndpoint']);
+ const tracked=new Set(group==='control'?['quote','reserve','dispatch','settle','cancel']:['preflightSocialContentResearch','planDataRequest','claimDataRequestPlan','executeDataRequestPlan','planMarketplaceProductResearch','executeMarketplaceProductResearchPlan','resolveMarketplaceProductBindings','completeMarketplaceProductResearch','cancelMarketplaceProductResearch','callEndpoint']);
  return new Proxy(target,{get(object,name){const method=Reflect.get(object,name);if(typeof method!=='function')return method;
   if(!tracked.has(String(name)))return method.bind(object);
   return async(...args:unknown[])=>{

@@ -2,7 +2,7 @@
 
 审查基线：b9933e33713cfa79e8f724a1786ca63bcd468686。范围为 src/、apps/external-data/src/、apps/web/lib/、services/local-retrieval-models/src/ 中的 216 个生产 TypeScript/Python 文件（排除测试、verify/evaluate 入口），另检查本次修改和相关评估入口。
 
-本清单按“同一种规则”计数，不把每个常量、每行命中计为一个缺陷，也不声称是全仓所有硬编码的总数。确认 14 组研究/检索策略规则，以及另外 2 个内部模型执行旁路。H01–H08 在本次代码中修正；H09–H14 仍存在，不能称为全面清理完成。
+本清单按“同一种规则”计数，不把每个常量、每行命中计为一个缺陷，也不声称是全仓所有硬编码的总数。确认 14 组研究/检索策略规则，以及另外 2 个内部模型执行旁路。H01–H08 在本次代码中修正；H09–H14 与 B01/B02 已在后续修复中处理；对应实现和部署步骤见下文。
 
 ## 14 组规则与处理状态
 
@@ -18,21 +18,21 @@
 | H06 | warehouse.ts / loadCompactResearchResult | 内容证据两处 LIMIT 50，加一处 slice(0,50)，与请求数量脱节 | 已修：内容证据截断读取该请求的 research_request.top_n；商品/品牌摘要属于 H14 |
 | H07 | warehouse.ts、social-metric-coverage.ts | 零交付样本统一标 missing；时间限制模板被当成实际原因 | 已修：交付空集为 no_samples，另返回源字段和实际原因计数；没有晋级时不声称已晋级 |
 | H08 | evaluate.ts、enrichment.test.ts | 固定简短 query 测模型，未走生产查询构造和准入；mock 分数遮蔽误判 | 已修：保留旧评估，增加完整生产链路真实模型回归，覆盖不同领域、多语言、排除和时间规则 |
-| H09 | social-research-planner.ts / socialSortBinding, compareEndpointSpecificity | 写死两个排序枚举的意义，并按参数字段数挑接口 | 待处理：应有已审核的主数据能力映射；不能自行猜测新的替代映射 |
-| H10 | social-research-planner.ts、endpoint-registry.ts、Gateway/托管说明 | 社交日期固定 +08:00/Asia/Shanghai | 待处理：当前中国时区契约不能冒充全球市场通用能力；迁移须以市场档案为依据 |
-| H11 | canonical.ts、generic-normalizer.ts / defaultCommerceCurrency | 特定端点补默认参数；按五个平台名补 CNY | 待处理：参数/币种应由已导入契约和市场档案证明 |
-| H12 | social-research-planner.ts、src/mcp/research-service.ts | 社交研究固定一次调用，没有目标覆盖驱动的已治理分页计划 | 未扩展付费行为：准确返回后续页和覆盖未完成；本次推导的“目标 N 条对应 N 页”及循环已撤回 |
-| H13 | marketplace-workflow-execution.ts / representative selection | 同店惩罚 0.2、相关性/多样性权重 0.8/0.2 | 待处理：应有受审核采样策略和评估依据，不能称为 Harness 自带策略 |
-| H14 | hybrid-search.ts、warehouse.ts | 检索候选固定 50/20，商品/品牌摘要固定 30、属性固定 50 | 待核定：包含性能/摘要上限，并非全部是错误；必须区分候选上限、预览上限和要求的样本覆盖 |
+| H09 | social-research-planner.ts / socialSortBinding, compareEndpointSpecificity | 写死两个排序枚举的意义，并按参数字段数挑接口 | 已修：读取不可变 research_policy_import_receipt；导入时校验官方接口 schema、分页参数及文档来源 |
+| H10 | social-research-planner.ts、endpoint-registry.ts、Gateway/托管说明 | 社交日期固定 +08:00/Asia/Shanghai | 已修：时区来自导入档案，按 IANA 日期边界转换；包含 DST 测试，ISO provider 输入缺少时区元数据时拒绝猜测 |
+| H11 | canonical.ts、generic-normalizer.ts / defaultCommerceCurrency | 特定端点补默认参数；按五个平台名补 CNY | 已修：移除端点参数分支和平台→币种表；默认参数仅由官方 schema 提供，未返回币种不自动补 CNY |
+| H12 | social-research-planner.ts、src/mcp/research-service.ts | 社交研究固定一次调用，没有目标覆盖驱动的已治理分页计划 | 已修：新 execution_version=3 任务按导入的页码/游标协议采集，逐页原审批/预算/归档/结算；达到目标、源结束、重复页/游标或治理拒绝时停止，没有 N 条→N 页规则 |
+| H13 | marketplace-workflow-execution.ts / representative selection | 同店惩罚 0.2、相关性/多样性权重 0.8/0.2 | 已修：原有参数进入不可变策略回执并随计划固定；兼容旧计划时读取首份基线回执，不增加新权重 |
+| H14 | hybrid-search.ts、warehouse.ts | 检索候选固定 50/20，商品/品牌摘要固定 30、属性固定 50 | 已修：摘要使用请求 top_n，检索候选/RRF 参数读取策略回执且不低于请求数量；模型按协议批量处理，不静默截断 |
 
 ## 另外两个 Harness 执行旁路
 
 | 编号 | 已核实调用链 | 边界事实 | 本次状态 |
 | --- | --- | --- | --- |
-| B01 | src/gateway/server.ts → CommerceProviderClient.generateThreadTitle → POST responses | 标题生成由应用直接请求模型，未通过 App Server 执行 | 已定位，未在研究修复中擅自迁移 |
-| B02 | src/mcp/commerce-web-server.ts / Gateway → CommerceProviderClient.searchWeb → POST responses | 外层有 Harness MCP 生命周期，但内部另发的模型请求仍由应用直接执行 | 已定位，未修改已有搜索/计费/流式契约 |
+| B01 | src/gateway/server.ts → CommerceProviderClient.generateThreadTitle → POST responses | 标题生成由应用直接请求模型，未通过 App Server 执行 | 已修：原生 App Server ephemeral thread/turn；原 Spark 模型保留 |
+| B02 | src/mcp/commerce-web-server.ts / Gateway → CommerceProviderClient.searchWeb → POST responses | 外层有 Harness MCP 生命周期，但内部另发的模型请求仍由应用直接执行 | 已修：内部模型与搜索均由 App Server 执行，外层 MCP 返回原生事件来源及用量，无直接 Responses 模型请求 |
 
-这是代码路径事实；本次未付费调用这些模型验证生产效果。不能据此宣称整个系统已完全按 Harness 实现。
+真实联调已取得 Spark 标题原生 Turn ID，以及搜索/打开页面 webSearch Items、来源 URL 和 token usage。模型目录来自固定的官方 Codex 源码，仅在标准 Responses 自定义供应商的搜索子任务中关闭不兼容的 Responses Lite 传输模式；未改任何模型名称或权重。
 
 ## 应保留的既有边界
 
@@ -51,3 +51,7 @@
 - 一次性 PostgreSQL 数据库应用既有 001–043 迁移，验证真实队列、租约、归档、结算、隔离及超过一万条记录遍历；新增源层/交付层诊断使用真实 pipeline + SQL readback。
 - 原事故只读重评仍为 7 hold / 3 reject，3 条拒绝只标实际越界；修复普遍误杀不等于证明这批泛露营/餐饮/旅游内容都是合格锅具样本。
 - 本次未改生产配置、未重放供应商、未更新原任务结果、未部署；上线和历史重评须保留原始响应哈希与旧决策修订。
+
+## 后续部署
+
+先应用 044_research_policy_receipts.sql，再通过 external-data:import-research-policy 导入受校验 JSON。新任务执行版本为 3，旧任务不增加付费页。部署包含此前 v5 修复、Mac 模型逐请求 instruction 修复以及本次主数据/原生 Harness 调用改动；保留未知结果和所有原始归档。

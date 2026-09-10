@@ -1494,8 +1494,8 @@ export async function loadCompactResearchResult(
       FROM business_product_observation observation
       JOIN ai_enrichment_result enrichment ON enrichment.id=observation.enrichment_result_id
       WHERE observation.research_request_id=$1 AND enrichment.job_id=$2
-      ORDER BY observation.relevance_score DESC,observation.price_yuan NULLS LAST LIMIT 30
-    `, [researchRequestId, latestJobId]);
+      ORDER BY observation.relevance_score DESC,observation.price_yuan NULLS LAST LIMIT $3
+    `, [researchRequestId, latestJobId, request.requested_limit]);
     const genericProducts = await client.query<JsonObject>(`
       WITH ranked AS (
         SELECT evidence.source_platform,evidence.provider_entity_id,evidence.title,evidence.author,
@@ -1559,8 +1559,8 @@ export async function loadCompactResearchResult(
                THEN (metrics->>'good_rate_percent')::numeric ELSE NULL END AS good_rate_percent,
              metrics,relevance_score,confidence,source_json_pointer,enrichment_metadata
       FROM ranked WHERE identity_rank=1
-      ORDER BY relevance_score DESC LIMIT 30
-    `, [researchRequestId, latestJobId]);
+      ORDER BY relevance_score DESC LIMIT $3
+    `, [researchRequestId, latestJobId, request.requested_limit]);
     const products = dedupeProductRows([...specializedProducts.rows, ...genericProducts.rows])
       .map((row) => projectAssessedEvidence(row, true));
     const brands = await client.query<JsonObject>(`
@@ -1569,8 +1569,8 @@ export async function loadCompactResearchResult(
       FROM business_brand_observation observation
       JOIN ai_enrichment_result enrichment ON enrichment.id=observation.enrichment_result_id
       WHERE observation.research_request_id=$1 AND enrichment.job_id=$2
-      ORDER BY observation.item_count DESC NULLS LAST,observation.relevance_score DESC LIMIT 30
-    `, [researchRequestId, latestJobId]);
+      ORDER BY observation.item_count DESC NULLS LAST,observation.relevance_score DESC LIMIT $3
+    `, [researchRequestId, latestJobId, request.requested_limit]);
     const properties = await client.query<JsonObject>(`
       SELECT observation.provider_property_id AS property_id,observation.property_name,
              observation.provider_value_id AS value_id,observation.property_value,
@@ -1578,8 +1578,8 @@ export async function loadCompactResearchResult(
       FROM business_property_observation observation
       JOIN ai_enrichment_result enrichment ON enrichment.id=observation.enrichment_result_id
       WHERE observation.research_request_id=$1 AND enrichment.job_id=$2
-      ORDER BY observation.property_name,observation.item_count DESC NULLS LAST LIMIT 50
-    `, [researchRequestId, latestJobId]);
+      ORDER BY observation.property_name,observation.item_count DESC NULLS LAST LIMIT $3
+    `, [researchRequestId, latestJobId, request.requested_limit]);
     const contentEvidence = await client.query<JsonObject>(`
       SELECT content.id AS evidence_id,content.research_request_id,
              query_row.endpoint_id,content.source_platform,'content'::text AS evidence_kind,

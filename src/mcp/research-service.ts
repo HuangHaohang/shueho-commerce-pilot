@@ -64,7 +64,7 @@ export function createResearchService(upstream:ExternalDataServiceMcpClient,cont
   return toolSuccess({success:true,processing_state:'completed',provider_completed:true,research_requests:results.map(r=>({research_request_id:r.research_request_id,observed_at:r.observed_at})),coverage:{pages_completed:results.length,stop_reason:stop,all_source_pages:stop==='source_end'},message:'分页任务完成；按记录查询工具读取各页结果。'});
  }
 
- if(task.kind==='social')return handlers.get('research_social_content')!(task.inputs);
+ if(task.kind==='social')return executeSocialResearch(task.principal,task.inputs,(task.execution_version??1)>=3);
  const planned=await handlers.get(task.kind==='data'?'plan_data_request':'plan_marketplace_research')!(task.inputs);
  const receipt=planned.structuredContent;
  if(planned.isError)return planned;
@@ -195,37 +195,7 @@ function definitionsFor(principal: AuthenticatedMcpPrincipal):ResearchDefinition
           openWorldHint: true,
         },
       },
-      async ({ platform, keyword, semantic_scope, start_date, end_date, objective, requested_metrics, max_results, research_request }) => {
-        const authorization = await control.authorizeCatalog(principal);
-        let preflight;
-        try {
-          preflight = await preflightSocialContentResearch(upstream, {
-            platform,
-            keyword,
-            semantic_scope,
-            start_date,
-            end_date,
-            objective,
-            requested_metrics,
-            max_results,
-          }, authorization);
-        } catch (error) {rethrowResearchRecovery(error);
-          if (error instanceof ExternalDataControlError) {
-            return toolError(error.code,error.message,{ providerDispatched: false,...error.details });
-          }
-          return toolError(
-            error instanceof SocialContentResearchPreflightError ? error.code : "SOCIAL_RESEARCH_PREFLIGHT_FAILED",
-            error instanceof Error ? error.message : "社交内容研究请求无法匹配当前数据能力。",
-            { providerDispatched: false },
-          );
-        }
-        return executePublicResearch(principal, {
-          businessTool: "research_social_content",
-          preflight,
-          researchRequest: research_request,
-          maxResults: max_results,
-        });
-      },
+      async args=>executeSocialResearch(principal,args,false),
     );
     server.registerTool(
       "plan_marketplace_research",
@@ -469,6 +439,51 @@ async function executePublicMarketplaceResearchPlan(
   return completed.payload.success === true
     ? toolSuccess({ ...completed.payload,business_tool: "execute_marketplace_research" })
     : toolError("WORKFLOW_INCOMPLETE","Marketplace workflow completed only partially.",completed.payload);
+}
+
+async function executeSocialResearch(principal:AuthenticatedMcpPrincipal,args:Record<string,any>,collect:boolean){
+ const authorization=await control.authorizeCatalog(principal);
+ let preflight;
+ try{preflight=await preflightSocialContentResearch(upstream,{platform:args.platform,keyword:args.keyword,semantic_scope:args.semantic_scope,start_date:args.start_date,end_date:args.end_date,objective:args.objective,requested_metrics:args.requested_metrics,max_results:args.max_results},authorization);}
+ catch(error){rethrowResearchRecovery(error);return toolError(error instanceof SocialContentResearchPreflightError?error.code:"SOCIAL_RESEARCH_PREFLIGHT_FAILED",error instanceof Error?error.message:"Preflight failed",{providerDispatched:false});}
+ const policyId=(preflight.coverage.collection as any)?.policy_receipt_id;
+ const pages:Record<string,any>[]=[],seen=new Set<string>(),evidence=new Map<string,any>();
+ let params=preflight.normalizedParams,ordinal=0,stop="single_call",failure:any;
+ while(true){
+  const call=()=>executePublicResearch(principal,{businessTool:"research_social_content",preflight:{...preflight,normalizedParams:params},researchRequest:args.research_request,maxResults:args.max_results});
+  let result:any;
+  try{result=ordinal===0?await call():await withTaskPage(ordinal+1,call);}
+  catch(error){rethrowResearchRecovery(error);failure=toolError(error instanceof ExternalDataControlError?error.code:"SOCIAL_COLLECTION_FAILED",error instanceof Error?error.message:"Collection failed");stop="page_failed";break;}
+  const value=result.structuredContent;
+  if(result.isError || value.success!==true){failure=result;stop="page_failed";break;}
+  pages.push(value);
+  for(const row of value.evidence??[]){
+   const key=row.provider_entity_id?`${row.source_platform}:${row.provider_entity_id}`:`${value.research_request_id}:${row.evidence_id}`;
+   if(!evidence.has(key))evidence.set(key,row);
+  }
+  if(!collect||!policyId)break;
+  const continuation=await upstream.taskOperation("get_research_continuation",{research_request_id:value.research_request_id,policy_id:policyId,platform:String(args.platform).toUpperCase(),objective:args.objective,
+   _commerce_context:{tenant_id:principal.tenantId,workspace_id:principal.workspaceId,user_id:principal.userId}});
+  const next=continuation.payload;
+  if(next.success!==true)throw new Error("CONTINUATION_READ_FAILED");
+  if(next.signature && seen.has(String(next.signature))){stop="source_repeated_page";break;}
+  if(next.signature)seen.add(String(next.signature));
+  if(!next.next_params){stop=String(next.reason);break;}
+  if(evidence.size>=args.max_results){stop="requested_count_reached";break;}
+  if(!next.signature){stop="source_no_identifiable_records";break;}
+  if(hashExternalDataParameters(params)===hashExternalDataParameters(next.next_params)){stop="source_repeated_cursor";break;}
+  params=next.next_params as Record<string,unknown>;ordinal++;
+ }
+ if(!pages.length&&failure)return failure;
+ const last=pages.at(-1)??{};
+ const publicPlan={...preflight.coverage};delete publicPlan.collection;
+ const payload={...last,...(failure?.structuredContent??{}),research_plan:publicPlan,evidence:[...evidence.values()].slice(0,args.max_results),
+  research_requests:pages.map(p=>({research_request_id:p.research_request_id,observed_at:p.observed_at})),
+  coverage:{...last.coverage,pages_completed:pages.length,stop_reason:stop,collectionComplete:stop==="source_end",
+   acceptedEvidence:Math.min(evidence.size,args.max_results),rankingScope:"collected_qualified_samples",
+   pageCoverage:pages.map(p=>({research_request_id:p.research_request_id,...p.coverage}))},
+  message:failure?"后续采集未完成，已归档结果保留；查看当前错误。":`本任务处理了 ${pages.length} 页、获得 ${Math.min(evidence.size,args.max_results)} 条合格证据；覆盖和结束原因见 coverage。`};
+ return {...toolSuccess(payload),...(failure?{isError:true}:{})};
 }
 
 async function executePublicResearch(

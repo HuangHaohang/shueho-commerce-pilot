@@ -73,7 +73,8 @@
     "web:dev": "npm --workspace @shueho-commerce-pilot/web run dev",
     "web:build": "npm --workspace @shueho-commerce-pilot/web run build",
     "web:check": "npm --workspace @shueho-commerce-pilot/web run check",
-    "web:test": "npm --workspace @shueho-commerce-pilot/web run test"
+    "web:test": "npm --workspace @shueho-commerce-pilot/web run test",
+    "external-data:import-research-policy": "npm --workspace @shueho-commerce-pilot/external-data run import:research-policy --"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

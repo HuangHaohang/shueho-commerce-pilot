@@ -183,7 +183,7 @@ function extractCommerceProductMetrics(value: unknown, endpoint: ProviderEndpoin
   if (!/commerce_product/i.test(endpoint.responseFamily) || !isRecord(value)) return {};
   const currency = normalizeCurrency(firstScalarText(value, [
     ["currency"], ["currencyCode"], ["currency_code"], ["priceCurrency"], ["price_currency"],
-  ])) ?? defaultCommerceCurrency(endpoint.platformId);
+  ]));
   const priceAmount = firstFiniteNumber(value, [
     ["price_amount"], ["priceAmount"], ["display_price"], ["displayPrice"],
     ["salePrice"], ["sale_price"], ["dredisprice"],
@@ -335,9 +335,7 @@ function normalizeCurrency(value: string | null): string | null {
   return /^[A-Z]{3}$/.test(normalized) ? normalized : null;
 }
 
-function defaultCommerceCurrency(platformId: string): string | null {
-  return ["taobao", "jd", "1688", "douyin_ec", "xianyu"].includes(platformId) ? "CNY" : null;
-}
+
 
 function deepFirstString(value: unknown, keys: string[], depth = 0): string | null {
   const found = deepFirstValue(value, keys, depth);
