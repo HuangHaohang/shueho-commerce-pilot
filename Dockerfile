@@ -1,3 +1,5 @@
+ARG CODEX_RUNTIME_IMAGE=codex-runtime-build
+
 FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS node-tools
 
 FROM rust:1.95.0-bookworm@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS codex-runtime-build
@@ -39,13 +41,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     node scripts/codex-runtime/verify.mjs \
       --bin=/opt/shueho-codex/bin/codex
 
+FROM ${CODEX_RUNTIME_IMAGE} AS codex-runtime
+
 FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS build
 
 ENV CODEX_BIN=/opt/shueho-codex/bin/codex
 
 WORKDIR /app
 
-COPY --from=codex-runtime-build /opt/shueho-codex /opt/shueho-codex
+COPY --from=codex-runtime /opt/shueho-codex /opt/shueho-codex
 COPY package.json package-lock.json ./
 COPY apps/web/package.json apps/web/package.json
 COPY apps/external-data/package.json apps/external-data/package.json
@@ -71,7 +75,7 @@ ENV CODEX_BIN=/opt/shueho-codex/bin/codex
 
 WORKDIR /app
 
-COPY --from=codex-runtime-build /opt/shueho-codex /opt/shueho-codex
+COPY --from=codex-runtime /opt/shueho-codex /opt/shueho-codex
 COPY --from=build /app/package.json /app/package-lock.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist

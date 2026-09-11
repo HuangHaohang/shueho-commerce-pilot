@@ -15,6 +15,11 @@ Tag images with the full commit and set `COMMERCE_SOURCE_COMMIT` for revision la
 BuildKit caches Cargo downloads and target artifacts between builds; the pinned
 source, patch checks and native tests still run. Cargo diagnostics stream during
 compilation, including test discovery, so dependency failures remain visible.
+After building `--target codex-runtime-build`, the release build may reuse that
+application-owned image with `--build-arg CODEX_RUNTIME_IMAGE=<built-image>`. The
+default still compiles from source. Reuse only an image built from the same pinned
+upstream and patch series, record its image digest, and retain the final image's
+mandatory runtime-manifest verification; no global/npm Codex fallback is supported.
 The Web runtime includes both root and workspace production dependencies. Its
 launcher resolves Next from the Web workspace rather than assuming npm hoisting.
 
