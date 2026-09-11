@@ -1,84 +1,48 @@
-import { chmod, mkdir, open, readFile, unlink, type FileHandle } from "node:fs/promises";
+import { chmod, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
+/** A kernel-backed lock: process death releases it even when container PIDs repeat. */
 export class AgentOutboxProcessLock {
   private readonly path: string;
-  private handle: FileHandle | null = null;
+  private database: DatabaseSync | null = null;
 
   constructor(codexHome: string) {
     this.path = join(codexHome, "commerce-runtime", "agent-event-outbox.lock");
   }
 
-  async acquire(purpose: "gateway" | "maintenance"): Promise<void> {
-    if (this.handle) throw new Error("Agent outbox process lock is already held.");
+  async acquire(_purpose: "gateway" | "maintenance"): Promise<void> {
+    if (this.database) throw new Error("Agent outbox process lock is already held.");
     await mkdir(join(this.path, ".."), { recursive: true, mode: 0o700 });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const handle = await open(this.path, "wx", 0o600);
-        await handle.writeFile(`${JSON.stringify({ pid: process.pid, purpose, acquiredAt: new Date().toISOString() })}\n`);
-        await chmod(this.path, 0o600);
-        this.handle = handle;
-        return;
-      } catch (error) {
-        if (!isNodeError(error) || error.code !== "EEXIST") throw error;
-        const owner = await readOwner(this.path);
-        if (!owner || isProcessAlive(owner.pid)) {
-          throw new Error(
-            `Agent outbox is owned by an active or unverifiable process${owner ? ` (${owner.pid}, ${owner.purpose})` : ""}.`,
-          );
-        }
-        await unlink(this.path).catch((unlinkError) => {
-          if (!isNodeError(unlinkError) || unlinkError.code !== "ENOENT") throw unlinkError;
-        });
-      }
+    const existing = await readFile(this.path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return null;
+      throw error;
+    });
+    // Never steal an old PID lock, whose process may live in another namespace.
+    if (existing && existing.subarray(0, 16).toString() !== "SQLite format 3\0") {
+      throw new Error("Agent outbox is owned by an active or unverifiable legacy process. Stop all writers before removing the legacy lock.");
     }
-    throw new Error("Could not acquire the Agent outbox process lock.");
+    let database: DatabaseSync | null = null;
+    try {
+      database = new DatabaseSync(this.path);
+      await chmod(this.path, 0o600);
+      database.exec("PRAGMA busy_timeout=0; CREATE TABLE IF NOT EXISTS lock_format (version INTEGER); BEGIN EXCLUSIVE;");
+      this.database = database;
+    } catch (error) {
+      database?.close();
+      throw new Error("Agent outbox is owned by an active or unverifiable process.", { cause: error });
+    }
   }
 
   async release(): Promise<void> {
-    if (!this.handle) return;
-    await this.handle.close();
-    this.handle = null;
-    const owner = await readOwner(this.path);
-    if (owner?.pid === process.pid) {
-      await unlink(this.path).catch((error) => {
-        if (!isNodeError(error) || error.code !== "ENOENT") throw error;
-      });
+    const database = this.database;
+    if (!database) return;
+    this.database = null;
+    try {
+      database.exec("ROLLBACK;");
+    } finally {
+      database.close();
     }
+    // Keep the SQLite file: older PID-lock writers must also fail closed.
   }
-}
-
-async function readOwner(path: string): Promise<{ pid: number; purpose: string } | null> {
-  try {
-    const parsed = JSON.parse(await readFile(path, "utf8")) as unknown;
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as Record<string, unknown>).pid === "number" &&
-      typeof (parsed as Record<string, unknown>).purpose === "string"
-    ) {
-      return {
-        pid: (parsed as Record<string, unknown>).pid as number,
-        purpose: (parsed as Record<string, unknown>).purpose as string,
-      };
-    }
-    return null;
-  } catch (error) {
-    if (isNodeError(error) && error.code === "ENOENT") return null;
-    return null;
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return isNodeError(error) && error.code === "EPERM";
-  }
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
 }

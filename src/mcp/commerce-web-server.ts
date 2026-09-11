@@ -4,12 +4,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-import { readGatewayConfig } from "../gateway/config.js";
+import { readCommerceProviderConfig } from "../gateway/config.js";
 import { CommerceProviderClient, CommerceProviderError } from "../provider/commerce-provider-client.js";
 
-const config = readGatewayConfig();
-const provider = new CommerceProviderClient(config.provider);
-await provider.assertAgentModel(config.provider.webSearchModel);
+const config = readCommerceProviderConfig();
+const provider = new CommerceProviderClient(config);
+await provider.assertAgentModel(config.webSearchModel);
 const server = new McpServer(
   { name: "commerce-web", version: "0.1.0" },
   {
@@ -36,7 +36,7 @@ server.registerTool(
   },
   async ({ query }) => {
     try {
-      const result = await provider.searchWeb({ model: config.provider.webSearchModel, query });
+      const result = await provider.searchWeb({ model: config.webSearchModel, query });
       const payload = {
         status: "completed",
         answer: result.answer,
@@ -49,7 +49,7 @@ server.registerTool(
         _meta: {
           commercePilotUsage: {
             source: "commerce_web_mcp",
-            providerId: config.provider.id,
+            providerId: config.id,
             responseId: result.responseId,
             model: result.model,
             usage: result.usage,

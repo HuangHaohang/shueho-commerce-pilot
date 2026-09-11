@@ -158,7 +158,7 @@ export const DEFAULT_AGENT_MODEL_SELECTORS = [
   "gemini-3.8-flash-high", "claude-opus-4-6-thinking",
 ] as const;
 
-function readCommerceProviderConfig(): CommerceProviderConfig {
+export function readCommerceProviderConfig(): CommerceProviderConfig {
   const id = process.env.COMMERCE_PROVIDER_ID?.trim() || "luusmosh_cpa";
   if (!/^[A-Za-z0-9_-]+$/.test(id)) {
     throw new Error("COMMERCE_PROVIDER_ID may contain only letters, numbers, underscores, and hyphens.");

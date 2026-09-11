@@ -4,6 +4,20 @@ This is a web application. Deployment machines do not need a preinstalled global
 
 ## Runtime Ownership
 
+The application event-outbox writer uses a SQLite exclusive transaction as an
+OS-backed process lock under `CODEX_HOME/commerce-runtime/agent-event-outbox.lock`.
+Use a local persistent volume with SQLite-compatible file locking. Kernel locks
+release on process termination and do not depend on container PID identity.
+When upgrading from the legacy JSON PID lock, stop all Gateway and maintenance
+writers, preserve the outbox, and remove only the old JSON lock before startup.
+The new runtime refuses to steal a legacy lock; never delete a live SQLite lock.
+This lock coordinates application event delivery only; Harness still owns thread
+execution, persisted conversation history and recovery.
+
+The managed Web Search MCP loads provider settings only. It must not require or
+receive Gateway callback credentials to start; its CA configuration is explicitly
+passed through the managed MCP environment.
+
 The application declares `@openai/codex` in `package.json` for protocol compatibility and development fallback. Production uses the reviewed application-owned binary built from the pinned open-source commit and hash-checked patch set under `vendor/codex`.
 
 Development resolution order:
