@@ -377,3 +377,10 @@ Research lifecycle correction unifies persisted warehouse states and transport a
 Governance call-count limits may be null when a finite monthly money budget is retained. Deterministic 4xx governance refusals finish with their original error instead of retrying into reconciliation. Task readback distinguishes financial settlement from cancellation cleanup, and audited non-dispatch failure corrections preserve original receipts.
 
 Research relevance v5 separates explicit semantic scope from report requirements, evaluates query variants independently and reports source-field/exclusion diagnostics. It removes handcrafted mixed scores and lexical threshold relaxation. Harness tool contract 12 carries user inclusions/exclusions; no new Agent loop or automatic paid pagination is introduced. Remaining work is recorded in the [research hardcoding and Harness audit](docs/architecture/research-hardcoding-audit.md).
+
+### Connect an external MCP client
+
+Use `https://commerce-mcp.shueho.com/mcp` with your Commerce Pilot Bearer token.
+Native Streamable HTTP clients connect directly; stdio-only clients use standard
+`mcp-remote@0.1.38`. No personal filesystem path or Commerce bridge installation is
+required. See [the copyable client configuration](docs/deployment/comate-mcp-client.md#standard-remote-connection).

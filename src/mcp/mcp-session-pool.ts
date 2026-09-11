@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
 import type {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
 import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import {usePortablePublicToolSchemas} from './public-tool-schemas.js';
 
 type Session={server:McpServer;transport:StreamableHTTPServerTransport;owner:string;lastSeen:number;active:number};
 /** A protocol session retains negotiated client capabilities and pending server requests. */
@@ -24,6 +25,7 @@ export class McpSessionPool {
    const sessionId=randomUUID();const server=create();
    const transport=new StreamableHTTPServerTransport({sessionIdGenerator:()=>sessionId,enableJsonResponse:false,keepAliveMs:10000,
     onsessionclosed:async()=>{this.sessions.delete(sessionId);await server.close();}});
+   usePortablePublicToolSchemas(transport);
    session={server,transport,owner,lastSeen:Date.now(),active:0};
    this.sessions.set(sessionId,session);
    try{await server.connect(transport);}catch(error){this.sessions.delete(sessionId);throw error;}

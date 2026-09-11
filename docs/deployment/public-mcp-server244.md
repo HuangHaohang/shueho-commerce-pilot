@@ -157,3 +157,14 @@ Run the validation matrix, real production-path Qwen regression and isolated SQL
 Apply 044 before new binaries; then run external-data:import-research-policy with apps/external-data/catalog/research-policy.v1.json from the reviewed release using the warehouse jobs environment. The import is non-billable and validates live catalog metadata; it cannot add provider prices or permissions. Stop/drain the research worker before switching warehouse/public MCP/control/worker images; retain existing unknown calls and settlement states.
 
 New tasks use execution version 3; old tasks retain their collection contracts. Preserve the policy receipt hash, image source SHA and raw archive hashes for readback. The model service update from v5 must also be active. No frontend capability or new host access is enabled. Title model configuration is unchanged; the provider credential belongs in protected configuration only.
+
+### Portable remote MCP clients
+
+The public MCP session transport publishes semantically equivalent nullable JSON
+Schema directly in tools/list. Deploy the public-mcp service from the tested image;
+no database, provider, Gateway or worker contract changes are required. Keep the
+current token-pool and proxy overlays. A new public service process invalidates its
+MCP transport sessions; clients reconnect and retain existing durable task IDs.
+Verify unauthenticated 401, generic mcp-remote initialize/list/free tool calls, null
+and zero schema behavior, native elicitation tests and existing task reads. No paid
+provider request is needed. See [client configuration](comate-mcp-client.md).

@@ -27,12 +27,52 @@ an ordinary greeting, so this breaks chat before any tool is called. Official
 models returning `responseModel: "mock"` and a model-unavailable message are a
 separate service failure, even when the run is recorded as completed.
 
-After `npm run build`, clients with access to the repository dependencies can
-run `node dist/scripts/commerce-mcp-client-bridge.js`. A self-contained bundle
-may instead be installed in the client's protected support directory. Configure
-the existing `shueho-commerce-pilot` entry with that Node entrypoint and retain
-its MCP authorization environment and direct-tool list. Back up the existing
-client configuration and reconnect the MCP client before using refreshed schemas.
+## Standard remote connection
+
+The public service now applies the same semantics-preserving schema normalization
+when publishing `tools/list`, for both input and output schemas. All clients receive
+portable schemas directly; no Commerce-specific script, repository checkout, local
+bundle or hardcoded tool list is required. Server-side input validation is unchanged.
+Native tasks, sessions, elicitation and tenant-bound authentication remain native MCP.
+
+For Comate or another stdio-only client, use the general-purpose `mcp-remote` package:
+
+```json
+{
+  "mcpServers": {
+    "shueho-commerce-pilot": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@0.1.38",
+        "https://commerce-mcp.shueho.com/mcp",
+        "--transport",
+        "http-only",
+        "--header",
+        "Authorization:${COMMERCE_MCP_AUTH_HEADER}"
+      ],
+      "env": {
+        "COMMERCE_MCP_AUTH_HEADER": "Bearer YOUR_COMMERCE_PILOT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+The environment placeholder is expanded by `mcp-remote`; never replace it with a
+credential in the command arguments. Node.js/npm are the only client runtime
+requirements. Comate may retain its `enabled`, `autoApprove`, `directTools` and
+`transport: "stdio"` preferences; direct tool names are optional presentation
+preferences rather than a server capability registry. Back up the existing client
+configuration, retain its token and unrelated server entries, then reconnect it.
+The old Commerce bridge is retained solely for older server deployments.
+
+Clients supporting native Streamable HTTP need only the MCP URL above and the
+`Authorization: Bearer YOUR_COMMERCE_PILOT_TOKEN` header in their own supported
+configuration format. Each user uses their own issued token. Browser OAuth/login
+is intentionally not enabled; anonymous requests remain 401. Supplier keys are
+never MCP client credentials. An invalid/revoked token must be replaced through
+the existing enterprise token administration, not by starting an OAuth flow.
 
 Verification must distinguish `null`, explicit `0`, and positive price bounds;
 exercise the installed Comate coercion function and compare JSON-schema acceptance

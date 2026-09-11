@@ -248,3 +248,14 @@ Do not accept paid customer traffic until all of these are complete:
 6. Migration, forced-RLS isolation, mock MCP contract tests, browser approval UI and unknown-result reconciliation pass.
 
 Technical implementation and legal text are controls and disclosures, not a legal opinion or proof that every regulatory obligation has been completed.
+
+## Portable public client schemas
+
+Commerce Pilot remains built on the open-source Codex Harness. Public MCP uses
+the SDK transport boundary to publish portable, equivalent nullable input/output
+JSON schemas, so clients can connect through native Streamable HTTP or stock
+`mcp-remote` with their existing enterprise Bearer token. This replaces the client
+installation requirement for the Commerce compatibility bridge; it adds no agent
+loop, parameter rewriting, approval translation, anonymous access or OAuth login.
+Server validation, tenant ownership, native tasks/elicitation and paid-call governance
+continue unchanged. See [the connection example](../deployment/comate-mcp-client.md).
