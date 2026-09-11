@@ -53,6 +53,7 @@ RUN npm ci --no-audit --no-fund
 
 FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS gateway-base
 
+COPY --from=codex-runtime /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 RUN rm -f /etc/apt/sources.list.d/debian.sources && \
     echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260825T000000Z bookworm main' > /etc/apt/sources.list && \
     apt-get update && \
