@@ -20,6 +20,10 @@ application-owned image with `--build-arg CODEX_RUNTIME_IMAGE=<built-image>`. Th
 default still compiles from source. Reuse only an image built from the same pinned
 upstream and patch series, record its image digest, and retain the final image's
 mandatory runtime-manifest verification; no global/npm Codex fallback is supported.
+Both Gateway build and runtime layers install the native OpenSSL/LZMA libraries
+and CA bundle from the pinned Debian snapshot. The Node dependency layer is
+independent of the Harness artifact, so updating that artifact does not redownload
+unchanged application dependencies.
 The Web runtime includes both root and workspace production dependencies. Its
 launcher resolves Next from the Web workspace rather than assuming npm hoisting.
 

@@ -43,17 +43,30 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM ${CODEX_RUNTIME_IMAGE} AS codex-runtime
 
-FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS build
+FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS dependencies
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+COPY apps/external-data/package.json apps/external-data/package.json
+RUN npm ci --no-audit --no-fund
+
+FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS gateway-base
+
+RUN rm -f /etc/apt/sources.list.d/debian.sources && \
+    echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260825T000000Z bookworm main' > /etc/apt/sources.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates libssl3 liblzma5 && \
+    rm -rf /var/lib/apt/lists/*
+
+FROM gateway-base AS build
 
 ENV CODEX_BIN=/opt/shueho-codex/bin/codex
 
 WORKDIR /app
 
 COPY --from=codex-runtime /opt/shueho-codex /opt/shueho-codex
-COPY package.json package-lock.json ./
-COPY apps/web/package.json apps/web/package.json
-COPY apps/external-data/package.json apps/external-data/package.json
-RUN npm ci --no-audit --no-fund
+COPY --from=dependencies /app/ ./
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -62,7 +75,7 @@ COPY vendor ./vendor
 RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund
 
-FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS runtime
+FROM gateway-base AS runtime
 
 ARG COMMERCE_SOURCE_COMMIT=uncommitted
 LABEL org.opencontainers.image.revision=$COMMERCE_SOURCE_COMMIT
