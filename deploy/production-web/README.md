@@ -80,3 +80,17 @@ only affected application services. Preserve the database and runtime volumes, a
 keep append-only migrations. If disabling the newly introduced web surface, remove
 only its added Tunnel route. Never run `down -v` or restore older databases over new
 customer writes as an automatic rollback.
+
+## Container replacement and recovery
+
+The MCP edge, internal TLS proxy and Web edge resolve their fixed service names
+through Docker DNS with a 10-second cache, so replacing an application container
+does not leave a proxy pointing at its old address. When upgrading an older proxy
+configuration, recreate the affected proxies after the application containers and
+verify both public MCP health and the private warehouse path.
+
+Before the first deployment using the SQLite outbox process lock, stop every
+Gateway/maintenance writer and archive only the legacy JSON
+`commerce-runtime/agent-event-outbox.lock`. Preserve the event outbox and all
+Harness history. Later process/container restarts release ownership through kernel
+file locks and do not require deleting a lock file. Never remove a live SQLite lock.
