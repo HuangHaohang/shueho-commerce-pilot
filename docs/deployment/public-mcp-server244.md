@@ -165,6 +165,7 @@ Schema directly in tools/list. Deploy the public-mcp service from the tested ima
 no database, provider, Gateway or worker contract changes are required. Keep the
 current token-pool and proxy overlays. A new public service process invalidates its
 MCP transport sessions; clients reconnect and retain existing durable task IDs.
-Verify unauthenticated 401, generic mcp-remote initialize/list/free tool calls, null
+Verify unauthenticated 401, 13 ordinary tools without a client tasks capability
+and 16 tools with explicit native-task support, generic mcp-remote free calls, null
 and zero schema behavior, native elicitation tests and existing task reads. No paid
 provider request is needed. See [client configuration](comate-mcp-client.md).

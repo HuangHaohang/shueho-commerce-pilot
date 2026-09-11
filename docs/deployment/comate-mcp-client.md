@@ -33,7 +33,10 @@ The public service now applies the same semantics-preserving schema normalizatio
 when publishing `tools/list`, for both input and output schemas. All clients receive
 portable schemas directly; no Commerce-specific script, repository checkout, local
 bundle or hardcoded tool list is required. Server-side input validation is unchanged.
-Native tasks, sessions, elicitation and tenant-bound authentication remain native MCP.
+Sessions, elicitation and tenant-bound authentication remain native MCP. The 13
+ordinary tools are always available. The three task-required tools are registered
+only when initialization explicitly advertises `capabilities.tasks` with protocol
+2025-11-25; a protocol version alone is not treated as task support.
 
 For Comate or another stdio-only client, use the general-purpose `mcp-remote` package:
 

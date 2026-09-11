@@ -1,6 +1,7 @@
 import {researchApprovalHandler} from './research-approval.js';
 import {registerDurableTaskResult,researchTaskStore,mcpTaskView,mcpResult,mcpFailure,taskResultPayload,taskOutputSchema} from "./research-task-protocol.js";
 import {McpSessionPool} from './mcp-session-pool.js';
+import {supportsNativeResearchTasks} from './public-client-capabilities.js';
 import {startResearchSettlementWorker} from './research-settlement-worker.js';
 import {createResearchService} from "./research-service.js";
 import {enqueueTask,getTask,taskAwareClient,taskCallId,startResearchTaskWorker} from "./research-task-runtime.js";
@@ -111,7 +112,7 @@ const httpServer = createServer(async (request, response) => {
     }
     const parsedBody = request.method==='POST'?await readJsonBody(request, 1_048_576):undefined;
     const owner=JSON.stringify([principal.tenantId,principal.workspaceId,principal.userId,principal.tokenId]);
-    await sessions.handle(request,response,parsedBody,owner,()=>createCommerceDataMcpServer(principal,(parsedBody as any)?.params?.protocolVersion==='2025-11-25'));
+    await sessions.handle(request,response,parsedBody,owner,()=>createCommerceDataMcpServer(principal,supportsNativeResearchTasks(parsedBody)));
   } catch (error) {
     if (response.headersSent) return;
     sendJson(response, 500, jsonRpcError(-32603, safeMessage(error)));
