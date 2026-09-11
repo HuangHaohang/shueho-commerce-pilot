@@ -1,5 +1,5 @@
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   currentPlatformKey,
@@ -94,6 +94,7 @@ try {
   ]) {
     const listedTests = run("cargo", ["test", "--locked", "-p", packageName, testName, "--", "--list"], {
       capture: true,
+      streamStderr: true,
       cwd: cargoDirectory,
       env: cargoEnvironment,
     });
@@ -114,9 +115,10 @@ try {
     env: cargoEnvironment,
   });
 
+  const cargoTargetRoot = resolve(cargoDirectory, process.env.CARGO_TARGET_DIR || "target");
   const cargoTargetDirectory = explicitTarget
-    ? join(sourceRoot, "codex-rs", "target", explicitTarget, "release")
-    : join(sourceRoot, "codex-rs", "target", "release");
+    ? join(cargoTargetRoot, explicitTarget, "release")
+    : join(cargoTargetRoot, "release");
   const result = await writeRuntimeArtifact({
     sourceBinaryPath: join(cargoTargetDirectory, executableFilename()),
     sourceLicensePath: join(sourceRoot, "LICENSE"),

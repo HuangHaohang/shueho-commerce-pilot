@@ -24,11 +24,16 @@ WORKDIR /commerce-pilot
 
 ARG CARGO_BUILD_JOBS=2
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
+ENV CARGO_TARGET_DIR=/var/cache/codex-target
 
 COPY vendor/codex ./vendor/codex
 COPY scripts/codex-runtime ./scripts/codex-runtime
 
-RUN node scripts/codex-runtime/build.mjs \
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/var/cache/codex-target \
+    node scripts/codex-runtime/build.mjs \
       --build-root=/tmp/commerce-codex-build \
       --output-dir=/opt/shueho-codex/bin && \
     node scripts/codex-runtime/verify.mjs \

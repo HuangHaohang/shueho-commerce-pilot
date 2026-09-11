@@ -12,6 +12,9 @@ Gateway using the root Dockerfile, from the same reviewed Git commit. The Gatewa
 build compiles and tests the pinned patched Linux Harness; do not copy a developer
 macOS binary or Codex home. `CARGO_BUILD_JOBS` defaults to two to bound build memory.
 Tag images with the full commit and set `COMMERCE_SOURCE_COMMIT` for revision labels.
+BuildKit caches Cargo downloads and target artifacts between builds; the pinned
+source, patch checks and native tests still run. Cargo diagnostics stream during
+compilation, including test discovery, so dependency failures remain visible.
 
 Protected `gateway.env` contains the existing tenant pin and internal token,
 service-owned model-provider credential, private external-data MCP URL/token, and
@@ -34,13 +37,18 @@ Compose file order (paths relative to the release root):
 2. existing `compose.justoneapi-proxy.yaml` and `compose.justoneapi-tokens.yaml`
 3. `deploy/production-web/compose.yaml`
 
+Use `deploy/production-web/compose.sh` as the full deployment wrapper. It preserves
+the existing supplier overlays and reads protected configuration from
+`COMMERCE_CONFIG_DIR` (the server244 configuration directory by default).
+
 Set release image variables in protected `deployment.env`, including
 `COMMERCE_GATEWAY_IMAGE` and `COMMERCE_JOBS_IMAGE`. Validate with `docker compose
 config --quiet` so resolved secrets are never printed. Start private services,
 verify Gateway HTTP 200 with `managedMcp.state=ready`, then start background workers
 and web-edge. Only the web edge publishes loopback `127.0.0.1:18088`; Gateway has no
 host port. The edge rejects `/api/internal/*`, preserves SSE without buffering or
-upstream replay, and bounds request bodies (6 MiB only for authenticated attachments).
+upstream replay, and bounds request bodies (6 MiB only for attachment and product
+import routes, whose application handlers enforce authentication and file limits).
 
 Add the approved browser hostname to the existing Cloudflare Tunnel pointing at
 `http://127.0.0.1:18088`; preserve every pre-existing route and fallback. Do not rotate

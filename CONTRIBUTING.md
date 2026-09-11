@@ -10,7 +10,7 @@ Do not commit `.env` files, provider credentials, Better Auth secrets, database 
 
 Requirements:
 
-- Node.js `20.16+` (CI uses Node 20.18);
+- Node.js `22.23.2+` on the Node 22 LTS line, or Node 24 LTS (CI and production use Node 22.23.2);
 - npm;
 - Docker with Compose;
 - an OpenAI/Codex credential or configured Responses-compatible provider.

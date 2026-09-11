@@ -457,7 +457,7 @@ export function run(command, args, options = {}) {
     env: options.env ?? process.env,
     encoding: options.capture ? "utf8" : undefined,
     maxBuffer: options.capture ? 64 * 1024 * 1024 : undefined,
-    stdio: options.capture ? "pipe" : "inherit",
+    stdio: options.capture ? (options.streamStderr ? ["ignore", "pipe", "inherit"] : "pipe") : "inherit",
     timeout: options.timeout,
     windowsHide: true,
   });

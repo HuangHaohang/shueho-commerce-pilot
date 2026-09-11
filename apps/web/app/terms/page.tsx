@@ -6,6 +6,9 @@ import {
   LegalSourceList,
 } from "@/components/legal/legal-document-layout";
 
+// Legal identity is supplied by the deployment, never baked into the image.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "使用条款 | Commerce Pilot",
   description: "Commerce Pilot 使用条款。",
