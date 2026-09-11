@@ -17,14 +17,14 @@ function response(code: number | null, httpStatus = 200): ProviderCallResult {
     responseSha256: createHash("sha256").update(rawBytes).digest("hex"), contentType: "application/json", responseBytes: rawBytes.length,
     providerCode: code, providerMessage: null, providerRequestId: null, providerRecordedAt: null };
 }
-function fixture(responses: Array<ProviderCallResult | Error>) {
+function fixture(responses: Array<ProviderCallResult | Error>, tokenCount = 1) {
   let now = 100_000, ordinal = 0;
-  const credential = credentialForToken("unit-test-provider-token");
+  const credentials = Array.from({length: tokenCount}, (_, index) => credentialForToken(`unit-test-provider-token-${index}`));
   const store = {
     register: vi.fn(async () => undefined), status: vi.fn(async () => ({})), begin: vi.fn(async () => undefined),
-    reserve: vi.fn(async () => ({ id: `attempt-${++ordinal}`, tokenId: credential.id, ordinal })),
+    reserve: vi.fn(async (_identity: unknown, _executionId: string, tokenIds: string[]) => ({ id: `attempt-${++ordinal}`, tokenId: tokenIds[0]!, ordinal })),
     availabilityDelay: vi.fn(async () => null), progress: vi.fn(async () => undefined),
-    dispatch: vi.fn(async () => true), cancel: vi.fn(async () => undefined), complete: vi.fn(async () => undefined),
+    dispatch: vi.fn(async () => true), cancel: vi.fn(async () => undefined), complete: vi.fn(async (..._args: Parameters<JustOneApiTokenStore["complete"]>) => undefined),
     unknown: vi.fn(async () => undefined), finish: vi.fn(async () => undefined),
   };
   const send = vi.fn(async () => {
@@ -37,13 +37,83 @@ function fixture(responses: Array<ProviderCallResult | Error>) {
     feedback: vi.fn(async () => 0), release: vi.fn(async () => undefined) };
   const transport = { prepare: vi.fn(async () => ({ proxyNodeId: "fixture", send, close: vi.fn() })) };
   const options = { ...defaultJustOneApiResilience, totalTimeoutMs: 10_000, minimumAttemptWindowMs: 1, retryBaseMs: 1 };
-  const client = new JustOneApiClient({ credentials: async () => [credential], store: store as unknown as JustOneApiTokenStore,
+  const client = new JustOneApiClient({ credentials: async () => credentials, store: store as unknown as JustOneApiTokenStore,
     transport, admission, resilience: options, timeoutMs: () => 1000, configured: true,
     now: () => now, wait: async (ms) => { now += ms; } });
-  return { client, store, admission, transport, send, options };
+  return { client, store, admission, transport, send, options, credentials };
 }
 
 describe("bounded provider retries", () => {
+  it.each([[100,401,'invalid'],[600,403,'endpoint_denied']] as const)('preserves explicit auth feedback for %s with HTTP %s without quota failover',async(code,status,feedback)=>{
+    const f=fixture([response(code,status),response(0)],2);
+    expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(code);
+    expect(f.store.complete.mock.calls[0]![3]).toBe(feedback);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([303, 601, 602])('switches to another token after confirmed quota code %s within the same call', async code => {
+    const f = fixture([response(code), response(0)], 2);
+    expect((await f.client.call(endpoint, request, identity)).providerCode).toBe(0);
+    expect(f.store.begin).toHaveBeenCalledTimes(1);
+    expect(f.store.reserve.mock.calls.map(args => args[2])).toEqual([
+      f.credentials.map(c => c.id), [f.credentials[1]!.id],
+    ]);
+    expect(f.store.complete).toHaveBeenNthCalledWith(1, identity, expect.anything(), expect.anything(), 'endpoint_exhausted', false);
+    expect(f.store.complete.mock.invocationCallOrder[0]).toBeLessThan(f.store.reserve.mock.invocationCallOrder[1]!);
+    expect(f.send).toHaveBeenCalledTimes(2);
+    expect(f.store.finish).toHaveBeenCalledWith(identity, expect.any(String), 'completed');
+    expect(f.admission.feedback).not.toHaveBeenCalledWith(endpoint.apiPath, true, expect.anything());
+  });
+
+  it('excludes every exhausted key and stops at the existing attempt limit', async () => {
+    const f = fixture([response(303,429),response(601),response(602),response(0)],4);
+    expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(602);
+    expect(f.send).toHaveBeenCalledTimes(3);
+    expect(f.store.reserve.mock.calls[2]![2]).toEqual(f.credentials.slice(2).map(c=>c.id));
+  });
+
+  it('honors an explicit Retry-After even for quota failover',async()=>{
+    const f=fixture([{...response(303,429),retryAfterMs:20_000},response(0)],2);
+    expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(303);
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([100, 201, 400, 600, 999])('never turns code %s or message text into quota failover', async code => {
+    const result = response(code);
+    result.providerMessage = 'Insufficient quota / 额度不足';
+    result.payload = {...result.payload, message:result.providerMessage};
+    const f = fixture([result,response(0)],2);
+    expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(code);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.store.complete.mock.calls[0]![3]).not.toBe('endpoint_exhausted');
+  });
+
+  it.each([
+    {...response(601), payload:{code:0,message:'quota exhausted'}},
+    {...response(601), payload:{code:'601',message:'额度不足'}},
+    {...response(601), httpStatus:403},
+    {...response(0), payload:{code:0,data:{message:'额度不足'}}},
+  ])('does not alter quota for inconsistent, successful or non-provider envelopes', async result => {
+    const f=fixture([result,response(0)],2);await f.client.call(endpoint,request,identity);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.store.complete.mock.calls[0]![3]).toBe('none');
+  });
+
+  it('does not fail over if the quota rejection cannot be archived atomically',async()=>{
+    const f=fixture([response(601),response(0)],2);
+    f.store.complete.mockRejectedValueOnce(new Error('archive unavailable'));
+    await expect(f.client.call(endpoint,request,identity)).rejects.toMatchObject({uncertain:true});
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mark an archived rejection unknown when selection of the next key fails',async()=>{
+    const f=fixture([response(601),response(0)],2);
+    f.store.reserve.mockImplementationOnce(async(_identity,_executionId,ids)=>({id:'first',tokenId:ids[0]!,ordinal:1}));
+    f.store.reserve.mockRejectedValueOnce(new Error('database unavailable'));
+    await expect(f.client.call(endpoint,request,identity)).rejects.toMatchObject({uncertain:false,code:'QUOTA_STORE_UNAVAILABLE'});
+    expect(f.send).toHaveBeenCalledTimes(1);
+  });
+
   it.each([301, 302])("retries explicit code %s using the same governed identity and archives each result", async (code) => {
     const f = fixture([response(code, code === 302 ? 429 : 200), response(0)]);
     expect((await f.client.call(endpoint, request, identity)).providerCode).toBe(0);

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { JustOneApiAdmission } from "./justoneapi-admission.js";
 import { defaultJustOneApiResilience, isRetryableProviderRejection, providerResultUncertain, retryDelayMs, type JustOneApiResilienceOptions } from "./justoneapi-retry-policy.js";
-import { JustOneApiError, tokenFeedback } from "./justoneapi-errors.js";
+import { JustOneApiError, providerTokenFeedback } from "./justoneapi-errors.js";
 import type { JustOneApiCredential } from "./justoneapi-credentials.js";
 import type { JustOneApiTransport, PreparedJustOneApiRequest } from "./justoneapi-http-transport.js";
 import type { JustOneApiCallIdentity, JustOneApiTokenStore, TokenReservation } from "./justoneapi-token-store.js";
@@ -72,6 +72,7 @@ export class JustOneApiClient {
     let admissionExpired = false;
     let lastResult: ProviderCallResult | null = null;
     const tokenIds = this.credentials.map((item) => item.id);
+    const exhaustedTokenIds = new Set<string>();
     const delay = async (ms: number, reason: string): Promise<boolean> => {
       await store.progress(identity, executionId, attempts, reason, now() + ms);
       if (now() + ms + options.minimumAttemptWindowMs > deadline) { admissionExpired = true; return false; }
@@ -85,6 +86,8 @@ export class JustOneApiClient {
     };
     try {
       while (attempts < options.maxAttempts && now() + options.minimumAttemptWindowMs <= deadline) {
+        const eligibleTokenIds = tokenIds.filter(id => !exhaustedTokenIds.has(id));
+        if (!eligibleTokenIds.length) break;
         const candidateLease = randomUUID();
         const permit = await admission.acquire(identity.apiPath, candidateLease, deadline + 5_000);
         if (!permit.acquired) {
@@ -92,10 +95,10 @@ export class JustOneApiClient {
           continue;
         }
         leaseId = candidateLease;
-        reservation = await store.reserve(identity, executionId, tokenIds);
+        reservation = await store.reserve(identity, executionId, eligibleTokenIds);
         if (!reservation) {
           await release();
-          const availableIn = await store.availabilityDelay(identity, tokenIds);
+          const availableIn = await store.availabilityDelay(identity, eligibleTokenIds);
           if (availableIn === null || !await delay(Math.max(100, availableIn), "token_cooldown")) break;
           continue;
         }
@@ -124,11 +127,13 @@ export class JustOneApiClient {
         const result = await transport.send(credential);
         transport.close(); transport = null;
         const uncertainResponse = providerResultUncertain(result);
-        const feedback = uncertainResponse ? "none" : tokenFeedback(result.providerCode);
+        const feedback = uncertainResponse ? "none" : providerTokenFeedback(result);
         // Archive each rejection before any retry can reserve another token.
         await store.complete(identity, reservation, result, feedback, uncertainResponse);
+        // Only confirmed non-billable refusals permit a fresh pre-dispatch state.
+        mayHaveDispatched = uncertainResponse || !isRetryableProviderRejection(result);
+        if (feedback === 'endpoint_exhausted') exhaustedTokenIds.add(reservation.tokenId);
         reservation = null;
-        mayHaveDispatched = !isRetryableProviderRejection(result);
         // Even an unparseable 429 closes admission, but that request remains unknown.
         const throttled = feedback === "rate_limited" || result.httpStatus === 429 && result.providerCode === null;
         const cooldown = throttled || result.state === "succeeded"
@@ -137,6 +142,11 @@ export class JustOneApiClient {
         lastResult = result;
         await release();
         if (!isRetryableProviderRejection(result) || attempts >= options.maxAttempts) break;
+        // Endpoint admission still enforces spacing; quota failover needs no transient-error backoff.
+        if (feedback === 'endpoint_exhausted') {
+          if (result.retryAfterMs && !await delay(result.retryAfterMs, 'quota_exhausted')) break;
+          continue;
+        }
         const backoff = Math.max(cooldown, result.retryAfterMs ?? 0, retryDelayMs(attempts, options));
         if (!await delay(backoff, throttled ? "rate_limited" : "retry_backoff")) break;
       }

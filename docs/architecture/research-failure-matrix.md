@@ -43,3 +43,13 @@ Nonterminal provider acknowledgements (executing/running/queued/processing) neve
 Lifecycle acceptance covers every actual SQL intermediate state as well as transport acknowledgements. All hold settlement until a terminal result, preserve the original checkpoint and refresh only the original request. Transient admission 503 leaves no supplier checkpoint; explicit denial remains terminal. Processing waits exceed five polls without consuming fault retries, then safely time out after the persisted 15-minute deadline.
 
 Quota-refusal acceptance verifies one terminal failure with the original governance code, no provider dispatch, separate cleanup/settlement readback, append-only corrections grounded in denial audits, and more than 100 DB-only reservations with the money cap still enforced.
+
+## Provider token quota failover
+
+Test 303/601/602 refusals through the real JustOneApiClient and PostgreSQL token
+store: archive and zero only the current pair, complete the same governed call with
+a different key, preserve sibling interfaces and prevent exhausted-key reuse by
+a new client. Check all-exhausted/attempt-limit termination, failed transaction
+non-replay, Retry-After, 600 permission refusal without quota zeroing, successful
+data mentioning quota, inconsistent/unknown error envelopes and network/5xx
+uncertainty. These tests use fabricated provider responses and a disposable database.

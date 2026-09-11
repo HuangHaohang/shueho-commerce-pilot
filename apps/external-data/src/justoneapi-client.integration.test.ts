@@ -129,7 +129,26 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     expect(f.sent).toHaveLength(1);
   });
 
-  it("archives an endpoint quota rejection once and rotates the next governed call without disabling other interfaces", async () => {
+  it.each([303,601,602])("archives quota code %s and succeeds with a different key in the same governed call", async code => {
+    const f = await fixture(); const call = await ownedRequest();
+    const result = await f.make(async credential => response(credential.id === f.credentials[0]!.id ? code : 0),undefined,f.store,3)
+      .call(call.ep,call.request,call.identity);
+    expect(result.providerCode).toBe(0);
+    expect(f.sent).toEqual(f.credentials.map(c=>c.id));
+    expect(await f.counters()).toMatchObject([
+      {remaining_calls:0,state:'exhausted',used_calls:1,reserved_calls:0,inflight_calls:0},
+      {remaining_calls:2,state:'active',used_calls:1,reserved_calls:0,inflight_calls:0},
+    ]);
+    expect((await f.counters(pathB)).map(r=>[r.remaining_calls,r.state,r.used_calls])).toEqual([[2,'active',0],[2,'active',0]]);
+    const archive=await owner.query('SELECT provider_code,response_payload,response_raw_bytes FROM justoneapi_token_attempt WHERE raw_call_id=$1 ORDER BY ordinal',[call.identity.rawCallId]);
+    expect(archive.rows.map(r=>r.provider_code)).toEqual([code,0]);
+    expect(archive.rows[0]!.response_payload.code).toBe(code);
+    expect(JSON.parse(archive.rows[0]!.response_raw_bytes.toString()).code).toBe(code);
+    const next=await ownedRequest();await f.make().call(next.ep,next.request,next.identity);
+    expect(f.sent[2]).toBe(f.credentials[1]!.id);
+  });
+
+  it("archives an endpoint quota rejection once and rotates the next governed call when attempt budget is one", async () => {
     const f = await fixture(); const call = await ownedRequest();
     await f.make(async (credential) => response(credential.id === f.credentials[0]!.id ? 601 : 0)).call(call.ep,call.request,call.identity);
     expect(f.sent).toHaveLength(1);
@@ -151,7 +170,7 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     await f.make(async (credential) => response(credential.id === f.credentials[0]!.id ? 100 : credential.id === f.credentials[1]!.id ? 600 : 0)).call(call.ep,call.request,call.identity);
     const denied = await ownedRequest();
     await f.make(async () => response(600)).call(denied.ep,denied.request,denied.identity);
-    expect((await f.counters())[1]).toMatchObject({ state: "permission_denied" });
+    expect((await f.counters())[1]).toMatchObject({ state: "permission_denied", remaining_calls: 2, used_calls: 1 });
     const another = await ownedRequest(pathB);
     await f.make(async () => response(302)).call(another.ep,another.request,another.identity);
     expect(f.sent.at(-1)).toBe(f.credentials[1]!.id);

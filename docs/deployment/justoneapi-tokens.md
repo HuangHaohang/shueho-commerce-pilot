@@ -25,11 +25,11 @@ Quotas are keyed by token and exact canonical API path, including version. Param
 1. Existing Commerce governance performs live authorization, approval and budget admission, then the warehouse persists the Token-free request identity.
 2. The unified client claims the raw call once. Duplicate processes, repeated requests and restarts cannot claim it again.
 3. Token selection atomically reserves one unit: available decreases and reserved increases. A verified proxy tunnel is prepared before any provider HTTP request exists.
-4. Before sending, a compare-and-set moves each attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Only documented, confirmed non-billable `301`/`302` rejections or a proxy failure before any provider bytes may lead to another bounded attempt under the same immutable governed call. A success, resource/configuration/quota failure or uncertain result cannot be replayed.
+4. Before sending, a compare-and-set moves each attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Only documented, confirmed non-billable `301`/`302` rejections, `303`/`601`/`602` quota failover, or a proxy failure before any provider bytes may lead to another bounded attempt under the same immutable governed call. A success, resource/configuration failure, unrecognized quota-like message or uncertain result cannot be replayed.
 5. The complete response is persisted in the scoped attempt archive before returning to the existing raw/normalization pipeline; in-flight decreases. A second settlement does not change counters.
 6. Proxy/setup failure before dispatch returns the reservation. A timeout, disconnect, 5xx response or uncertain persistence keeps the consumed unit, becomes unknown and is never replayed automatically. The small commit-before-network crash window is conservatively held for operator reconciliation, not silently refunded.
 
-Provider code 100 invalidates the credential globally. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies cooldown to both that combination and the shared endpoint admission bucket. Other interfaces remain eligible. Only `301`/`302` permit an automatic retry within the admitted call; the prior full rejection is archived before reserving/debiting another attempt. Every network attempt consumes one conservative token unit, including a rejected attempt, and no unit is refunded without authoritative quota reconciliation. Other feedback changes eligibility for the next independently governed call. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
+Provider code 100 invalidates the credential globally. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies cooldown to both that combination and the shared endpoint admission bucket. Other interfaces remain eligible. `301`/`302` permit bounded retries, while confirmed `303`/`601`/`602` responses permit another eligible key within the same admitted call; the prior full rejection is archived before reserving/debiting another attempt. Every network attempt consumes one conservative token unit, including a rejected attempt, and no unit is refunded without authoritative quota reconciliation. Permission refusal blocks selection without overwriting the remaining-call counter with zero. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
 
 Token rotation and proxy-node rotation are independent. Only the JustOneAPI client opts into the proxy pool. Document/catalog imports without provider credentials, database/model/MCP traffic and other services keep their existing network paths.
 
@@ -109,3 +109,36 @@ A valid `Retry-After` overrides any shorter backoff/cooldown. The client stops w
 Public MCP repeated execution of a consumed, owned plan reads the original result instead of starting another collection. Normal research input schemas and plan scope remain unchanged. Deploy warehouse and public MCP after applying `034`, draining active provider calls first. Do not use real provider execution as a release smoke test: use the disposable PostgreSQL retry/concurrency suite, public readback and a consumed plan whose original provider dispatch is already terminal.
 
 Policy references: [official retry guidance](https://justoneapi.com/zh/blog/api-failure-retry-guide) and [official response-code table](https://justoneapi.apifox.cn/api%E4%BD%BF%E7%94%A8%E6%8C%87%E5%8D%97-%E4%B8%AD%E6%96%87-7571933m0). The project retains its stricter no-replay rule for uncertain transport/5xx outcomes.
+
+## Confirmed quota failover
+
+The official [business-code reference](https://docs.justoneapi.com/en/usage#business-code-reference)
+identifies 303 (daily quota), 601 (shared account balance) and 602 (token budget) as
+non-billable refusals. Classification requires a business-failed response, a numeric
+matching top-level response-body code, and a successful HTTP envelope or HTTP 429.
+Arbitrary text containing “quota”, message text inside successful business data,
+unknown codes, 403 permission errors and 5xx/network uncertainty never authorize
+quota zeroing or failover. No model performs this classification.
+
+The existing asynchronous SQL transaction archives the complete failed response
+and sets only the selected token/canonical-interface allowance to zero before the
+next selection. This is deliberately awaited rather than a detached fire-and-forget
+job: a delayed/lost update could select the exhausted key again across workers.
+The current call also excludes exhausted keys from its remaining candidates. Other
+interfaces keep their counters, and used-call history is retained. Account balance
+and token budget refusals are conservative evidence that this particular pair is
+unavailable, not proof that every other free-trial interface has zero remaining
+calls; sibling interfaces are not overwritten.
+
+Failover uses the original raw-call, governance and billing identity. It adds no
+transient-error backoff for quota refusal but preserves shared admission spacing,
+any explicit Retry-After, the existing maximum of three total attempts and the
+absolute deadline. All exhausted/no eligible keys returns the original definite
+refusal. Failed archive/zeroing stops before dispatching another key. No automatic
+allowance refill or uncertain-result replay is introduced.
+
+Deploy the warehouse from the tested release after draining active provider work;
+no schema migration or quota import is required. Verify the real PostgreSQL suite
+with fabricated supplier responses, both endpoint counters, archived attempts,
+concurrent selection, permanent errors and timeout non-replay. Production acceptance
+uses health and stored counter/receipt reads, never deliberate paid exhaustion.

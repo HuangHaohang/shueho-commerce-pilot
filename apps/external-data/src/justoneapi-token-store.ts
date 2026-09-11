@@ -90,7 +90,9 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
           AND (quota.cooldown_until IS NULL OR quota.cooldown_until<=CURRENT_TIMESTAMP)
           AND NOT EXISTS (SELECT 1 FROM justoneapi_token_attempt previous
             WHERE previous.raw_call_id=$3 AND NOT (previous.state='cancelled' OR
-              COALESCE(previous.state='business_failed' AND previous.provider_code IN (301,302)
+              COALESCE(previous.state='business_failed' AND previous.provider_code IN (301,302,303,601,602)
+                AND previous.response_payload->'code'=to_jsonb(previous.provider_code)
+                AND (previous.provider_code IN (301,302) OR previous.token_id<>quota.token_id)
                 AND (previous.http_status BETWEEN 200 AND 299 OR previous.http_status=429),false)))
         ORDER BY quota.last_selected_seq,array_position($2::text[],quota.token_id) LIMIT 1 FOR UPDATE OF quota,token`,
       [identity.apiPath,tokenIds,identity.rawCallId]);
@@ -181,9 +183,12 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
         updated_at=CURRENT_TIMESTAMP WHERE token_id=$1 AND api_path=$2`, [reservation.tokenId,identity.apiPath]);
       if (feedback === "invalid") {
         await client.query("UPDATE justoneapi_token SET state='invalid',updated_at=CURRENT_TIMESTAMP WHERE token_id=$1", [reservation.tokenId]);
-      } else if (feedback === "endpoint_exhausted" || feedback === "endpoint_denied") {
-        await client.query(`UPDATE justoneapi_token_endpoint_quota SET remaining_calls=0,state=$3,updated_at=CURRENT_TIMESTAMP
-          WHERE token_id=$1 AND api_path=$2`, [reservation.tokenId,identity.apiPath,feedback === "endpoint_denied" ? "permission_denied" : "exhausted"]);
+      } else if (feedback === "endpoint_exhausted") {
+        await client.query(`UPDATE justoneapi_token_endpoint_quota SET remaining_calls=0,state='exhausted',updated_at=CURRENT_TIMESTAMP
+          WHERE token_id=$1 AND api_path=$2`, [reservation.tokenId,identity.apiPath]);
+      } else if (feedback === "endpoint_denied") {
+        await client.query(`UPDATE justoneapi_token_endpoint_quota SET state='permission_denied',updated_at=CURRENT_TIMESTAMP
+          WHERE token_id=$1 AND api_path=$2`, [reservation.tokenId,identity.apiPath]);
       } else if (feedback === "rate_limited") {
         await client.query(`UPDATE justoneapi_token_endpoint_quota SET cooldown_until=CURRENT_TIMESTAMP+INTERVAL '60 seconds',
           updated_at=CURRENT_TIMESTAMP WHERE token_id=$1 AND api_path=$2`, [reservation.tokenId,identity.apiPath]);
