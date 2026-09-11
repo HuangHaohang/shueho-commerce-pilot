@@ -1,8 +1,8 @@
 # Documentation Map
 
-Read documents in this order when joining the project or starting an AI-assisted task.
+Use this map to find the documents relevant to the affected feature. The task routing in root `AGENTS.md` determines what to read; this list is not an every-task reading sequence.
 
-## Required First
+## Project Entry Points
 
 1. [`../AGENTS.md`](../AGENTS.md) - non-negotiable product, Codex Harness, security, and frontend invariants. AI coding agents must read this before changing code.
 2. [`../README.md`](../README.md) - product status, local startup, scripts, and current capabilities.

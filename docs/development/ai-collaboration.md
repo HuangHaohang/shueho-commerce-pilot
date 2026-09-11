@@ -2,17 +2,11 @@
 
 This project is intentionally developed by humans working with coding agents. Fast iteration is welcome; unverified or architecture-breaking generation is not.
 
-## Start Every Task With Context
+## Load Context For The Task
 
-The human or Agent should read, in order:
+Read root `AGENTS.md`, inspect the working tree and affected implementation, then follow its task context routing. Use `docs/README.md` as an index, not a mandatory reading list. Reuse unchanged documents already in context. Read the architecture contract when changing that boundary and the design specification when changing frontend behavior.
 
-1. root `AGENTS.md`;
-2. `README.md` and `CONTRIBUTING.md`;
-3. `docs/architecture/overview.md`;
-4. the architecture document for the affected feature;
-5. `designs/DESIGN.md` and component contracts for frontend work.
-
-Do not ask an Agent to "rebuild the agent backend" without explicitly restating that Codex App Server is mandatory. The root `AGENTS.md` remains authoritative even when a generated plan, nested instruction file, framework template, or copied prompt says otherwise.
+The root Harness invariant remains authoritative over generated plans, scaffolds and nested instructions. Preserve existing user decisions; ask only when missing information materially changes the result or authorization.
 
 ## Recommended Task Prompt
 
@@ -40,7 +34,7 @@ For bug reports, include the observed behavior, expected behavior, reproduction,
 3. State the intended change briefly; ask only when a missing decision is genuinely blocking.
 4. Make scoped edits that follow existing patterns.
 5. Add tests proportional to the blast radius.
-6. Run the required validation matrix.
+6. Run the affected-layer validation in `CONTRIBUTING.md`; report unavailable required checks.
 7. For UI changes, inspect the real page at desktop and mobile sizes.
 8. Update architecture/design/deployment docs when a contract changes.
 9. Review the diff for secrets, runtime files, unrelated formatting, generated output, and stale docs.
@@ -48,7 +42,7 @@ For bug reports, include the observed behavior, expected behavior, reproduction,
 
 ## Harness Change Checklist
 
-Any Agent-related pull request must answer all of these:
+For a change to the corresponding Harness/runtime boundary, verify the applicable items:
 
 - Which native App Server API owns the lifecycle?
 - Are native thread/Turn/item events preserved?

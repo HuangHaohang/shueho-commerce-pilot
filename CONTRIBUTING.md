@@ -2,7 +2,7 @@
 
 ## Before You Start
 
-Read [`AGENTS.md`](AGENTS.md), [`docs/architecture/overview.md`](docs/architecture/overview.md), and [`designs/DESIGN.md`](designs/DESIGN.md). Agent-runtime work must preserve the Codex Harness invariant.
+Read [`AGENTS.md`](AGENTS.md) and follow its task context routing. Load architecture and design documents for the boundaries being changed; agent-runtime work must preserve the Codex Harness invariant.
 
 Do not commit `.env` files, provider credentials, Better Auth secrets, database URLs, `CODEX_HOME`, `.runtime`, attachments, generated images, session rollouts, database volumes, logs, or browser artifacts.
 
@@ -70,7 +70,7 @@ npm run jobs:thread-deletion
 - Historical marketplace product collection used two phases: free `plan_marketplace_research` persists a tenant/thread/Turn-bound plan and obtains a no-reservation quote; paid `execute_marketplace_research` accepts only that plan id. Do not merge plan and execution arguments or allow execution to change platform, market, localization, sample size, endpoint set, catalog revision or workflow definition.
 - Model questions use only App Server `item/tool/requestUserInput`; application approvals hold the original `item/tool/call` and use `commerce/approval/*`. Never fabricate a Codex server request or duplicate its answer with `thread/inject_items`.
 - New integrations use application Tools or managed MCP boundaries.
-- Database migrations are append-only under `apps/web/migrations` and must be registered in `apps/web/scripts/migrate-auth.ts`.
+- Database migrations are append-only in the owning service. Register web migrations in `apps/web/scripts/migrate-auth.ts`; external-data migrations follow that service's migration runner and ordering contract.
 - Per-message quality feedback is application data keyed to authoritative Harness thread, Turn, and `agentMessage` item ids. Do not use App Server `feedback/upload` for thumbs ratings, trust browser-supplied reply text/model metadata, or persist a second copy of the reply body in feedback tables.
 - Harness receives application-owned business tools. The complete capability registry may expose validated credential-free business input schemas through opaque capability IDs; provider transport paths, credentials and raw archives remain private. Generic data plans must retain immutable scope, approved market profiles, live governance and separate source-observation semantics. Capability failures return explicit blocking reasons and must never cause invented endpoints, changed constraints, fabricated evidence or false success.
 - Provider-ID dependency chains belong in the SQL `provider_business_workflow` catalog. Harness supplies keyword and business filters, never `itemId`, `ASIN`, `shopId`, or similar provider identifiers. A downstream step may use only an identifier resolved from quality-promoted source evidence and recorded in `research_workflow_binding_evidence`; every actual provider request still receives a separate reservation, approval decision, raw archive and settlement.
@@ -83,37 +83,27 @@ npm run jobs:thread-deletion
 
 Research changes must also satisfy the cross-component [research failure matrix](docs/architecture/research-failure-matrix.md), including cancellation before/after dispatch, actual compatibility-bridge approvals, connection isolation and complete large-result traversal. Isolated PostgreSQL budget tests use `BUDGET_TEST_DATABASE_URL` pointing to an explicitly disposable owner database; CI supplies its external-data test database. Never use production data for destructive fixture tests or paid supplier smoke calls.
 
-Run the checks relevant to every code pull request:
+Select all rows affected by the change. Shared contracts require checks on both sides; a documentation-only change does not require application builds or paid calls. Reuse results only for unchanged tested code and the same relevant environment; new failures or changes require the affected checks again. Report missing prerequisites and skipped required checks explicitly.
 
-```bash
-npm run check
-npm run codex:runtime:test
-npm run external-data:check
-npm run external-data:test
-npm run external-data:evaluate
-npm run web:check
-npm run test:gateway
-npm run web:test
-npm run security:runtime
-npm run web:build
-git diff --check
-```
+| Changed layer | Required verification |
+| --- | --- |
+| Documentation / instruction text | `git diff --check`, relative links, instruction consistency; Skill frontmatter, references and representative routing scenarios |
+| Gateway / Harness adapters / generated business Skills | `npm run check`, `npm run test:gateway`; focused behavioral coverage for changed tool and workflow contracts |
+| Runtime artifact / patches | `npm run codex:runtime:test`, exact upstream tests, manifest verification and application-owned binary build |
+| External-data service | `npm run external-data:check`, `npm run external-data:test`; `npm run external-data:evaluate` for retrieval/quality changes |
+| Web / BFF | `npm run web:check`, `npm run web:test`, `npm run web:build`; real browser inspection when UI changes |
+| Runtime permissions / isolation / tenant ownership | `npm run security:runtime` plus affected tenant/RLS verifiers |
+| Database contracts | Apply owning-service migrations and run relevant isolation/catalog/service verifiers in an explicitly disposable database |
 
-Database/RLS or migration changes also require:
+Research changes also require the failure, lifecycle, recovery and relevance checks below when those contracts are affected. Every change requires `git diff --check`.
 
-```bash
-npm run auth:migrate
-npm run enterprise:verify-isolation
-npm run enterprise:verify-external-data
-npm run external-data:migrate
-npm run external-data:import-catalog
-npm run external-data:import-market-profiles
-npm run external-data:import-business-workflows
-npm run external-data:verify:catalog
-npm run external-data:verify
-```
+### Database Verification Versus Operational Imports
 
-Web Search changes require `npm run smoke:web-search`. Provider changes require `npm run smoke:provider` and `npm run smoke:image-tool`. Patched-runtime changes additionally require exact upstream Rust tests, `npm run codex:runtime:test`, manifest verification, and an application-owned binary build. App Server lifecycle changes require `npm run smoke:codex`, `npm run smoke:steer-pivot`, and focused restart/resume verification.
+`auth:migrate` and `external-data:migrate` mutate the target database. Run them against disposable test databases for validation; a production migration belongs to the requested release and its runbook. Depending on the changed contract, use `enterprise:verify-isolation`, `enterprise:verify-external-data`, `external-data:verify:catalog`, and `external-data:verify` against the appropriate configured test environment. Inspect a verifier's fixtures before choosing its target: a verifier name does not guarantee read-only behavior.
+
+`external-data:import-catalog`, `external-data:import-market-profiles`, `external-data:import-business-workflows`, and `enterprise:import-justoneapi-pricing` are master-data mutations, not universal PR checks. Exercise changed importers with validated fixtures in a disposable database. Run production imports only within an authorized operation, using immutable receipts and readback; do not reimport master data merely because an unrelated migration changed.
+
+Web Search changes require `npm run smoke:web-search`. Model-provider transport changes require `npm run smoke:provider`; native image transport/Item changes also require `npm run smoke:image-tool`. JustOneAPI transport changes use external-data tests and governance verification, not model-provider smoke tests. Live paid smokes require authorization for their calls and must preserve uncertain-result no-replay rules. Patched-runtime changes additionally require exact upstream Rust tests, `npm run codex:runtime:test`, manifest verification, and an application-owned binary build. App Server lifecycle changes require `npm run smoke:codex`, `npm run smoke:steer-pivot`, and focused restart/resume verification.
 
 For frontend changes, inspect the running UI with browser automation or Playwright at desktop and mobile widths. Verify no overlap, clipping, blank canvas, horizontal overflow, unexpected native scrollbar, or inaccessible control.
 

@@ -6,7 +6,7 @@ The project invariants are recorded in [AGENTS.md](./AGENTS.md): the e-commerce 
 
 ## Start Here
 
-This repository is designed for humans collaborating with coding agents. Before changing code, read:
+This repository is designed for humans collaborating with coding agents. Read `AGENTS.md` before editing; use its task routing to select context from the following references:
 
 1. [AGENTS.md](./AGENTS.md) - non-negotiable Harness, security, product, and UI rules;
 2. [CONTRIBUTING.md](./CONTRIBUTING.md) - setup, branch, migration, test, commit, and PR workflow;

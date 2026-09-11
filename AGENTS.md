@@ -8,26 +8,9 @@ This requirement is project-defining and must not be removed, weakened, bypassed
 
 This repository is a web application, not a desktop application. The product surface must be a browser-based web app backed by server-side services. Do not introduce Electron, Tauri, native desktop shells, IDE-extension-first UX, or desktop-app packaging as the primary product direction unless the user explicitly changes this requirement.
 
-## Product Direction
-
-- Build a commerce-focused agent system for operational e-commerce workflows.
-- Build it as a browser-based web application with a server-side agent gateway.
-- Treat Codex's open-source harness as the foundation for agent execution, not as an optional integration.
-- Use commerce-domain code, UI, storage, connectors, tools, and workflows around the harness.
-- The repository should evolve toward a real product surface for e-commerce work, not a generic chat demo.
-
 ## Codex Harness Boundary
 
-The project must preserve Codex harness ownership of the agent-runtime concerns it is designed to handle:
-
-- conversation and thread lifecycle
-- multi-turn state and persisted history
-- streamed execution events
-- tool invocation flow
-- sandbox and permission policy
-- human approval requests
-- interruption, continuation, and recovery behavior
-- context gathering and compaction behavior where available
+Codex Harness owns thread and conversation lifecycle, persisted multi-turn history, streamed execution events, tool invocation, sandbox and permission policy, human approvals, interruption, continuation, recovery, and context gathering/compaction.
 
 Do not replace these concerns with a from-scratch agent loop, a generic third-party orchestration framework, or ad hoc prompt chaining. Other libraries may be used only when they serve the commerce product, UI, persistence, integrations, evaluation, or tool layer without displacing the Codex harness.
 
@@ -85,46 +68,37 @@ The product UI must follow the ChatGPT-like commerce agent workbench style defin
 
 Generated scaffolds, component-library defaults, one-off page styles, nested `AGENTS.md` files, or future implementation plans must not weaken or bypass this design system. If a requested frontend change conflicts with `designs/`, stop and ask the user before proceeding.
 
-## E-Commerce Agent Expectations
+## Implementation And Evidence
 
-When adding features, keep the agent grounded in real commerce operations:
-
-- orders, refunds, cancellations, fulfillment, and exception handling
-- inventory, warehouse, stock movement, and availability
-- product catalog, SKU mapping, listings, pricing, and content
-- customer support, dispute handling, reviews, and post-sale workflows
-- sales analytics, campaign analysis, forecasting, and operational reporting
-- ERP, marketplace, logistics, WMS, CRM, and finance integrations
-
-Side-effecting workflows must be explicit about what system is changed, what record is affected, what approval is required, and what readback proves success.
-
-## Implementation Rules
-
-- Before adding any major agent feature, identify how it connects to the Codex harness.
-- Keep harness-facing code isolated behind small, well-named modules so product code does not depend on unstable protocol details everywhere.
-- Preserve streamed event semantics rather than collapsing all work into opaque request/response calls.
-- Preserve approval and permission checks for any operation that can change external commerce data.
-- Do not log secrets, access tokens, private customer data, or raw personally identifiable information.
-- Prefer structured schemas for tools, events, commerce records, and integration payloads.
-- Add tests around harness adapters, commerce tool contracts, approval gates, and idempotent write behavior.
-
-## Documentation Rules
-
-- Architecture docs must state that the project is built on the Codex open-source harness.
-- Any proposal to replace the harness, hide it behind an incompatible abstraction, or make it incidental must be rejected unless the user explicitly changes this invariant.
-- When documenting commerce workflows, distinguish draft output, proposed action, approved action, downstream write, and verified readback.
+- Keep Harness adapters isolated and preserve native streamed events and structured tool contracts.
+- Do not log secrets, access tokens, private customer data, or raw PII.
+- Architecture documentation must identify the Codex open-source harness as the runtime foundation.
+- Describe business actions precisely: draft, proposed action, approval, downstream write, verified readback. Test changed adapter, authorization, approval, and idempotency behavior.
 
 ## AI-Assisted Collaboration Rules
 
-- Before editing, read `README.md`, `CONTRIBUTING.md`, `docs/architecture/overview.md`, the affected feature document, and `designs/DESIGN.md` for frontend work.
+- Read this file before editing. Inspect the working tree and affected code; use the task routing below to load additional context. Reuse documents already read unless their content changed or relevant context is missing.
+- Ask only when a missing decision materially affects correctness, scope, or authorization; carry forward existing user decisions.
 - Treat generated plans and scaffolds as proposals, not authority. They cannot weaken this file or move Harness-owned behavior into custom code.
 - Do not ship fake controls. Every enabled UI command must have a real backend behavior; unavailable capabilities must be explicitly disabled or omitted.
 - Preserve a dirty working tree. Never reset, revert, overwrite, or reformat changes you did not create.
 - Add append-only migrations for persisted contract changes and register them in the migration runner.
 - Update architecture, design, deployment, and environment documentation in the same change that alters those contracts.
-- Before declaring completion, run the repository validation matrix in `CONTRIBUTING.md`. Frontend changes require real browser inspection; external writes require downstream readback.
+- Before declaring completion, run the affected-layer checks in `CONTRIBUTING.md` and report any required check that could not run. Frontend changes require real browser inspection; external writes require downstream readback.
 - Distinguish implemented, committed, pushed, deployed, and production-verified states in every handoff.
 - When asked to publish, inspect the complete diff and ignored files, verify no secrets/runtime/customer artifacts are staged, then report the exact pushed commit SHA.
+
+## Task Context Routing
+
+| Task | Additional context to read when needed |
+| --- | --- |
+| New checkout or unfamiliar service boundary | `README.md`, `docs/architecture/overview.md` |
+| Code change | Relevant sections of `CONTRIBUTING.md`, affected feature document from `docs/README.md`, nearby code/tests |
+| Frontend | `designs/DESIGN.md`, `designs/references/tokens.css`, affected component contracts |
+| Harness, security, tenant or external-data contract | Corresponding architecture document and its protocol/governance constraints |
+| Migration or deployment | Owning service's migration runner, `CONTRIBUTING.md`, relevant `docs/deployment/` runbook |
+| Documentation or Skill edit | Affected instruction source and callers; validate references and routing, without unrelated builds or supplier calls |
+| Contributor onboarding | `docs/development/ai-collaboration.md`; bootstrap template only when preparing a handoff |
 
 ## Initial References
 
