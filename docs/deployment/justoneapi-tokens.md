@@ -20,20 +20,39 @@ Provision this file outside Git with mode 0600, readable only by the warehouse s
 
 ## Counter and request lifecycle
 
-Quotas are keyed by token and exact canonical API path, including version. Parameters or concrete ids do not create new quota buckets. PostgreSQL serializes selection by endpoint across processes and randomly selects among eligible tokens. A known zero or unknown allowance is never selected.
+Interface eligibility is keyed by token and canonical API path. PostgreSQL serializes
+selection across processes and randomly selects an active token/interface pair.
+The runtime no longer enforces or decrements `remaining_calls`: an active pair
+with a historical count of zero remains eligible. Existing values survive only
+as legacy evidence, not a live estimate of supplier capacity.
 
-1. Existing Commerce governance performs live authorization, approval and budget admission, then the warehouse persists the Token-free request identity.
-2. The unified client claims the raw call once. Duplicate processes, repeated requests and restarts cannot claim it again.
-3. Token selection atomically reserves one unit: available decreases and reserved increases. A verified proxy tunnel is prepared before any provider HTTP request exists.
-4. Before sending, a compare-and-set moves each attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Only documented, confirmed non-billable `301`/`302` rejections, `100` invalid-token and `303`/`601`/`602` quota failover, or a proxy failure before any provider bytes may lead to another bounded attempt under the same immutable governed call. A success, resource/configuration failure, unrecognized quota-like message or uncertain result cannot be replayed.
-5. The complete response is persisted in the scoped attempt archive before returning to the existing raw/normalization pipeline; in-flight decreases. A second settlement does not change counters.
-6. Proxy/setup failure before dispatch returns the reservation. A timeout, disconnect, 5xx response or uncertain persistence keeps the consumed unit, becomes unknown and is never replayed automatically. The small commit-before-network crash window is conservatively held for operator reconciliation, not silently refunded.
+## Call lifecycle
 
-Provider code 100 invalidates the credential globally and permits another eligible key within the original call. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies cooldown to both that combination and the shared endpoint admission bucket. Other interfaces remain eligible. `301`/`302` permit bounded retries, while confirmed `100`/`303`/`601`/`602` responses permit another eligible key within the same admitted call; the prior full rejection is archived before reserving/debiting another attempt. Every network attempt consumes one conservative token unit, including a rejected attempt, and no unit is refunded without authoritative quota reconciliation. Permission refusal blocks selection without overwriting the remaining-call counter with zero. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
+1. Commerce governance still performs live authorization, approval and enterprise
+   budget reservation before the immutable warehouse request is admitted.
+2. The client claims the raw call once and reserves an eligible key, incrementing
+   only the operational reserved count. Provider connection setup precedes dispatch.
+3. Dispatch atomically moves reserved to in-flight and increments used calls.
+   These counters record actual attempts; they do not decrement a guessed allowance.
+4. Complete responses are archived before changing eligibility or selecting another
+   key. Code 100 marks the key globally invalid; 303/601/602 mark only the current
+   pair exhausted (retaining the zero marker); 600 marks permission denial; 302
+   applies cooldown. Other interfaces remain unchanged.
+5. Only explicit, matching, documented non-billable 100/301/302/303/601/602 refusals
+   permit another bounded attempt in the same governed call. Successes and
+   uncertain transport/5xx/persistence results are never replayed automatically.
+6. Unsent cancellation releases the operational reservation. Unknown outcomes
+   retain used-call history and require reconciliation, with no automatic refund.
+
+Historical operator conservative-cap imports no longer impose numerical limits,
+including an imported zero. Provider-observed exhaustion and permission restrictions
+remain blocks. Migration 045 records and retires only operator-created exhausted
+states without a confirmed quota-refusal archive; it preserves invalid keys,
+provider-refused pairs, legacy counts, usage and original import receipts.
 
 Token rotation and proxy-node rotation are independent. Only the JustOneAPI client opts into the proxy pool. Document/catalog imports without provider credentials, database/model/MCP traffic and other services keep their existing network paths.
 
-The transport enforces an absolute deadline across response headers and body consumption, in addition to the request abort signal. A prepared TLS tunnel that closes during the durable quota-commit gap must settle the promise even if ClientRequest has not attached listeners. Timeout or disconnect remains unknown with its quota debit retained; only bounded error categories are recorded, never credential-bearing network errors. Recovery uses the original research and workflow identities, not a replacement paid request.
+The transport enforces an absolute deadline across response headers and body consumption, in addition to the request abort signal. A prepared TLS tunnel that closes during the durable dispatch-commit gap must settle the promise even if ClientRequest has not attached listeners. Timeout or disconnect remains unknown with its dispatch usage retained; only bounded error categories are recorded, never credential-bearing network errors. Recovery uses the original research and workflow identities, not a replacement paid request.
 
 ## Immutable quota import
 
@@ -53,7 +72,7 @@ Quota snapshot format:
 }
 ```
 
-The example path/count is illustrative, not an executable provider default. Import actual provider data or an explicitly approved operator budget; never invent interface allowances or copy another account's remainder as an official initial entitlement. `operator_conservative_cap` records an approved local ceiling, while `provider_remaining` denotes an actual remaining-quota observation. The source evidence hashes, basis, mode, timestamp and token/interface values are preserved in the immutable receipt.
+The example path/count is illustrative, not an executable provider default. Import actual provider data or an explicitly approved operator budget; never invent interface allowances or copy another account's remainder as an official initial entitlement. `operator_conservative_cap` retains the historical operator estimate (no longer enforced), while `provider_remaining` denotes an actual remaining-quota observation. The source evidence hashes, basis, mode, timestamp and token/interface values are preserved in the immutable receipt.
 
 ```sh
 npm run external-data:migrate
@@ -84,7 +103,7 @@ docker compose --env-file /path/to/release.env \
 
 Read back `/health`: `justOneApiTokens` shows configured/active counts, ready interface combinations and reserved/used/in-flight totals; `providerCallsReady` also requires healthy proxy egress when enabled. Read-only stored evidence can remain available when new provider calls are blocked. Inspect SQL/status under operator access for per-token details.
 
-Validation uses a dedicated disposable PostgreSQL database with `JUSTONEAPI_TEST_DATABASE_URL` for the non-superuser, non-BYPASSRLS runtime role and `JUSTONEAPI_TEST_MIGRATION_DATABASE_URL` for fixture setup. Tests cover concurrent debit, restart persistence, duplicate claim, raw retention, cancellation, uncertain outcomes, scoped failure handling, RLS and immutable imports. Ordinary unit-test runs do not silently connect to a developer or production database for these cases. Only GitHub Actions with `NODE_ENV=test` may reuse the disposable database already declared by the existing workflow; no additional workflow permissions are needed.
+Validation uses a dedicated disposable PostgreSQL database with `JUSTONEAPI_TEST_DATABASE_URL` for the non-superuser, non-BYPASSRLS runtime role and `JUSTONEAPI_TEST_MIGRATION_DATABASE_URL` for fixture setup. Tests cover concurrent dispatch accounting, restart persistence, duplicate claim, raw retention, cancellation, uncertain outcomes, scoped failure handling, RLS and immutable imports. Ordinary unit-test runs do not silently connect to a developer or production database for these cases. Only GitHub Actions with `NODE_ENV=test` may reuse the disposable database already declared by the existing workflow; no additional workflow permissions are needed.
 
 ## Bounded retries and shared admission
 
@@ -102,7 +121,7 @@ These defaults are application operating limits, not claimed official provider e
 | `JUSTONEAPI_ENDPOINT_MIN_INTERVAL_MS` | 2000 | Minimum endpoint start spacing |
 | `JUSTONEAPI_THROTTLE_BASE_MS` | 15000 | First endpoint cooldown; doubles to 120 seconds on repeated throttles |
 
-A valid `Retry-After` overrides any shorter backoff/cooldown. The client stops when the wait cannot fit a fresh minimum 60-second attempt window; it never shortens that provider wait. No SQL transaction or proxy tunnel is held while waiting, and no token quota is reserved until admission succeeds. Shared leases expire after the absolute call deadline plus a margin so a crashed process cannot permanently consume admission capacity. Expiry releases only operational capacity, never a provider quota debit or billing reservation, and does not replay the crashed call.
+A valid `Retry-After` overrides any shorter backoff/cooldown. The client stops when the wait cannot fit a fresh minimum 60-second attempt window; it never shortens that provider wait. No SQL transaction or proxy tunnel is held while waiting, and no token reservation is taken until admission succeeds. Shared leases expire after the absolute call deadline plus a margin so a crashed process cannot permanently consume admission capacity. Expiry releases only operational capacity, never provider dispatch history or a billing reservation, and does not replay the crashed call.
 
 `coverage.execution` reports phase, attempt count, next attempt time and polling action. Workflow receipts include per-step execution progress and `coverage.polling`. Clients poll the same id only for `poll_same_request`, stop for `stop`, and retain the original id for operator reconciliation on `reconcile`. A dispatched execution past its durable deadline is surfaced for reconciliation without mutating its raw receipt or silently restarting work. This change does not introduce an automatic cross-process workflow replay worker.
 
@@ -138,7 +157,7 @@ refusal. Failed archive/zeroing stops before dispatching another key. No automat
 allowance refill or uncertain-result replay is introduced.
 
 Deploy the warehouse from the tested release after draining active provider work;
-no schema migration or quota import is required. Verify the real PostgreSQL suite
+apply migration 045 for the current eligibility policy; no quota refill is required. Verify the real PostgreSQL suite
 with fabricated supplier responses, both endpoint counters, archived attempts,
 concurrent selection, permanent errors and timeout non-replay. Production acceptance
 uses health and stored counter/receipt reads, never deliberate paid exhaustion.
@@ -165,3 +184,20 @@ time. Globally invalid/disabled keys are cleanup candidates; interface exhaustio
 alone is not. The response archive retains the exact provider code and message.
 Markers survive restarts and imports, and no automatic deletion or reactivation
 is performed. This status command never prints full keys and is not a public API.
+
+## Deploying provider-authoritative eligibility
+
+Drain active work, run the checksum-registered warehouse migration runner (045),
+and deploy the warehouse image. No quota refill or reset is performed: active
+legacy-zero pairs become eligible through code, while migration 045 audits
+operator-created zero-cap blocks before retiring them. An old image is not a
+safe rollback after new dispatches because its numerical counters are no longer
+maintained; rollback must preserve the provider-feedback selection policy.
+
+The operator status command labels historical counts `legacy_remaining_calls`
+and reports `selectionPolicy=provider_feedback`, `localRemainingEnforced=false`.
+Supplier quota is not known from these historical values. Enterprise monetary
+budgets, authorization, endpoint permissions and single-dispatch ownership remain
+independently enforced. Verify active-zero execution, concurrent usage counters,
+confirmed exhaustion, invalid tokens, no uncertain replay, and preservation of
+old records with a disposable database. Production acceptance is read-only.

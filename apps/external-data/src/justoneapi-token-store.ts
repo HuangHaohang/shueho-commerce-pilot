@@ -36,7 +36,7 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
       count(DISTINCT token.token_id)::int AS tokens,
       count(DISTINCT token.token_id) FILTER (WHERE token.state='active')::int AS active_tokens,
       count(DISTINCT quota.api_path)::int AS endpoints,
-      count(*) FILTER (WHERE token.state='active' AND quota.state='active' AND quota.remaining_calls>0
+      count(*) FILTER (WHERE token.state='active' AND quota.state='active'
         AND (quota.cooldown_until IS NULL OR quota.cooldown_until<=CURRENT_TIMESTAMP))::int AS available_pairs,
       COALESCE(sum(quota.reserved_calls),0)::text AS reserved_calls,
       COALESCE(sum(quota.used_calls),0)::text AS used_calls,
@@ -86,7 +86,7 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
         SELECT quota.token_id FROM justoneapi_token_endpoint_quota quota
         JOIN justoneapi_token token ON token.token_id=quota.token_id
         WHERE quota.api_path=$1 AND quota.token_id=ANY($2::text[])
-          AND quota.state='active' AND quota.remaining_calls>0 AND token.state='active'
+          AND quota.state='active' AND token.state='active'
           AND (quota.cooldown_until IS NULL OR quota.cooldown_until<=CURRENT_TIMESTAMP)
           AND NOT EXISTS (SELECT 1 FROM justoneapi_token_attempt previous
             WHERE previous.raw_call_id=$3 AND NOT (previous.state='cancelled' OR
@@ -99,8 +99,7 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
       [identity.apiPath,tokenIds,identity.rawCallId]);
       const tokenId = selected.rows[0]?.token_id;
       if (!tokenId) return null;
-      await client.query(`UPDATE justoneapi_token_endpoint_quota SET remaining_calls=remaining_calls-1,
-        reserved_calls=reserved_calls+1,last_selected_seq=nextval('justoneapi_token_selection_seq'),updated_at=CURRENT_TIMESTAMP
+      await client.query(`UPDATE justoneapi_token_endpoint_quota SET reserved_calls=reserved_calls+1,last_selected_seq=nextval('justoneapi_token_selection_seq'),updated_at=CURRENT_TIMESTAMP
         WHERE token_id=$1 AND api_path=$2`, [tokenId,identity.apiPath]);
       const result = await client.query<{ id: string; ordinal: number }>(`
         INSERT INTO justoneapi_token_attempt(id,raw_call_id,tenant_id,workspace_id,token_id,api_path,ordinal,state)
@@ -118,7 +117,7 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
           CEIL(EXTRACT(EPOCH FROM (MIN(COALESCE(quota.cooldown_until,clock_timestamp()))-clock_timestamp()))*1000))::float8 END AS wait_ms
         FROM justoneapi_token_endpoint_quota quota JOIN justoneapi_token token ON token.token_id=quota.token_id
         WHERE quota.api_path=$1 AND quota.token_id=ANY($2::text[]) AND quota.state='active'
-          AND token.state='active' AND quota.remaining_calls>0`, [identity.apiPath,tokenIds]);
+          AND token.state='active'`, [identity.apiPath,tokenIds]);
       return result.rows[0]!.wait_ms;
     });
   }
@@ -163,7 +162,6 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
       [reservation.id,identity.rawCallId,reservation.tokenId]);
       if (!changed.rowCount) return;
       await client.query(`UPDATE justoneapi_token_endpoint_quota SET reserved_calls=reserved_calls-1,
-        remaining_calls=CASE WHEN state='active' THEN remaining_calls+1 ELSE remaining_calls END,
         updated_at=CURRENT_TIMESTAMP WHERE token_id=$1 AND api_path=$2`,
       [reservation.tokenId,identity.apiPath]);
     });

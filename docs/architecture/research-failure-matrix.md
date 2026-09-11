@@ -58,3 +58,9 @@ Invalid-key acceptance additionally covers HTTP 401/code 100 with same-call
 failover, durable global invalidation and timestamp, untouched sibling-interface
 counters, random eligible selection, mismatched authentication envelopes, and
 exclusion on another interface in a fresh client.
+
+Provider-authoritative eligibility acceptance exercises active pairs with legacy
+zero counts, concurrent calls beyond old local caps with exact usage accounting,
+retirement of operator zero-cap blocks, retained provider-confirmed exhaustion
+and global invalidation, and unchanged enterprise governance and uncertain-result
+non-replay. Historical remaining values must never be presented as current capacity.

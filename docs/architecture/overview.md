@@ -71,7 +71,7 @@ Keyword product research is a bounded workflow inside that service, not an Agent
 
 Inbound Commerce Pilot identities are never passed through as JustOneAPI credentials. See [External Data MCP And Governance](./external-data-mcp.md).
 
-`JustOneApiClient` is the sole business dispatch boundary inside the external-data service. Its credential loader, PostgreSQL token/endpoint quota store and private transport compose token rotation, quota debit, proxy selection and raw readback without exposing those concerns to Harness tools or business workflows. Dispatch ownership is tied to the existing tenant/workspace/user/raw-call identity; interface exhaustion does not invalidate unrelated interfaces. See [Token Quota Operation](../deployment/justoneapi-tokens.md).
+`JustOneApiClient` is the sole business dispatch boundary inside the external-data service. Its credential loader, PostgreSQL token/endpoint quota store and private transport compose random token selection, provider-confirmed eligibility, usage accounting, proxy selection and raw readback without exposing those concerns to Harness tools or business workflows. Dispatch ownership is tied to the existing tenant/workspace/user/raw-call identity; interface exhaustion does not invalidate unrelated interfaces. See [Token Quota Operation](../deployment/justoneapi-tokens.md).
 
 Only the independent JustOneAPI adapter may opt into the dedicated proxy pool. Each paid request uses a fixed node and a fresh verified TLS tunnel; failures can switch nodes only before HTTP dispatch. Harness tools, model providers, MCP, databases and local-model traffic keep their existing routing. See [JustOneAPI Dedicated Egress](../deployment/justoneapi-proxy.md).
 

@@ -69,7 +69,7 @@ export async function importJustOneApiQuotaSnapshot(database: Pool, credentials:
         VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (token_id,api_path) DO UPDATE
         SET remaining_calls=EXCLUDED.remaining_calls,state=EXCLUDED.state,source_import_id=EXCLUDED.source_import_id,
           observed_at=EXCLUDED.observed_at,cooldown_until=NULL,updated_at=CURRENT_TIMESTAMP`,
-      [entry.tokenId,entry.apiPath,entry.remainingCalls,entry.remainingCalls > 0 ? "active" : "exhausted",importId,snapshot.observedAt]);
+      [entry.tokenId,entry.apiPath,entry.remainingCalls,snapshot.basis === "operator_conservative_cap" || entry.remainingCalls > 0 ? "active" : "exhausted",importId,snapshot.observedAt]);
     }
     await client.query("COMMIT");
     return { importId, sourceSha256: sourceHash, replayed: false, tokens: tokenIds.length, endpoints: Object.keys(snapshot.quotas).length };

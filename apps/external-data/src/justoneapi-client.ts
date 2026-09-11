@@ -157,7 +157,7 @@ export class JustOneApiClient {
         return lastResult;
       }
       throw new JustOneApiError(
-        admissionExpired || now() + options.minimumAttemptWindowMs >= deadline ? "Provider admission deadline exhausted before dispatch." : "No configured token has confirmed remaining quota for this endpoint.",
+        admissionExpired || now() + options.minimumAttemptWindowMs >= deadline ? "Provider admission deadline exhausted before dispatch." : "No configured token is currently eligible for this endpoint.",
         admissionExpired || now() + options.minimumAttemptWindowMs >= deadline ? "ADMISSION_TIMEOUT" : "TOKEN_QUOTA_UNAVAILABLE", false);
     } catch (error) {
       const uncertain = mayHaveDispatched || (error instanceof JustOneApiError && error.uncertain);
