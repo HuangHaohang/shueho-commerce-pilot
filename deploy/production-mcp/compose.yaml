@@ -71,7 +71,7 @@ services:
     env_file: ${COMMERCE_CONFIG_DIR}/control.env
     working_dir: /app/apps/web
     environment: { NEXT_DIST_DIR: .next-build }
-    command: [node, /app/node_modules/next/dist/bin/next, start, -H, 0.0.0.0, -p, "3000"]
+    command: [node, scripts/start-production.mjs, start, -H, 0.0.0.0, -p, "3000"]
     volumes: ["${COMMERCE_CONFIG_DIR}/ca.crt:/run/tls/ca.crt:ro"]
     networks: [backend]
     mem_limit: 1g

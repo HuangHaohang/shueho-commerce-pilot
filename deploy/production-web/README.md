@@ -15,6 +15,8 @@ Tag images with the full commit and set `COMMERCE_SOURCE_COMMIT` for revision la
 BuildKit caches Cargo downloads and target artifacts between builds; the pinned
 source, patch checks and native tests still run. Cargo diagnostics stream during
 compilation, including test discovery, so dependency failures remain visible.
+The Web runtime includes both root and workspace production dependencies. Its
+launcher resolves Next from the Web workspace rather than assuming npm hoisting.
 
 Protected `gateway.env` contains the existing tenant pin and internal token,
 service-owned model-provider credential, private external-data MCP URL/token, and

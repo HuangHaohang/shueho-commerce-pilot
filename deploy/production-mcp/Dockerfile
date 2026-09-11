@@ -27,7 +27,8 @@ ENV NODE_ENV=production
 USER node
 
 FROM build AS production-dependencies
-RUN npm prune --omit=dev --no-audit --no-fund
+RUN npm prune --omit=dev --no-audit --no-fund && \
+    mkdir -p apps/web/node_modules apps/external-data/node_modules
 
 FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5 AS runtime
 ARG COMMERCE_SOURCE_COMMIT=uncommitted
@@ -38,6 +39,8 @@ ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-* && \
     rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/yarn /usr/local/bin/yarnpkg /usr/local/bin/corepack
 COPY --from=production-dependencies /app/node_modules ./node_modules
+COPY --from=production-dependencies /app/apps/web/node_modules ./apps/web/node_modules
+COPY --from=production-dependencies /app/apps/external-data/node_modules ./apps/external-data/node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/vendor/codex/models.json ./vendor/codex/models.json
@@ -47,5 +50,6 @@ COPY --from=build /app/apps/web/package.json ./apps/web/package.json
 COPY --from=build /app/apps/web/.next-build ./apps/web/.next-build
 COPY --from=build /app/apps/web/public ./apps/web/public
 COPY --from=build /app/apps/web/next.config.mjs ./apps/web/next.config.mjs
+COPY --from=build /app/apps/web/scripts/start-production.mjs ./apps/web/scripts/start-production.mjs
 USER node
 CMD ["node", "dist/src/mcp/commerce-data-public-server.js"]
