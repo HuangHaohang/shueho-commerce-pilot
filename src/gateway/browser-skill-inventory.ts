@@ -1,4 +1,5 @@
 import { isAppOwnedManagedSkillName } from "../codex/managed-workflows.js";
+import { studioSkillPresentation } from "../codex/studio-skill-catalog.js";
 
 export type BrowserSkillInventory = {
   skills: Array<Record<string, unknown>>;
@@ -27,6 +28,7 @@ export function readBrowserSkillInventory(
             ? skill.dependencies.tools.length
             : 0;
           const name = typeof skill.name === "string" ? skill.name : "";
+          const presentation = studioSkillPresentation(name);
           return {
             name,
             description: typeof skill.description === "string" ? skill.description : "",
@@ -48,7 +50,8 @@ export function readBrowserSkillInventory(
                     : "",
             dependencyCount: dependencies,
             creator: name === "skill-creator",
-            applicationManaged: name.startsWith("commerce-"),
+            applicationManaged: Boolean(presentation) || name.startsWith("commerce-"),
+            ...(presentation ? { presentation } : {}),
           };
         })
         .filter((skill) => skill.name)

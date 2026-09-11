@@ -1,0 +1,85 @@
+# Apply after the existing production-mcp base and its supplier overlays.
+services:
+  control:
+    env_file:
+      - ${COMMERCE_CONFIG_DIR}/control.env
+      - ${COMMERCE_CONFIG_DIR}/web.env
+    mem_limit: 2g
+    cpus: 2.0
+    tmpfs: ["/tmp:size=128m,mode=1777"]
+
+  gateway:
+    image: ${COMMERCE_GATEWAY_IMAGE:?Set the matching Harness Gateway release}
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=256m,mode=1777"]
+    pids_limit: 512
+    mem_limit: 4g
+    cpus: 3.0
+    stop_grace_period: 60s
+    env_file: ${COMMERCE_CONFIG_DIR}/gateway.env
+    volumes:
+      - codex-runtime:/var/lib/shueho-commerce-pilot/codex
+      - ${COMMERCE_CONFIG_DIR}/ca.crt:/run/tls/ca.crt:ro
+    networks: [backend, egress]
+    depends_on: [control, internal-tls]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:8787/health',{headers:{'x-commerce-gateway-token':process.env.COMMERCE_GATEWAY_INTERNAL_TOKEN}}).then(async r=>{const s=await r.json();process.exit(r.ok&&s.managedMcp?.state==='ready'?0:1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      start_period: 120s
+      retries: 6
+    logging: &logging
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+  thread-deletion-worker: &worker
+    image: ${COMMERCE_JOBS_IMAGE:?Set the matching worker release}
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    pids_limit: 64
+    mem_limit: 384m
+    cpus: 0.5
+    working_dir: /app/apps/web
+    command: [node, /app/node_modules/tsx/dist/cli.mjs, scripts/run-thread-deletion-worker.ts]
+    env_file:
+      - ${COMMERCE_CONFIG_DIR}/control.env
+      - ${COMMERCE_CONFIG_DIR}/web.env
+    volumes: ["${COMMERCE_CONFIG_DIR}/ca.crt:/run/tls/ca.crt:ro"]
+    networks: [backend]
+    depends_on:
+      gateway: { condition: service_healthy }
+    logging: *logging
+
+  product-retention-worker:
+    <<: *worker
+    command: [node, /app/node_modules/tsx/dist/cli.mjs, scripts/run-product-import-retention-worker.ts]
+
+  external-retention-worker:
+    <<: *worker
+    command: [node, /app/node_modules/tsx/dist/cli.mjs, scripts/run-external-data-retention-worker.ts]
+
+  web-edge:
+    image: ${COMMERCE_PROXY_IMAGE:?Set the reviewed proxy image}
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: ["/tmp:size=32m,mode=1777"]
+    volumes: [../production-web/edge.conf:/etc/nginx/nginx.conf:ro]
+    ports: ["127.0.0.1:18088:8080"]
+    networks: [backend, egress]
+    mem_limit: 96m
+    depends_on: [control]
+    logging: *logging
+
+volumes:
+  codex-runtime:

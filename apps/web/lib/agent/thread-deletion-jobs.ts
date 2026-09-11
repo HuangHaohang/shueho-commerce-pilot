@@ -47,6 +47,11 @@ export async function createThreadDeletionJob(
     if (owned.rowCount !== normalized.length) {
       throw new ThreadDeletionJobError("部分任务不存在或不属于当前用户。", 404);
     }
+    for (const id of [...normalized].sort()) await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`image-project:${id}`]);
+    // Delete editors before their project; the existing durable worker still owns interruption and cleanup.
+    const editors = await client.query<{ thread_id: string }>(
+      "SELECT thread_id FROM commerce_creative_image_session WHERE project_thread_id = ANY($1::text[])", [normalized]);
+    normalized.unshift(...editors.rows.map((item) => item.thread_id).filter((id) => !normalized.includes(id)));
     const inProgress = await client.query(
       `SELECT 1 FROM commerce_thread_deletion_item item
        JOIN commerce_thread_deletion_job job ON job.id = item.job_id

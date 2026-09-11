@@ -12,9 +12,13 @@ import {
 import { useMemo, useState } from "react";
 
 import { getSkills, sortSkillInventory, type SkillInventoryItem } from "@/lib/agent/skills";
+import { SkillPreviewMotion } from "./SkillPreviewMotion";
+import { SkillPreviewDialog } from "./skill-preview-dialog";
+
 import { cn } from "@/lib/utils";
 
 export function SkillsDirectory({ onUseSkill }: { onUseSkill: (skill: SkillInventoryItem) => void }) {
+  const [category, setCategory] = useState("全部");
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const skillsQuery = useQuery({
     queryKey: ["codex-skills"],
@@ -29,7 +33,7 @@ export function SkillsDirectory({ onUseSkill }: { onUseSkill: (skill: SkillInven
   );
   const selected = skills.find((skill) => skill.name === selectedName) ?? null;
 
-  if (selected) {
+  if (selected && !selected.presentation) {
     return <SkillDetail skill={selected} onBack={() => setSelectedName(null)} onUse={() => onUseSkill(selected)} />;
   }
 
@@ -38,12 +42,34 @@ export function SkillsDirectory({ onUseSkill }: { onUseSkill: (skill: SkillInven
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mx-auto w-full max-w-[920px] px-5 pb-20 pt-10 md:px-8 md:pt-14">
           <div>
-            <h1 className="m-0 text-[28px] font-semibold leading-tight">技能</h1>
+            <h1 className="m-0 text-[28px] font-semibold leading-tight">Skill 广场</h1>
             <p className="mb-0 mt-2 max-w-[620px] text-sm leading-6 text-[var(--cp-text-muted)]">
-              技能定义 Agent 完成任务的方法；插件负责分发技能、连接器和受控界面。
+              选择创作方法，用你的产品素材开始。
             </p>
           </div>
 
+          {skills.some((skill) => skill.presentation) ? <>
+            <div className="mt-7 flex flex-wrap gap-2" aria-label="技能分类">
+              {["全部", ...new Set(skills.flatMap((skill) => skill.presentation ? [skill.presentation.category] : []))].map((item) => (
+                <button type="button" key={item} aria-pressed={category === item} onClick={() => setCategory(item)}
+                  className={cn("rounded-full px-4 py-2 text-sm hover:bg-[var(--cp-bg-subtle)]", category === item && "bg-[var(--cp-bg-muted)] font-medium")}>{item}</button>
+              ))}
+            </div>
+            <div className="mt-5 grid grid-cols-1 gap-x-6 gap-y-8 sm:grid-cols-2 lg:grid-cols-3">
+              {skills.filter((skill) => skill.presentation && (category === "全部" || skill.presentation.category === category)).map((skill) => (
+                <button type="button" key={skill.name} onClick={() => setSelectedName(skill.name)}
+                  className="skill-demo-frame min-w-0 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] rounded-[var(--cp-radius-item)]"
+                  aria-label={`查看 ${skill.displayName}`}>
+                  <div className="aspect-[4/3] overflow-hidden rounded-[var(--cp-radius-item)] bg-[var(--cp-bg-subtle)]">
+                    <SkillPreviewMotion src={skill.presentation!.preview_url} title={skill.displayName} layout={skill.presentation!.preview_layout} examples={skill.presentation!.preview_examples} />
+                  </div>
+                  <h2 className="mt-3 text-sm font-medium">{skill.displayName}</h2>
+                  <p className="mt-1 text-xs leading-5 text-[var(--cp-text-muted)]">{skill.presentation!.summary}</p>
+                </button>
+              ))}
+            </div>
+          </> : null}
+          <SkillPreviewDialog skill={selected?.presentation ? selected : null} onClose={() => setSelectedName(null)} onUse={onUseSkill} />
           {skillsQuery.isLoading ? <SkillsSkeleton /> : null}
           {skillsQuery.isError ? (
             <div className="mt-10 border-y border-[var(--cp-border)] py-8 text-sm text-[var(--cp-danger)]">
@@ -53,11 +79,11 @@ export function SkillsDirectory({ onUseSkill }: { onUseSkill: (skill: SkillInven
           {skillsQuery.data ? (
             <section className="mt-10" aria-labelledby="available-skills-title">
               <div className="mb-4 flex items-center justify-between gap-4">
-                <h2 id="available-skills-title" className="m-0 text-sm font-semibold">全局可用</h2>
-                <span className="text-xs text-[var(--cp-text-faint)]">{skills.filter((skill) => skill.enabled).length} 个已启用</span>
+                <h2 id="available-skills-title" className="m-0 text-sm font-semibold">其他技能</h2>
+                <span className="text-xs text-[var(--cp-text-faint)]">{skills.filter((skill) => skill.enabled && !skill.presentation).length} 个已启用</span>
               </div>
-              <div className="border-y border-[var(--cp-border)]">
-                {skills.map((skill) => (
+              <div className="border-[var(--cp-border)]">
+                {skills.filter((skill) => !skill.presentation).map((skill) => (
                   <button
                     key={`${skill.scope}:${skill.name}`}
                     type="button"

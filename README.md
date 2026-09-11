@@ -324,7 +324,7 @@ Example user-level config:
 
 ```toml
 model_provider = "luusmosh_cpa"
-model = "gpt-5.6-sol"
+model = "gpt-5.6-luna"
 
 [model_providers.luusmosh_cpa]
 name = "Luusmosh CPA"
@@ -340,7 +340,7 @@ The browser selects only the model. Provider identity and runtime policy remain 
 
 ```json
 {
-  "model": "gpt-5.6-sol"
+  "model": "gpt-5.6-luna"
 }
 ```
 

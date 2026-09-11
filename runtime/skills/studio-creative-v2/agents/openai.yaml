@@ -1,0 +1,4 @@
+interface:
+  display_name: "广告创意视觉"
+  short_description: "用鲜明的画面表达一个创意"
+  icon_large: "./assets/preview.webp"

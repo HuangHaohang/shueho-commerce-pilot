@@ -34,11 +34,13 @@ export async function GET(
     if (!response.ok) {
       return NextResponse.json({ error: "图片不存在。" }, { status: response.status });
     }
-    return new NextResponse(await response.arrayBuffer(), {
+    return new NextResponse(response.body, {
       status: 200,
       headers: {
         "Content-Type": response.headers.get("content-type") || "image/png",
         "Cache-Control": "private, no-store",
+        ...(new URL(request.url).searchParams.get("download") === "1"
+          ? { "Content-Disposition": `attachment; filename="${filename}"` } : {}),
         "X-Content-Type-Options": "nosniff",
       },
     });

@@ -1,3 +1,4 @@
+import { isStudioSkillName } from "../codex/studio-skill-catalog.js";
 import {taskToolContract,LEGACY_RESEARCH_TOOLS} from "../integrations/research-task-contract.js";
 import {enqueueTask,getTask} from "../mcp/research-task-runtime.js";
 import { DATA_CAPABILITY_TOOL_SCHEMAS, DATA_CAPABILITY_TOOL_DESCRIPTIONS, publicDataPlanReceipt, requireDataPayload } from "../integrations/data-capability-contract.js";
@@ -146,7 +147,7 @@ import {
   type ProductSourceDraft,
   type ProductTurnContextRequest,
 } from "./commerce-product-tools.js";
-import { isMissingCodexThreadError } from "./codex-thread-errors.js";
+import { isMissingCodexThreadError, isUnmaterializedCodexThreadError } from "./codex-thread-errors.js";
 import { AgentOutboxProcessLock } from "./agent-outbox-process-lock.js";
 import {
   sanitizeBrowserAppServerEvent,
@@ -590,6 +591,17 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const imageCopyMatch = matchPath(url.pathname, /^\/api\/generated-images\/([^/]+)\/copy$/);
+    if (req.method === "POST" && imageCopyMatch) {
+      const filename = decodeURIComponent(imageCopyMatch[1] ?? "");
+      const body = await readJsonBody<{ sourceThreadId?: string; requestId?: string }>(req);
+      if (!generatedImages.isSafeFilename(filename) || (!isSafeAgentId(body.sourceThreadId ?? "") || !isSafeAgentId(body.requestId ?? ""))) throw new GatewayRequestError("Invalid image copy source.", 400);
+      bindRequestRuntimeScope(req, body.sourceThreadId!);
+      const artifact = await generatedImages.copyImage(filename, body.sourceThreadId!, body.requestId!);
+      sendJson(res, 200, { artifact });
+      return;
+    }
+
     const generatedImageMatch = matchPath(url.pathname, /^\/api\/generated-images\/([^/]+)$/);
     if (req.method === "GET" && generatedImageMatch) {
       const filename = decodeURIComponent(generatedImageMatch[1] ?? "");
@@ -726,6 +738,15 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    const threadImagesMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/images$/);
+    if (req.method === "GET" && threadImagesMatch) {
+      const threadId = decodeURIComponent(threadImagesMatch[1] ?? "");
+      if (!isSafeAgentId(threadId)) { sendJson(res, 400, { error: "Invalid thread id." }); return; }
+      bindRequestRuntimeScope(req, threadId);
+      sendJson(res, 200, { generatedImages: await generatedImages.listForThread(threadId) });
+      return;
+    }
+
     const threadStatusMatch = matchPath(url.pathname, /^\/api\/threads\/([^/]+)\/status$/);
     if (req.method === "GET" && threadStatusMatch) {
       const threadId = decodeURIComponent(threadStatusMatch[1] ?? "");
@@ -735,10 +756,8 @@ const server = createServer(async (req, res) => {
       }
       bindRequestRuntimeScope(req, threadId);
       await ensureCommerceWebMcpReady();
-      const [metadata, latest] = await Promise.all([
-        readThreadWithStartupRetry(threadId, false),
-        readTurnsPageWithStartupRetry(threadId, null, 1, "summary"),
-      ]);
+      const metadata = await readThreadWithStartupRetry(threadId, false);
+      const latest = await readTurnsPageWithStartupRetry(threadId, null, 1, "summary");
       sendJson(res, 200, {
         result: metadata,
         lastTurn: latest.data[0] ?? null,
@@ -1280,8 +1299,9 @@ const server = createServer(async (req, res) => {
               source.message,
             )
           : null;
-        const baseInput = managedWorkflowTurn?.input ??
-          explicitSkillTurn?.input ??
+        const baseInput = managedWorkflowTurn
+          ? [...managedWorkflowTurn.input, ...(explicitSkillTurn?.input.filter((item) => item.type === "skill") ?? [])]
+          : explicitSkillTurn?.input ??
           [{ type: "text" as const, text: source.message, text_elements: [] }];
         const productContextInput = buildProductContextTurnInput(productContextRequest);
         const requestedModel = typeof body.model === "string"
@@ -1354,6 +1374,7 @@ const server = createServer(async (req, res) => {
           selectedFactsRead: false,
         });
         if (source.imageEditSourceFilenames.length) {
+          await generatedImages.recordEditSources(threadId, startedTurnId, source.imageEditSourceFilenames);
           turnImageEditSources.set(startedTurnId, {
             threadId,
             filenames: source.imageEditSourceFilenames,
@@ -1378,7 +1399,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 503, { error: "Enterprise usage event pipeline requires operator attention." });
         return;
       }
-      const body = await readJsonBody<Omit<TurnStartInput, "threadId"> & { clientRequestId?: string }>(req);
+      const body = await readJsonBody<Omit<TurnStartInput, "threadId"> & { clientRequestId?: string; authorizedImageSources?: unknown }>(req);
       const message = typeof body.message === "string" ? body.message.trim() : "";
       const attachmentIds = readAttachmentIds(body.attachmentIds);
       const imageEditSourceFilenames = readImageEditSourceFilenames(body.imageEditSourceFilenames);
@@ -1476,7 +1497,7 @@ const server = createServer(async (req, res) => {
         sendJson(res, 400, { error: "Invalid Skill name." });
         return;
       }
-      if (workflow && skillName) {
+      if (workflow && skillName && !(workflow === "commerce-creative-project" && isStudioSkillName(skillName) && !creativeMethod)) {
         sendJson(res, 400, { error: "A managed workflow and an explicit Skill cannot be combined." });
         return;
       }
@@ -1544,6 +1565,14 @@ const server = createServer(async (req, res) => {
           activeTurnsByThread.delete(threadId);
           clearTurnTimeout(staleTurnId);
         }
+        // Only the authenticated BFF supplies these project-authorized source bindings.
+        if (body.authorizedImageSources !== undefined) {
+          if (!Array.isArray(body.authorizedImageSources) || body.authorizedImageSources.length !== imageEditSourceFilenames.length ||
+              !body.authorizedImageSources.every((source: unknown) => isRecord(source) && typeof source.filename === "string" && imageEditSourceFilenames.includes(source.filename) && typeof source.threadId === "string" && isSafeAgentId(source.threadId))) {
+            throw new GatewayRequestError("Invalid authorized image sources.", 400);
+          }
+          await generatedImages.authorizeSources(threadId, body.authorizedImageSources as Array<{ filename: string; threadId: string }>);
+        }
         const requestedModel = body.model ?? threadScopes.get(threadId)?.model ?? config.defaultModel ?? null;
         const scope = threadScopes.get(threadId);
         if (attachmentIds.length && !scope) {
@@ -1587,12 +1616,17 @@ const server = createServer(async (req, res) => {
           workflow === "commerce-product-insight" || workflow === "commerce-market-research"
             ? buildProductInsightSubjectConstraint(productContextRequest, firstPartySubject)
             : null;
-        const attachments = attachmentIds.length
-          ? await readBoundTurnAttachments(threadId, attachmentIds, scope as RuntimeScope, clientUserMessageId)
-          : [];
-        const imageEditInputs = imageEditSourceFilenames.length
-          ? await buildGeneratedImageEditInputs(threadId, imageEditSourceFilenames)
-          : [];
+        // These preparation reads share the authorized scope, but have no data
+        // dependencies. Complete all of them before dispatching the native Turn.
+        const [attachments, imageEditInputs, explicitSkill] = await Promise.all([
+          attachmentIds.length
+            ? readBoundTurnAttachments(threadId, attachmentIds, scope as RuntimeScope, clientUserMessageId)
+            : Promise.resolve([]),
+          imageEditSourceFilenames.length
+            ? buildGeneratedImageEditInputs(threadId, imageEditSourceFilenames)
+            : Promise.resolve([]),
+          skillName ? resolveExplicitSkill(skillName) : Promise.resolve(null),
+        ]);
         const creativeMediaFailure = validateCreativeReferenceMedia(
           creativeMethod,
           [
@@ -1619,11 +1653,8 @@ const server = createServer(async (req, res) => {
               productInsightSubjectConstraint,
             )
           : null;
-        const explicitSkillTurn = skillName
-          ? buildExplicitSkillTurn(
-              await resolveExplicitSkill(skillName),
-              turnMessage,
-            )
+        const explicitSkillTurn = explicitSkill
+          ? buildExplicitSkillTurn(explicitSkill, turnMessage)
           : null;
         const attachmentInputs = attachments.length
           ? await threadArtifacts.buildTurnInputs(
@@ -1634,8 +1665,9 @@ const server = createServer(async (req, res) => {
               { productImportMetadataOnly: workflow === "commerce-product-onboarding" },
             )
           : [];
-        const baseInput = managedWorkflowTurn?.input ??
-          explicitSkillTurn?.input ??
+        const baseInput = managedWorkflowTurn
+          ? [...managedWorkflowTurn.input, ...(explicitSkillTurn?.input.filter((item) => item.type === "skill") ?? [])]
+          : explicitSkillTurn?.input ??
           [{ type: "text", text: turnMessage, text_elements: [] }];
         const productContextInput = buildProductContextTurnInput(productContextRequest);
         const result = await codex
@@ -1672,6 +1704,7 @@ const server = createServer(async (req, res) => {
             selectedFactsRead: false,
           });
           if (imageEditSourceFilenames.length) {
+            await generatedImages.recordEditSources(threadId, startedTurnId, imageEditSourceFilenames);
             turnImageEditSources.set(startedTurnId, { threadId, filenames: imageEditSourceFilenames });
           }
           if (message) turnResearchRequestTexts.set(startedTurnId, message);
@@ -2089,6 +2122,7 @@ async function persistNativeImageArtifact(
 ): Promise<void> {
   const itemId = typeof item.id === "string" ? item.id : "";
   if (!itemId) return;
+  if (!sourceFilenames.length) sourceFilenames = await generatedImages.readEditSources(threadId, turnId);
   const artifact = await generatedImages.saveOnceForCall({
     base64: readNativeImagePayload(item.result),
     threadId,
@@ -2503,7 +2537,10 @@ async function readGeneratedImageSourcesFromHarnessContent(
   const filenames: string[] = [];
   for (const filename of [...new Set(candidates)].slice(0, 4)) {
     const artifact = await generatedImages.get(filename);
-    if (artifact?.threadId === threadId) filenames.push(filename);
+    if (artifact) {
+      await generatedImages.buildTurnInputs(threadId, [filename]);
+      filenames.push(filename);
+    }
   }
   return filenames;
 }
@@ -2808,10 +2845,8 @@ async function readThreadPageWithStartupRetry(
   cursor: string | null,
   limit: number,
 ): Promise<{ result: Record<string, unknown>; nextCursor: string | null }> {
-  const [metadata, page] = await Promise.all([
-    readThreadWithStartupRetry(threadId, false),
-    readTurnsPageWithStartupRetry(threadId, cursor, limit, "full"),
-  ]);
+  const metadata = await readThreadWithStartupRetry(threadId, false);
+  const page = await readTurnsPageWithStartupRetry(threadId, cursor, limit, "full");
   if (!isRecord(metadata) || !isRecord(metadata.thread)) {
     throw new Error("Codex App Server returned invalid thread metadata.");
   }
@@ -2851,6 +2886,7 @@ async function readTurnsPageWithStartupRetry(
         nextCursor: typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null,
       };
     } catch (error) {
+      if (cursor === null && isUnmaterializedCodexThreadError(error)) return { data: [], nextCursor: null };
       if (isMissingCodexThreadError(error)) {
         throw new GatewayRequestError("Thread not found.", 404);
       }
@@ -6653,9 +6689,11 @@ function createRuntimeDeveloperInstructions(): string {
     "Commerce Pilot is a hosted e-commerce agent, not a local coding agent.",
     "Use only application-registered dynamic tools and application-managed MCP tools. Never run shell commands, inspect or modify host files, spawn processes, use local developer tools, or request additional filesystem or network permissions.",
     "If a requested capability has no registered tool, explain that it is unavailable instead of attempting a local workaround.",
+    "For image-only generation or editing requests, deliver the native image artifacts and finish the Turn without unsolicited summaries, reviews, audits, compliance notes, manual-check lists, or follow-up suggestions. Do not run additional post-generation inspection or review tools. Explicitly requested text deliverables or review tasks remain separate user work; do not add them to an image task. Preserve native failure reporting and never claim success without the actual artifact.",
     "Codex Harness owns bitmap image generation and the native imageGeneration Item lifecycle. Depending on the configured Provider, generation may run as Provider-hosted Responses image generation or through the namespace `image_gen` extension.",
     `It uses the configured application provider and image model ${config.provider.imageModel}.`,
     "The current native tool catalog is authoritative over earlier conversation messages that claimed image generation was unavailable.",
+    "The browser accepts file attachments between Turns; native request_user_input answers are text-only and do not upload files. If completing the request requires a user-supplied file that is not available, explain the missing material and finish the current Turn so the user can attach it in the composer. Do not keep a Turn open waiting for an upload or repeatedly ask text choices that promise to upload. Use native request_user_input for decisions that can actually be answered as text, and treat only received attachments as supplied files.",
     "For image requests, use exactly one available Harness-owned image path and treat its completed native imageGeneration Item as the sole success signal. Never require both paths, look for an application dynamic tool named commerce_image.generate, call a Provider endpoint directly, or retry a completed native imageGeneration Item.",
     "Commerce Pilot provides the host tool `commerce_skill.publish` for creating or updating instruction-only Skills through an application-owned validator and explicit user approval.",
     "When the user asks to create or update a Skill, use the bundled `skill-creator` Skill, gather the required purpose and trigger boundaries with request_user_input when needed, then call commerce_skill.publish with the complete draft.",

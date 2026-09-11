@@ -18,8 +18,9 @@ import {
   ShieldCheck,
   Video,
 } from "lucide-react";
+import type { CreativeCanvasState } from "@/lib/creative/creative-canvas-types";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -58,6 +59,16 @@ export type CreativeSpaceWorkbenchProps = {
   images: readonly GeneratedImageItem[];
   conversation: ReactNode;
   navigationDisabled?: boolean;
+  running?: boolean;
+  runError?: string | null;
+  referenceAttachmentCount?: number;
+  imageEditInteraction?: ReactNode;
+  imageEditControllers?: ReactNode;
+  imageEditRunning?: boolean;
+  imageEditUnavailable?: boolean;
+  editingFilenames?: string[];
+  onActiveImageChange?: (filename: string) => void;
+  renderImageEditConversation?: (filename: string) => ReactNode;
   onCreateProject: () => void;
   onSelectProject: (project: AgentThreadSummary) => void;
   onBackToWorkbench: () => void;
@@ -78,10 +89,15 @@ const creativeMobileViews = [
 }>;
 
 export function CreativeSpaceWorkbench(props: CreativeSpaceWorkbenchProps) {
+  const canvasSnapshots = useRef(new Map<string, CreativeCanvasState>());
+  if (!props.activeProjectId) canvasSnapshots.current.clear();
   return (
-    <CreativeCanvasNavigationProvider key={props.activeProjectId ?? "new-creative-project"}>
+    <>
+    {props.imageEditControllers}
+    <CreativeCanvasNavigationProvider projectThreadId={props.activeProjectId} canvasSnapshots={canvasSnapshots.current} images={props.images} editingFilenames={props.editingFilenames} key={props.activeProjectId ?? "new-creative-project"}>
       <CreativeSpaceWorkbenchBody {...props} />
     </CreativeCanvasNavigationProvider>
+    </>
   );
 }
 
@@ -92,6 +108,16 @@ function CreativeSpaceWorkbenchBody({
   images,
   conversation,
   navigationDisabled = false,
+  running,
+  runError,
+  referenceAttachmentCount = 0,
+  imageEditInteraction,
+  imageEditControllers,
+  imageEditRunning = false,
+  imageEditUnavailable = false,
+  editingFilenames = [],
+  onActiveImageChange,
+  renderImageEditConversation,
   onCreateProject,
   onSelectProject,
   onBackToWorkbench,
@@ -100,9 +126,26 @@ function CreativeSpaceWorkbenchBody({
 }: CreativeSpaceWorkbenchProps) {
   const [mobileView, setMobileView] = useState<CreativeMobileView>("conversation");
   const navigation = useCreativeCanvasNavigation();
-  const projectRunning = projects.some(
+  const projectRunning = running ?? projects.some(
     (project) => project.threadId === activeProjectId && project.status === "running",
   );
+
+  const editObservedRunning = useRef(false);
+  const pendingEdit = navigation?.pendingImageEdit;
+  useEffect(() => {
+    if (!pendingEdit) {
+      editObservedRunning.current = false;
+      return;
+    }
+    const sourcesRunning = editingFilenames.some((filename) => pendingEdit.sources.includes(filename));
+    if (sourcesRunning) editObservedRunning.current = true;
+    const completed = images.some((image) =>
+      !pendingEdit.existingIds.has(image.id) &&
+      image.sourceFilenames.some((filename) => pendingEdit.sources.includes(filename)));
+    if (completed || (!sourcesRunning && editObservedRunning.current)) {
+      navigation?.setPendingImageEdit(null);
+    }
+  }, [pendingEdit, editingFilenames, images, navigation?.setPendingImageEdit]);
 
   return (
       <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[var(--cp-bg)] xl:grid xl:grid-cols-[var(--cp-sidebar-width)_minmax(0,1fr)_minmax(360px,430px)] xl:grid-rows-1">
@@ -149,7 +192,13 @@ function CreativeSpaceWorkbenchBody({
             threadId={activeProjectId}
             request={navigation.imageStudioRequest}
             images={images}
-            running={projectRunning}
+            running={imageEditRunning}
+            unavailable={imageEditUnavailable}
+            onActiveImageChange={onActiveImageChange}
+            runError={runError}
+            referenceAttachmentCount={referenceAttachmentCount}
+            interaction={imageEditInteraction}
+            renderConversation={renderImageEditConversation}
             onClose={navigation.closeImageStudio}
             onSubmitEdit={onSubmitImageEdit}
             renderComposer={renderImageEditComposer}

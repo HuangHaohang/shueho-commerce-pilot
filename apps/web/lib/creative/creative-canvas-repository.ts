@@ -345,7 +345,10 @@ async function reconcileSourceNode(
   await client.query(
     `INSERT INTO commerce_creative_canvas_node_revision
        (tenant_id, workspace_id, user_id, thread_id, node_id, revision, origin, content, content_sha256)
-     VALUES ($1, $2, $3, $4, $5, 1, 'harness', $6::jsonb, $7)
+     SELECT $1, $2, $3, $4, $5, COALESCE(MAX(revision), 0) + 1, 'harness', $6::jsonb, $7
+     FROM commerce_creative_canvas_node_revision
+     WHERE tenant_id = $1 AND workspace_id = $2 AND user_id = $3
+       AND thread_id = $4 AND node_id = $5
      ON CONFLICT (tenant_id, workspace_id, node_id, content_sha256)
        WHERE origin = 'harness'
      DO NOTHING`,

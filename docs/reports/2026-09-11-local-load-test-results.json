@@ -1,0 +1,1198 @@
+{
+  "date": "2026-09-11",
+  "scope": "Local isolated load test; not production certification",
+  "http": [
+    {
+      "label": "before",
+      "users": 20,
+      "elapsedMs": 60986,
+      "requests": 1102,
+      "rps": 18.06972091955531,
+      "errors": 280,
+      "statuses": {
+        "200": 822,
+        "500": 280
+      },
+      "p50": 50.53937500000029,
+      "p95": 236.39075000000003,
+      "p99": 1433.844000000001,
+      "streamCount": 20,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 280,
+          "errors": 0,
+          "p95": 142.434417
+        },
+        {
+          "kind": 1,
+          "count": 280,
+          "errors": 140,
+          "p95": 245.45104199999992
+        },
+        {
+          "kind": 2,
+          "count": 280,
+          "errors": 140,
+          "p95": 1203.7452909999993
+        },
+        {
+          "kind": 3,
+          "count": 262,
+          "errors": 0,
+          "p95": 102.55658300000005
+        }
+      ]
+    },
+    {
+      "label": "before",
+      "users": 30,
+      "elapsedMs": 60757,
+      "requests": 1710,
+      "rps": 28.144905113814048,
+      "errors": 560,
+      "statuses": {
+        "200": 1150,
+        "500": 560
+      },
+      "p50": 38.78683299999102,
+      "p95": 178.06749999999738,
+      "p99": 278.7755000000034,
+      "streamCount": 30,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 450,
+          "errors": 0,
+          "p95": 177.9390840000051
+        },
+        {
+          "kind": 1,
+          "count": 420,
+          "errors": 280,
+          "p95": 240.4315409999981
+        },
+        {
+          "kind": 2,
+          "count": 420,
+          "errors": 280,
+          "p95": 219.01291700000002
+        },
+        {
+          "kind": 3,
+          "count": 420,
+          "errors": 0,
+          "p95": 38.91958299999533
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "users": 20,
+      "elapsedMs": 61051,
+      "requests": 1109,
+      "rps": 18.16514062013726,
+      "errors": 0,
+      "statuses": {
+        "200": 1109
+      },
+      "p50": 63.054874999994354,
+      "p95": 244.1420419999995,
+      "p99": 369.9058749999999,
+      "streamCount": 20,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 280,
+          "errors": 0,
+          "p95": 330.169125
+        },
+        {
+          "kind": 1,
+          "count": 280,
+          "errors": 0,
+          "p95": 251.844834
+        },
+        {
+          "kind": 2,
+          "count": 280,
+          "errors": 0,
+          "p95": 252.573042
+        },
+        {
+          "kind": 3,
+          "count": 269,
+          "errors": 0,
+          "p95": 160.68404200000077
+        }
+      ]
+    },
+    {
+      "label": "after",
+      "users": 30,
+      "elapsedMs": 60946,
+      "requests": 1609,
+      "rps": 26.400420043973355,
+      "errors": 0,
+      "statuses": {
+        "200": 1609
+      },
+      "p50": 80.8977079999895,
+      "p95": 382.0836249999993,
+      "p99": 734.7636670000065,
+      "streamCount": 30,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 417,
+          "errors": 0,
+          "p95": 198.68483399999968
+        },
+        {
+          "kind": 1,
+          "count": 410,
+          "errors": 0,
+          "p95": 277.1662920000017
+        },
+        {
+          "kind": 2,
+          "count": 392,
+          "errors": 0,
+          "p95": 601.3308749999997
+        },
+        {
+          "kind": 3,
+          "count": 390,
+          "errors": 0,
+          "p95": 413.90741600000183
+        }
+      ]
+    },
+    {
+      "label": "mixed",
+      "users": 30,
+      "elapsedMs": 91008,
+      "requests": 2484,
+      "rps": 27.294303797468356,
+      "errors": 0,
+      "statuses": {
+        "200": 2484
+      },
+      "p50": 62.41441699999996,
+      "p95": 261.8836670000019,
+      "p99": 343.5748749999984,
+      "streamCount": 30,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 630,
+          "errors": 0,
+          "p95": 100.03116699999373
+        },
+        {
+          "kind": 1,
+          "count": 630,
+          "errors": 0,
+          "p95": 274.5071250000001
+        },
+        {
+          "kind": 2,
+          "count": 621,
+          "errors": 0,
+          "p95": 314.4302910000001
+        },
+        {
+          "kind": 3,
+          "count": 603,
+          "errors": 0,
+          "p95": 69.25137499999983
+        }
+      ]
+    }
+  ],
+  "nativeGeneration": [
+    {
+      "user": 0,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 91,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 2469,
+      "firstEventMs": 2492,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 40834,
+      "nativeTerminalMs": 53793,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 54171
+    },
+    {
+      "user": 1,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 85,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 9135,
+      "firstEventMs": 9153,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 42716,
+      "nativeTerminalMs": 50073,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 51814
+    },
+    {
+      "user": 2,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 89,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 2860,
+      "firstEventMs": 2883,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 45622,
+      "nativeTerminalMs": 59843,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 60795
+    },
+    {
+      "user": 3,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 66,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 3729,
+      "firstEventMs": 3751,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 41119,
+      "nativeTerminalMs": 55306,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 55473
+    },
+    {
+      "user": 4,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 80,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 1464,
+      "firstEventMs": 1484,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 32459,
+      "nativeTerminalMs": 39801,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 41163
+    },
+    {
+      "user": 5,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 66,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 2539,
+      "firstEventMs": 2560,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 42007,
+      "nativeTerminalMs": 47643,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 48131
+    },
+    {
+      "user": 6,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 86,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 2920,
+      "firstEventMs": 2961,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 37884,
+      "nativeTerminalMs": 45547,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 48585
+    },
+    {
+      "user": 7,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 91,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 1826,
+      "firstEventMs": 1850,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 40441,
+      "nativeTerminalMs": 49165,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 50634
+    },
+    {
+      "user": 8,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 94,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 5760,
+      "firstEventMs": 5768,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 36495,
+      "nativeTerminalMs": 43711,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 45390
+    },
+    {
+      "user": 9,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 66,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 1648,
+      "firstEventMs": 1663,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 40270,
+      "nativeTerminalMs": 45555,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 47411
+    }
+  ],
+  "nativeEdits": [
+    {
+      "user": 0,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 90,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 4598,
+      "firstEventMs": 4617,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 56403,
+      "nativeTerminalMs": 66287,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 69058
+    },
+    {
+      "user": 1,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 89,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 7484,
+      "firstEventMs": 7544,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 86147,
+      "nativeTerminalMs": 102696,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 105666
+    },
+    {
+      "user": 2,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 89,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 4333,
+      "firstEventMs": 4354,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 46305,
+      "nativeTerminalMs": 60182,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 62926
+    },
+    {
+      "user": 3,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 90,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 3666,
+      "firstEventMs": 3696,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 46146,
+      "nativeTerminalMs": 59655,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 62237
+    },
+    {
+      "user": 4,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 106,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 3427,
+      "firstEventMs": 3446,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 47392,
+      "nativeTerminalMs": 55917,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 59039
+    },
+    {
+      "user": 5,
+      "events": {
+        "turn/started": 1,
+        "item/started": 6,
+        "item/completed": 6,
+        "item/agentMessage/delta": 96,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 4115,
+      "firstEventMs": 4225,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 55191,
+      "nativeTerminalMs": 64009,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 65564
+    },
+    {
+      "user": 6,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 97,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 2304,
+      "firstEventMs": 2325,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 47106,
+      "nativeTerminalMs": 61261,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 64000
+    },
+    {
+      "user": 7,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 109,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 4302,
+      "firstEventMs": 4320,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 97279,
+      "nativeTerminalMs": 105948,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 108734
+    },
+    {
+      "user": 8,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 87,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "firstEventMs": 3831,
+      "submitStatus": 200,
+      "acceptMs": 3839,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 56404,
+      "nativeTerminalMs": 86138,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 86941
+    },
+    {
+      "user": 9,
+      "events": {
+        "turn/started": 1,
+        "item/started": 5,
+        "item/completed": 5,
+        "item/agentMessage/delta": 87,
+        "commerce/imageGeneration/completed": 1,
+        "turn/completed": 1
+      },
+      "images": 1,
+      "sseStatus": 200,
+      "submitStatus": 200,
+      "acceptMs": 3634,
+      "firstEventMs": 3666,
+      "statusHttp": 200,
+      "status": "completed",
+      "firstImageMs": 65251,
+      "nativeTerminalMs": 84406,
+      "nativeStatus": "completed",
+      "historyStatus": 200,
+      "historyImages": 1,
+      "historyKeys": [
+        "thread",
+        "messages",
+        "activities",
+        "images",
+        "nextCursor"
+      ],
+      "totalMs": 86582
+    }
+  ],
+  "versions": [
+    {
+      "user": 0,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 1,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 2,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 3,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 4,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 5,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 6,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 7,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 8,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 9,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    }
+  ],
+  "recovery": [
+    {
+      "user": 0,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 1,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 2,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 3,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 4,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 5,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 6,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 7,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 8,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    },
+    {
+      "user": 9,
+      "imageStatus": 200,
+      "canvasStatus": 200,
+      "sessionStatus": 200,
+      "images": 1,
+      "imageNodes": 1,
+      "currentMatches": true,
+      "lineageMatches": true,
+      "nativeSessions": 1,
+      "revision": 2
+    }
+  ],
+  "copy": {
+    "copyRequests": 10,
+    "statuses": [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200
+    ],
+    "uniqueCopies": 1,
+    "canvasHttp": 200,
+    "imageCards": 2
+  },
+  "sessionReuse": {
+    "requests": 30,
+    "statuses": {
+      "200": 30
+    },
+    "uniqueNativeThreads": 1,
+    "elapsedMs": 279,
+    "latencyMs": [
+      239.586333,
+      245.787167,
+      224.088125,
+      221.997625,
+      240.98770900000002,
+      232.58091700000003,
+      237.40366699999998,
+      230.41574999999997,
+      231.15275,
+      236.99454200000002,
+      219.317916,
+      228.01612500000002,
+      235.81816600000002,
+      240.597042,
+      212.672917,
+      230.45266600000002,
+      247.636875,
+      213.333541,
+      234.850333,
+      252.58891599999998,
+      252.81362499999997,
+      239.08295799999996,
+      247.49766599999998,
+      250.981542,
+      244.481417,
+      254.69266699999997,
+      256.630875,
+      240.08104199999997,
+      255.11804200000003,
+      237.62079200000002
+    ]
+  },
+  "upload": {
+    "upload": 201,
+    "read": 200,
+    "bytes": 68,
+    "otherRead": 404
+  },
+  "controls": {
+    "pasteUploadStatuses": [],
+    "attachmentVisible": 2,
+    "infoVisible": 1,
+    "versionThumbnails": 2
+  },
+  "inventoryBenchmark": {
+    "artifacts": 1000,
+    "concurrentReaders": 30,
+    "iterations": 5,
+    "legacy": [
+      792.102834,
+      940.9288330000002,
+      781.7273749999999,
+      751.0507910000001,
+      783.2025839999997
+    ],
+    "cached": [
+      35.8922079999993,
+      0.20529199999964476,
+      0.1065840000001117,
+      0.07308399999965332,
+      0.06958400000075926
+    ]
+  },
+  "validation": {
+    "gateway": 194,
+    "runtime": 8,
+    "web": 335,
+    "externalData": 213,
+    "databaseIsolation": 78,
+    "runtimeControls": 32
+  },
+  "environment": {
+    "platform": "macOS arm64",
+    "logicalCpus": 10,
+    "memoryGiB": 64,
+    "node": "23.11.0",
+    "web": "Next.js 15.5.23 production build",
+    "gateway": "Compiled application code; local development transport policy",
+    "codex": "0.150.1 / shueho.1",
+    "database": "PostgreSQL 16, separate disposable databases",
+    "ports": {
+      "web": 3100,
+      "gateway": 8887
+    },
+    "provider": "Configured service-owned upstream provider; real calls"
+  }
+}

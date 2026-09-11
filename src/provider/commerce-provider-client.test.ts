@@ -65,3 +65,27 @@ test("generates structured outcome titles with the configured Spark model", asyn
     globalThis.fetch = originalFetch;
   }
 });
+
+import { DEFAULT_AGENT_MODEL_SELECTORS } from "../gateway/config.js";
+
+test("agent selection exposes only Luna from 5.6 and verifies new models against upstream", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ data: [
+    "gpt-image-2", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra", "gemini-3.8-flash-high", "unconfigured-model",
+  ].map((id) => ({ id })) });
+  try {
+    const client = new CommerceProviderClient({
+      id: "fixture", name: "Fixture", baseUrl: "https://provider.example/v1", apiKeyEnvName: "TEST_API_KEY", apiKey: "fixture",
+      imageModel: "gpt-image-2", webSearchModel: "gpt-5.6-luna", agentModelSelectors: [...DEFAULT_AGENT_MODEL_SELECTORS],
+      modelCacheTtlMs: 60_000, webSearchTimeoutMs: 30_000, webSearchMaxAttempts: 1,
+    });
+    assert.deepEqual((await client.listModels()).agentModels.map((model) => model.id), ["gpt-5.6-luna", "gpt-6-astra", "gemini-3.8-flash-high"]);
+    await client.assertAgentModel("gpt-6-astra");
+    await client.assertAgentModel("gemini-3.8-flash-high");
+    await assert.rejects(client.assertAgentModel("gpt-5.6-sol"));
+    await assert.rejects(client.assertAgentModel("gpt-5.6-terra"));
+    globalThis.fetch = async () => Response.json({ data: [{ id: "gpt-image-2" }, { id: "gpt-5.6-luna" }] });
+    assert.deepEqual((await client.listModels(true)).agentModels.map((model) => model.id), ["gpt-5.6-luna"]);
+    await assert.rejects(client.assertAgentModel("gpt-6-astra"));
+  } finally { globalThis.fetch = originalFetch; }
+});

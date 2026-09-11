@@ -283,6 +283,10 @@ async function runCommerceMigrations(): Promise<void> {
     {version:"20260910_050_optional_external_call_limit",path:resolve(process.cwd(),"migrations/050_optional_external_call_limit.sql")},
   ];
 
+  migrations.push({ version: "20260911_051_creative_image_sessions", path: resolve(process.cwd(), "migrations/051_creative_image_sessions.sql") });
+
+  migrations.push({ version: "20260911_052_image_session_scope_integrity", path: resolve(process.cwd(), "migrations/052_image_session_scope_integrity.sql") });
+
   for (const migration of migrations) {
     const sql = await readFile(migration.path, "utf8");
     const client = await database.connect();

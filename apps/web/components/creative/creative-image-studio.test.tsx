@@ -11,7 +11,8 @@ import {
   type ImageEditComposerRenderConfig,
 } from "./creative-image-studio";
 
-vi.mock("@/components/ui/dialog", () => ({
+vi.mock("@/components/ui/dialog", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/components/ui/dialog")>(),
   Dialog: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   DialogDescription: ({ children }: { children: ReactNode }) => <p>{children}</p>,
@@ -68,7 +69,7 @@ describe("creative image studio", () => {
     expect(html).toContain("data-shared-agent-composer");
     expect(html).toContain('data-placeholder="描述要修改的内容"');
     expect(html).toContain('data-submit-ready="false"');
-    expect(html).toContain("图片修改来源");
+    expect(html).toContain('data-image-edit-context="true"');
     expect(html).toContain("共享 AgentComposer");
     expect(html).not.toContain("提交图片修改");
     expect(html).not.toContain("<textarea");

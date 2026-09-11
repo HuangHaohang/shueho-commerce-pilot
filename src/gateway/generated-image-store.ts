@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 const IMAGE_FILENAME_PATTERN = /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i;
@@ -18,6 +18,8 @@ export type GeneratedImageArtifact = {
   size: string | null;
   sourceFilenames: string[];
   createdAt: string;
+  copyOf?: string;
+  copyRequestId?: string;
 };
 
 export type SaveGeneratedImageInput = Omit<
@@ -32,6 +34,9 @@ export class GeneratedImageStore {
   private readonly imageDirectory: string;
   private readonly metadataDirectory: string;
   private readonly pendingCallSaves = new Map<string, Promise<GeneratedImageArtifact>>();
+
+  private inventory: { stamp: string; byThread: Map<string, GeneratedImageArtifact[]> } | null = null;
+  private inventoryRead: Promise<Map<string, GeneratedImageArtifact[]>> | null = null;
 
   constructor(codexHome: string) {
     this.imageDirectory = join(codexHome, "generated_images");
@@ -56,6 +61,8 @@ export class GeneratedImageStore {
       size: input.size,
       sourceFilenames,
       createdAt: new Date().toISOString(),
+      ...(input.copyOf ? { copyOf: input.copyOf } : {}),
+      ...(input.copyRequestId ? { copyRequestId: input.copyRequestId } : {}),
     };
     await this.ensureDirectories();
     await writeFile(this.imagePath(filename), Buffer.from(input.base64, "base64"), { mode: 0o600 });
@@ -101,6 +108,29 @@ export class GeneratedImageStore {
     return readFile(this.imagePath(filename));
   }
 
+  async copyImage(filename: string, expectedThreadId: string, requestId: string): Promise<GeneratedImageArtifact> {
+    assertAgentId(requestId, "copy request id");
+    const key = `copy:${expectedThreadId}:${requestId}`;
+    const pending = this.pendingCallSaves.get(key);
+    if (pending) {
+      const artifact = await pending;
+      if (artifact.copyOf !== filename) throw new Error("Image copy request conflicts with its original source.");
+      return artifact;
+    }
+    const operation = (async () => {
+      const source = await this.get(filename);
+      if (!source || source.threadId !== expectedThreadId) throw new Error("Image copy source unavailable.");
+      const existing = (await this.listForThread(expectedThreadId)).find((image) => image.copyRequestId === requestId);
+      if (existing) {
+        if (existing.copyOf !== filename) throw new Error("Image copy request conflicts with its original source.");
+        return existing;
+      }
+      return this.save({ ...source, base64: (await this.readImage(filename)).toString("base64"), callId: null, sourceFilenames: [], copyOf: filename, copyRequestId: requestId });
+    })().finally(() => this.pendingCallSaves.delete(key));
+    this.pendingCallSaves.set(key, operation);
+    return operation;
+  }
+
   async get(filename: string): Promise<GeneratedImageArtifact | null> {
     assertImageFilename(filename);
     try {
@@ -116,29 +146,59 @@ export class GeneratedImageStore {
 
   async listForThread(threadId: string): Promise<GeneratedImageArtifact[]> {
     assertAgentId(threadId, "thread id");
-    let entries: string[];
-    try {
-      entries = await readdir(this.metadataDirectory);
-    } catch (error) {
-      if (isNotFoundError(error)) {
-        return [];
+    const byThread = await this.readInventory();
+    // Callers must not mutate the shared metadata cache.
+    return (byThread.get(threadId) ?? []).map((artifact) => ({ ...artifact, sourceFilenames: [...artifact.sourceFilenames] }));
+  }
+
+  private async readInventory(): Promise<Map<string, GeneratedImageArtifact[]>> {
+    if (this.inventoryRead) return this.inventoryRead;
+    const operation = (async () => {
+      let directory;
+      try { directory = await stat(this.metadataDirectory, { bigint: true }); }
+      catch (error) { if (isNotFoundError(error)) return new Map<string, GeneratedImageArtifact[]>(); throw error; }
+      const stamp = `${directory.mtimeNs}:${directory.ctimeNs}`;
+      if (this.inventory?.stamp === stamp) return this.inventory.byThread;
+      const entries = (await readdir(this.metadataDirectory)).filter((entry) => entry.endsWith(".json") && isSafeImageFilename(entry.slice(0, -5)));
+      const byThread = new Map<string, GeneratedImageArtifact[]>();
+      // Bound file descriptors during cold starts and coalesce concurrent inventory reads.
+      for (let offset = 0; offset < entries.length; offset += 32) {
+        const batch = await Promise.all(entries.slice(offset, offset + 32).map((entry) => this.get(entry.slice(0, -5))));
+        for (const artifact of batch) {
+          if (!artifact) continue;
+          const items = byThread.get(artifact.threadId) ?? [];
+          items.push(artifact); byThread.set(artifact.threadId, items);
+        }
       }
-      throw error;
+      for (const items of byThread.values()) items.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      this.inventory = { stamp, byThread };
+      return byThread;
+    })().finally(() => { this.inventoryRead = null; });
+    this.inventoryRead = operation;
+    return operation;
+  }
+
+  async recordEditSources(threadId: string, turnId: string, filenames: string[]): Promise<void> {
+    assertAgentId(threadId, "thread id"); assertAgentId(turnId, "turn id");
+    await this.ensureDirectories();
+    await writeFile(join(this.metadataDirectory, `${threadId}-${turnId}.sources`), JSON.stringify({ threadId, filenames: normalizeSourceFilenames(filenames) }), { mode: 0o600 });
+  }
+  async readEditSources(threadId: string, turnId: string): Promise<string[]> {
+    assertAgentId(threadId, "thread id"); assertAgentId(turnId, "turn id");
+    try {
+      const value = JSON.parse(await readFile(join(this.metadataDirectory, `${threadId}-${turnId}.sources`), "utf8"));
+      return value.threadId === threadId ? normalizeSourceFilenames(value.filenames) : [];
+    } catch (error) { if (isNotFoundError(error)) return []; throw error; }
+  }
+
+  async authorizeSources(threadId: string, sources: Array<{ filename: string; threadId: string }>): Promise<void> {
+    assertAgentId(threadId, "thread id");
+    for (const source of sources) {
+      const artifact = await this.get(source.filename);
+      if (!artifact || artifact.threadId !== source.threadId) throw new Error("Image source ownership changed.");
+      await this.ensureDirectories();
+      await writeFile(join(this.metadataDirectory, `${threadId}-${source.filename}.grant`), JSON.stringify({ threadId, sourceThreadId: source.threadId, filename: source.filename }), { mode: 0o600 });
     }
-    const artifacts = await Promise.all(
-      entries
-        .filter((entry) => entry.endsWith(".json"))
-        .map(async (entry) => {
-          const filename = entry.slice(0, -".json".length);
-          if (!isSafeImageFilename(filename)) {
-            return null;
-          }
-          return this.get(filename);
-        }),
-    );
-    return artifacts
-      .filter((artifact): artifact is GeneratedImageArtifact => artifact?.threadId === threadId)
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
   }
 
   async buildTurnInputs(
@@ -150,8 +210,12 @@ export class GeneratedImageStore {
     const inputs: Array<{ type: "localImage"; path: string }> = [];
     for (const filename of normalized) {
       const artifact = await this.get(filename);
-      if (!artifact || artifact.threadId !== threadId) {
-        throw new Error("Generated image source does not belong to this thread.");
+      if (!artifact) throw new Error("Generated image source is unavailable.");
+      if (artifact.threadId !== threadId) {
+        const grant = await readFile(join(this.metadataDirectory, `${threadId}-${filename}.grant`), "utf8")
+          .then((value) => JSON.parse(value))
+          .catch(() => { throw new Error("Generated image source does not belong to this thread."); });
+        if (grant.threadId !== threadId || grant.sourceThreadId !== artifact.threadId || grant.filename !== filename) throw new Error("Generated image source does not belong to this thread.");
       }
       await stat(this.imagePath(filename));
       inputs.push({ type: "localImage", path: this.imagePath(filename) });
@@ -182,6 +246,11 @@ export class GeneratedImageStore {
     let files = 0;
     let metadata = 0;
     for (const entry of entries) {
+      if (entry.endsWith(".grant") || entry.endsWith(".sources")) {
+        const grant = JSON.parse(await readFile(join(this.metadataDirectory, entry), "utf8"));
+        if (targets.has(grant.threadId) || targets.has(grant.sourceThreadId)) await removeIfPresent(join(this.metadataDirectory, entry));
+        continue;
+      }
       if (!entry.endsWith(".json")) continue;
       const filename = entry.slice(0, -".json".length);
       if (!isSafeImageFilename(filename)) continue;
@@ -211,7 +280,13 @@ export class GeneratedImageStore {
   }
 
   private async writeMetadata(artifact: GeneratedImageArtifact): Promise<void> {
-    await writeFile(this.metadataPath(artifact.filename), `${JSON.stringify(artifact)}\n`, { mode: 0o600 });
+    const target = this.metadataPath(artifact.filename);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(artifact)}\n`, { mode: 0o600 });
+      await rename(temporary, target);
+      this.inventory = null;
+    } finally { await rm(temporary, { force: true }); }
   }
 
   private imagePath(filename: string): string {
@@ -251,6 +326,8 @@ function parseArtifact(value: unknown, expectedFilename: string): GeneratedImage
     size: typeof value.size === "string" ? value.size : null,
     sourceFilenames: normalizeSourceFilenames(value.sourceFilenames),
     createdAt: value.createdAt,
+    ...(typeof value.copyRequestId === "string" && AGENT_ID_PATTERN.test(value.copyRequestId) ? { copyRequestId: value.copyRequestId } : {}),
+    ...(typeof value.copyOf === "string" && isSafeImageFilename(value.copyOf) ? { copyOf: value.copyOf } : {}),
   };
 }
 

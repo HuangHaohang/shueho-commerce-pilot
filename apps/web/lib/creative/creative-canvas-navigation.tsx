@@ -11,7 +11,9 @@ import {
   useState,
 } from "react";
 
-import type { CreativeCanvasMessageReference } from "./creative-canvas-types";
+import type { GeneratedImageItem } from "@/lib/agent/use-agent-thread";
+
+import type { CreativeCanvasState, CreativeCanvasMessageReference } from "./creative-canvas-types";
 
 type CanvasFocusRequest = { nodeId: string; nonce: number } | null;
 export type CanvasRevisionRequest = {
@@ -23,6 +25,8 @@ export type CanvasRevisionRequest = {
 } | null;
 
 export type ImageStudioRequest = {
+  annotations?: { id: string; x: number; y: number; text: string; width?: number; height?: number; sourceFilename?: string; sourceId?: string; naturalWidth?: number; naturalHeight?: number }[];
+  focusAnnotationId?: string;
   artifactId: string;
   url: string;
   filename: string;
@@ -32,7 +36,15 @@ export type ImageStudioRequest = {
   nonce: number;
 } | null;
 
+export type PendingImageEdit = { sources: string[]; existingIds: Set<string> };
+
 type CreativeCanvasNavigationContextValue = {
+  images: readonly GeneratedImageItem[];
+  editingFilenames: string[];
+  canvasSnapshots?: Map<string, CreativeCanvasState>;
+  projectThreadId?: string | null;
+  pendingImageEdit: PendingImageEdit | null;
+  setPendingImageEdit: (edit: PendingImageEdit | null) => void;
   focusRequest: CanvasFocusRequest;
   revisionRequest: CanvasRevisionRequest;
   imageStudioRequest: ImageStudioRequest;
@@ -50,9 +62,18 @@ const CreativeCanvasNavigationContext = createContext<CreativeCanvasNavigationCo
 
 export function CreativeCanvasNavigationProvider({
   children,
+  images = [],
+  editingFilenames = [],
+  canvasSnapshots,
+  projectThreadId,
 }: {
   children: ReactNode;
+  images?: readonly GeneratedImageItem[];
+  editingFilenames?: string[];
+  canvasSnapshots?: Map<string, CreativeCanvasState>;
+  projectThreadId?: string | null;
 }) {
+  const [pendingImageEdit, setPendingImageEdit] = useState<PendingImageEdit | null>(null);
   const [focusRequest, setFocusRequest] = useState<CanvasFocusRequest>(null);
   const [revisionRequest, setRevisionRequest] = useState<CanvasRevisionRequest>(null);
   const [imageStudioRequest, setImageStudioRequest] = useState<ImageStudioRequest>(null);
@@ -114,6 +135,12 @@ export function CreativeCanvasNavigationProvider({
   }, []);
 
   const value = useMemo<CreativeCanvasNavigationContextValue>(() => ({
+    images,
+    editingFilenames,
+    canvasSnapshots,
+    projectThreadId,
+    pendingImageEdit,
+    setPendingImageEdit,
     focusRequest,
     revisionRequest,
     imageStudioRequest,
@@ -126,6 +153,11 @@ export function CreativeCanvasNavigationProvider({
     refsForMessage,
     publishMessageRefs,
   }), [
+    images,
+    editingFilenames,
+    canvasSnapshots,
+    projectThreadId,
+    pendingImageEdit,
     focusConversationMessage,
     focusRequest,
     imageStudioRequest,

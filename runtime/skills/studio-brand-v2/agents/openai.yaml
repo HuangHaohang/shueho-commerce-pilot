@@ -1,0 +1,4 @@
+interface:
+  display_name: "品牌产品视觉"
+  short_description: "统一产品展示的色彩与气质"
+  icon_large: "./assets/preview.webp"

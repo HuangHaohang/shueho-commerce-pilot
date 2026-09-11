@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  listImageSessions: vi.fn(),
   getAgentThreadForUser: vi.fn(),
   reconcileCreativeCanvasState: vi.fn(),
   requireAgentThreadContext: vi.fn(),
@@ -20,6 +21,8 @@ vi.mock("@/lib/creative/creative-canvas-repository", () => ({
   reconcileCreativeCanvasState: mocks.reconcileCreativeCanvasState,
 }));
 
+vi.mock("@/lib/creative/image-session-repository", () => ({ listImageSessions: mocks.listImageSessions }));
+
 import { GET } from "./route";
 
 const enterpriseContext = {
@@ -32,6 +35,7 @@ const threadId = "thread-creative-1";
 describe("creative infinite canvas route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listImageSessions.mockResolvedValue([]);
     mocks.requireAgentThreadContext.mockResolvedValue({ ok: true, context: enterpriseContext });
     mocks.getAgentThreadForUser.mockResolvedValue({ threadId, recipeId: "creative_project", category: "creative" });
     mocks.reconcileCreativeCanvasState.mockResolvedValue({

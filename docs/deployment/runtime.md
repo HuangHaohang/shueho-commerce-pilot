@@ -210,3 +210,37 @@ Before accepting customer traffic, verify:
 The trusted reverse proxy must reject chunked or declared public API bodies above 64 KiB before Next.js parses them, except the authenticated attachment route and the private Gateway-only `/api/internal/external-data` callback. New calls send only a bounded SHUEHO warehouse receipt through that callback; the legacy 6.25 MiB allowance remains for previously archived responses and must never be publicly routed. The BFF also applies database-backed mutation/reconnect buckets, at most five SSE streams per user and 300 per tenant, and a 30-minute stream lifetime; proxy connection and request-rate limits remain mandatory defense in depth.
 
 Tenant-wide quota aggregation and direction-change admission use explicit hardened paths; ordinary database work remains workspace-scoped, and restart recovery cannot start a queued message without a fresh BFF lease. See [Enterprise Tenancy Foundation](../architecture/enterprise-tenancy.md) for those semantics and the remaining commercial-control limitations.
+
+
+## Bundled Studio Skill assets
+
+Ship `runtime/skills/` with the Gateway artifact and `apps/web/public/skill-demos/` with the Next.js public assets. The Gateway uses the application working directory to locate its fixed shipped Skill sources, as it does for the managed Web Search MCP executable. Startup installs the five reviewed Studio v2 Skills under the configured runtime root before `skills/list`; it fails if required source files are missing or target directories are symbolic links. No database migration, provider call, new environment variable, or tenant-data import is required. After restart, authenticated `/api/skills` should report all five `studio-*-v2` entries with public `/skill-demos/` metadata and no local paths.
+
+
+## Agent model selection
+
+The default `COMMERCE_AGENT_MODEL_SELECTORS` exposes exactly GPT-5.6 Luna, GPT-6 Astra, Gemini 3.8 Flash High and Claude 4.6 Opus Thinking. GPT-5.5, GPT-5.6 Sol/Terra, Gemini 3.7 Flash and Claude 4.6 Sonnet are excluded. Set `CODEX_DEFAULT_MODEL=gpt-5.6-luna` for the matching startup default. Existing installations with explicit selector/default environment values must update them and restart Gateway; changing source defaults alone does not replace environment overrides.
+
+The browser still receives the intersection of this server-owned selection and the live upstream `/models` catalog. Model selection is checked again on submission. No synthetic availability or client-supplied provider identity is accepted. GPT-6 Astra exposes the same supported reasoning choices as the GPT family; Gemini retains its upstream model variant without an unsupported reasoning-effort override.
+
+### Native direct tool mode
+
+`runtime/models/hosted-models.json` preserves the pinned Codex model metadata with `tool_mode=direct`, installed into application-owned `CODEX_HOME` and loaded through native `model_catalog_json`. Both code-mode feature switches and the unused standalone host are disabled. The model catalog's `code_mode_only` otherwise takes precedence over `features.code_mode.enabled=false`, causing Luna/Astra to invoke an unbundled `codex-code-mode-host`. The pinned macOS ARM sandbox V8 prebuilt archive also returns 404, so the hosted application uses its intended native direct-tool configuration rather than installing a second execution surface or relaxing sandboxing.
+
+Native image generation still uses the Harness `image_gen` extension / supported Provider-hosted path and native `imageGeneration` Items. Provider routing, tenant authorization and the hosted tool allowlist remain unchanged. Restart Gateway/App Server after changing this metadata; do not replay image requests automatically. Gateway's live upstream catalog remains the model-availability authority.
+
+The managed `PreToolUse` allowlist includes the exact native direct image-tool identity `image_genimagegen` (namespace `image_gen` plus method `imagegen`). The Hook receives this concatenated identity, not just the method name; allowing only `image_gen` or `imagegen` blocks the legitimate native tool. Matching remains exact, with unknown tools and host permission requests denied.
+
+Managed Hook commands pin their event identity as an application-generated CLI argument. `PreToolUse` and `PermissionRequest` still fail closed on invalid or oversized input and on audit write failures. Observational Hooks, especially `PostToolUse`, drain payloads above 1 MB without buffering or logging their contents; they record only event metadata with `payloadOmitted=true`. Observational parsing/audit failures never replace a completed tool result. This prevents native image bytes from turning a successful image Item into a model-visible tool error and triggering duplicate generation. The production requirements file carries the same fixed event arguments.
+
+图片独立编辑会话需要先执行 Web migration runner 中的 `20260911_051_creative_image_sessions`，再更新 Gateway 与 Web。Gateway 的 generated image metadata 卷需要保留 `.grant` 和 `.sources` 文件，这是同项目编辑 thread 对原图的应用授权引用，不是新图片产物；常规 thread 删除会清理相关授权。发布前等待正在执行的原生任务结束，不通过重启强行终止图片任务。
+
+## Full server244 browser rollout
+
+The [production Web overlay](../../deploy/production-web/README.md) extends the
+existing public MCP deployment with a private tenant-dedicated Gateway, persistent
+Harness volume, browser ingress and required workers. Build Web and Gateway from
+the same commit and apply Web migrations 051/052 before activation. Preserve existing
+MCP supplier overlays and credentials; local development state is not a production
+seed. The root image build now includes workspace package manifests before `npm ci`
+and bounds Cargo parallelism for the shared build server.

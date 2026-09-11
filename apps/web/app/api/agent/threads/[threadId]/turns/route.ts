@@ -1,3 +1,4 @@
+import { resolveImageSources } from "@/lib/creative/image-session-repository";
 import { NextResponse } from "next/server";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
@@ -10,6 +11,7 @@ import { isAgentWorkflowId, isWorkflowAllowedForRecipeId } from "@/lib/agent/tas
 import {
   isAppOwnedManagedSkillName,
   isCreativeMethod,
+  isStudioSkillName,
   type CreativeMethod,
 } from "@/lib/creative/creative-method-contract";
 import {
@@ -204,7 +206,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
   ) {
     return NextResponse.json({ error: "当前角色不能预先授权外部付费数据调用。" }, { status: 403 });
   }
-  if (workflow && skillName) {
+  if (workflow && skillName && !(workflow === "commerce-creative-project" && isStudioSkillName(skillName) && !creativeMethod)) {
     return NextResponse.json({ error: "工作流与显式技能不能同时选择。" }, { status: 400 });
   }
   const clientRequestId =
@@ -249,6 +251,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
     }
   }
   try {
+    const authorizedImageSources = imageEditSourceFilenames.length ? await resolveImageSources(enterpriseContext, threadId, imageEditSourceFilenames) : [];
     const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(threadId)}/turns`), {
       method: "POST",
       headers: gatewayHeaders({ "Content-Type": "application/json" }, enterpriseContext),
@@ -262,6 +265,7 @@ export async function POST(request: Request, context: { params: Promise<{ thread
         skillName,
         attachmentIds,
         imageEditSourceFilenames,
+        authorizedImageSources,
         externalDataApprovalMode,
         productIds,
         productContextMode,

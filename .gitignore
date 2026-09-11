@@ -7,6 +7,7 @@ node_modules.*/
 .runtime/
 apps/web/.next/
 apps/web/.next-build/
+apps/web/.next-loadtest*/
 apps/web/out/
 coverage/
 playwright-report/

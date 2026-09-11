@@ -1,6 +1,11 @@
 "use client";
 
+import { imageAssetRoot, imageAssetVersions } from "@/lib/creative/image-assets";
+import { ImageVersionsPanel } from "./image-versions-panel";
 import {
+  ChevronLeft,
+  ChevronRight,
+  List,
   AlignCenter,
   AlignLeft,
   AlignRight,
@@ -48,8 +53,10 @@ import {
   useState,
 } from "react";
 
+import { ImageDownloadButton } from "./image-download-button";
 import { AssistantMarkdown } from "@/components/agent/assistant-markdown";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type {
   ConversationMessage,
   GeneratedImageItem,
@@ -100,7 +107,7 @@ export function CreativeInfiniteCanvas({
       .map((message) => `${message.id}:${message.sequence}`),
     ...images.map((image) => `${image.id}:${image.sequence}`),
   ].join("|"), [images, messages]);
-  const canvas = useCreativeCanvas({ threadId, sourceSignature });
+  const canvas = useCreativeCanvas({ threadId, sourceSignature, running });
 
   return (
     <section
@@ -114,7 +121,7 @@ export function CreativeInfiniteCanvas({
       <CreativeCanvasSurface
         key={threadId ?? "creative-canvas-empty"}
         threadId={threadId}
-        state={canvas.state}
+        state={canvas.state ? { ...canvas.state, nodes: canvas.state.nodes.filter((node, index, nodes) => node.revision.content.kind !== "image" || nodes.findIndex((other) => other.revision.content.kind === "image" && imageAssetRoot(other.revision.content.image.filename, images) === imageAssetRoot(node.revision.content.kind === "image" ? node.revision.content.image.filename : "", images)) === index) } : null}
         loading={canvas.loading}
         error={canvas.error}
         running={running}
@@ -170,6 +177,23 @@ function CreativeCanvasFlow({
   const [nodes, setNodes] = useState<CanvasFlowNode[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const initializedViewportRef = useRef(false);
+  const knownNodeIdsRef = useRef<Set<string> | null>(null);
+  const handledFocusRef = useRef<NonNullable<typeof focusRequest> | null>(null);
+  const focusNode = useCallback((nodeId: string) => {
+    setSelectedNodeId(nodeId);
+    void reactFlow.fitView({ nodes: [{ id: nodeId }], padding: 0.15, minZoom: 0.5, maxZoom: 1, duration: 240 });
+  }, [reactFlow]);
+
+  useEffect(() => {
+    if (!state || state.nodes.length !== nodes.length) return;
+    const previous = knownNodeIdsRef.current;
+    const added = nodes.filter((node) => !previous?.has(node.id));
+    knownNodeIdsRef.current = new Set(nodes.map((node) => node.id));
+    // Initial history respects the saved viewport; only newly delivered assets focus.
+    if (!previous || !added.length) return;
+    setSelectedNodeId(added.at(-1)?.id ?? null);
+    void reactFlow.fitView({ nodes: added.map(({ id }) => ({ id })), padding: 0.18, maxZoom: 1, duration: 280 });
+  }, [nodes, reactFlow, state]);
 
   useEffect(() => {
     const nextNodes = (state?.nodes ?? []).map<CanvasFlowNode>((record) => ({
@@ -179,6 +203,7 @@ function CreativeCanvasFlow({
       style: { width: record.layout.width, height: record.layout.height },
       zIndex: record.layout.zIndex,
       draggable: !record.layout.locked,
+      dragHandle: ".creative-node-drag-handle",
       selected: record.id === selectedNodeId,
       data: {
         record,
@@ -206,25 +231,19 @@ function CreativeCanvasFlow({
   useEffect(() => {
     if (!state || initializedViewportRef.current || !nodes.length) return;
     initializedViewportRef.current = true;
-    if (state.viewport) {
+    if (state.viewport && state.viewport.zoom >= 0.5) {
       void reactFlow.setViewport(state.viewport, { duration: 0 });
     } else {
-      void reactFlow.fitView({ padding: 0.18, maxZoom: 1, duration: 0 });
+      void reactFlow.fitView({ nodes: [{ id: nodes.at(-1)!.id }], padding: 0.15, minZoom: 0.5, maxZoom: 1, duration: 0 });
     }
   }, [nodes.length, reactFlow, state]);
 
   useEffect(() => {
     const request = focusRequest;
-    if (!request || !nodes.some((node) => node.id === request.nodeId)) return;
-    setSelectedNodeId(request.nodeId);
-    void reactFlow.fitView({
-      nodes: [{ id: request.nodeId }],
-      padding: 0.28,
-      minZoom: 0.55,
-      maxZoom: 1.08,
-      duration: 380,
-    });
-  }, [focusRequest, nodes, reactFlow]);
+    if (!request || handledFocusRef.current === request || !nodes.some((node) => node.id === request.nodeId)) return;
+    handledFocusRef.current = request;
+    focusNode(request.nodeId);
+  }, [focusRequest, nodes, focusNode]);
 
   const handleNodesChange = useCallback((changes: NodeChange<CanvasFlowNode>[]) => {
     setNodes((current) => applyNodeChanges(changes, current));
@@ -263,8 +282,12 @@ function CreativeCanvasFlow({
         minZoom={0.1}
         maxZoom={2.2}
         panOnScroll
-        selectionOnDrag
-        panOnDrag={[1, 2]}
+        zoomOnScroll={false}
+        zoomOnPinch
+        zoomOnDoubleClick={false}
+        selectionOnDrag={false}
+        panOnDrag
+        onNodeDoubleClick={(_, node) => focusNode(node.id)}
         nodesFocusable
         colorMode="light"
         aria-label="电商创作画布"
@@ -281,6 +304,9 @@ function CreativeCanvasFlow({
         />
         <CanvasToolbar
           disabled={!threadId}
+          nodes={state?.nodes ?? []}
+          selectedNodeId={selectedNodeId}
+          onFocusNode={focusNode}
           loading={loading}
           running={running}
           error={error}
@@ -294,6 +320,9 @@ function CreativeCanvasFlow({
 
 function CanvasToolbar({
   disabled,
+  nodes,
+  selectedNodeId,
+  onFocusNode,
   loading,
   running,
   error,
@@ -301,13 +330,18 @@ function CanvasToolbar({
   onRefresh,
 }: {
   disabled: boolean;
+  nodes: CreativeCanvasNodeRecord[];
+  selectedNodeId: string | null;
+  onFocusNode: (nodeId: string) => void;
   loading: boolean;
   running: boolean;
   error: string | null;
   sourceHistoryComplete: boolean;
   onRefresh: () => Promise<void>;
 }) {
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  const { zoomIn, zoomOut, zoomTo, fitView } = useReactFlow();
+  const [nodeMenuOpen, setNodeMenuOpen] = useState(false);
+  const selectedIndex = nodes.findIndex((node) => node.id === selectedNodeId);
   const viewport = useViewport();
   return (
     <Panel position="top-left" className="!m-3">
@@ -321,8 +355,9 @@ function CanvasToolbar({
           type="button"
           className="h-8 min-w-12 rounded-[7px] px-2 text-[11px] tabular-nums text-[var(--cp-text-muted)] hover:bg-[var(--cp-surface-hover)] disabled:opacity-40"
           disabled={disabled}
-          aria-label="适应画布"
-          onClick={() => void fitView({ padding: 0.18, maxZoom: 1, duration: 220 })}
+          aria-label="恢复 100% 缩放"
+          title="恢复 100% 缩放"
+          onClick={() => void zoomTo(1, { duration: 220 })}
         >
           {Math.round(viewport.zoom * 100)}%
         </button>
@@ -331,6 +366,27 @@ function CanvasToolbar({
         </CanvasToolButton>
         <CanvasToolButton label="适应全部节点" disabled={disabled} onClick={() => void fitView({ padding: 0.18, maxZoom: 1, duration: 220 })}>
           <Focus className="size-3.5" />
+        </CanvasToolButton>
+        <span className="mx-0.5 h-5 w-px bg-[var(--cp-border)]" aria-hidden="true" />
+        <CanvasToolButton label="上一个节点" disabled={!nodes.length} onClick={() => onFocusNode(nodes[selectedIndex < 0 ? nodes.length - 1 : (selectedIndex - 1 + nodes.length) % nodes.length].id)}>
+          <ChevronLeft className="size-3.5" />
+        </CanvasToolButton>
+        <Popover open={nodeMenuOpen} onOpenChange={setNodeMenuOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="ghost" size="sm" disabled={!nodes.length} className="h-8 gap-1 px-2 text-xs" aria-label="选择画布节点">
+              <List className="size-3.5" />{selectedIndex >= 0 ? selectedIndex + 1 : "节点"} / {nodes.length}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="nowheel nopan w-[min(300px,calc(100vw-32px))] max-h-[50dvh] overflow-y-auto overscroll-contain p-1">
+            {nodes.map((node, index) => <button key={node.id} type="button" aria-pressed={node.id === selectedNodeId}
+              className={cn("flex w-full items-center gap-2 rounded-[var(--cp-radius-item)] px-3 py-2 text-left text-xs hover:bg-[var(--cp-surface-hover)]", node.id === selectedNodeId && "bg-[var(--cp-bg-muted)]")}
+              onClick={() => { onFocusNode(node.id); setNodeMenuOpen(false); }}>
+              <span className="shrink-0 text-[var(--cp-text-faint)]">{index + 1}</span><span className="min-w-0 truncate">{node.title}</span>
+            </button>)}
+          </PopoverContent>
+        </Popover>
+        <CanvasToolButton label="下一个节点" disabled={!nodes.length} onClick={() => onFocusNode(nodes[(selectedIndex + 1) % nodes.length].id)}>
+          <ChevronRight className="size-3.5" />
         </CanvasToolButton>
         <CanvasToolButton label="重新读取画布" disabled={loading} onClick={() => void onRefresh()}>
           {loading ? <LoaderCircle className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
@@ -415,13 +471,15 @@ function CreativeNodeFrame({
         handleClassName="!size-2.5 !border !border-[var(--cp-border-strong)] !bg-[var(--cp-surface)]"
         onResizeEnd={(_, params) => onResize(params.width, params.height)}
       />
-      <header className="flex min-h-11 shrink-0 items-center gap-2 border-b border-[var(--cp-border-subtle)] px-3 py-2">
+      <header title={node.layout.locked ? "节点已锁定，可点击解锁后拖动" : "拖动标题栏移动节点"} className={cn("creative-node-drag-handle flex min-h-11 shrink-0 select-none items-center gap-2 border-b border-[var(--cp-border-subtle)] px-3 py-2", !node.layout.locked && "cursor-grab active:cursor-grabbing")}>
         <span className="text-[var(--cp-text-muted)]">{icon}</span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium text-[var(--cp-text)]">{node.title}</span>
-          <span className="mt-0.5 block truncate text-[10px] text-[var(--cp-text-faint)]">
+        <span className={cn("min-w-0 flex-1", node.nodeType === "image" && "flex items-center gap-2")}>
+          <span className="block min-w-0 truncate text-[13px] font-medium text-[var(--cp-text)]">{node.title}</span>
+          {node.nodeType === "image" ? (
+            <span className="shrink-0 rounded-md bg-[var(--cp-bg-subtle)] px-1.5 py-0.5 text-[10px] leading-4 text-[var(--cp-text-muted)]">V{node.revision.number}</span>
+          ) : <span className="mt-0.5 block truncate text-[10px] text-[var(--cp-text-faint)]">
             第 {node.revision.number} 版 · {node.revision.origin === "harness" ? "Agent 产出" : "人工修改"}
-          </span>
+          </span>}
         </span>
         {onRestore ? (
           <button
@@ -488,7 +546,7 @@ function CreativeDocumentNode({ data, selected }: NodeProps<CanvasFlowNode>) {
       onToggleLock={() => void data.onSaveLayout(record.id, { ...record.layout, locked: !record.layout.locked })}
       onRestore={record.previousRevisionId ? () => void data.onRestoreRevision(record.id, record.previousRevisionId as string) : null}
     >
-      <div className="nodrag nopan min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="nodrag nopan nowheel min-h-0 flex-1 overflow-y-auto overscroll-contain p-4">
         <div className="mb-3 flex items-center justify-end">
           <Button
             type="button"
@@ -555,8 +613,12 @@ function CreativeDocumentNode({ data, selected }: NodeProps<CanvasFlowNode>) {
 function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
   const record = data.record;
   const navigation = useCreativeCanvasNavigation();
-  const [content, setContent, save] = useNodeDraft(record, data.onSaveContent);
-  if (content.kind !== "image") return null;
+  const [storedContent, setContent, save] = useNodeDraft(record, data.onSaveContent);
+  if (storedContent.kind !== "image") return null;
+  const versions = imageAssetVersions(storedContent.image.filename, navigation?.images ?? []);
+  const latest = versions.at(-1);
+  const content = latest ? { ...storedContent, image: { artifactId: latest.id, filename: latest.filename, url: latest.url, model: latest.model } } : storedContent;
+  const editing = versions.some((image) => navigation?.editingFilenames.includes(image.filename) || navigation?.pendingImageEdit?.sources.includes(image.filename));
 
   const updateLayer = (layerId: string, update: Partial<CreativeCanvasImageTextLayer>) => {
     setContent({
@@ -564,29 +626,15 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
       textLayers: content.textLayers.map((layer) => layer.id === layerId ? { ...layer, ...update } : layer),
     });
   };
-  const addTextLayer = () => {
-    const next: CreativeCanvasImageTextLayer = {
-      id: `text-${Date.now().toString(36)}`,
-      text: "输入图片文案",
-      x: 8,
-      y: 8,
-      width: 48,
-      fontSize: 28,
-      align: "left",
-    };
-    const updated = { ...content, textLayers: [...content.textLayers, next] };
-    setContent(updated);
-    void data.onSaveContent(record.id, updated);
-  };
 
   return (
     <CreativeNodeFrame
-      node={record}
+      node={{ ...record, revision: { ...record.revision, number: versions.length || 1 } }}
       selected={selected}
       icon={<ImageIcon className="size-4" />}
       onResize={(width, height) => void saveNodeSize(data, width, height)}
       onToggleLock={() => void data.onSaveLayout(record.id, { ...record.layout, locked: !record.layout.locked })}
-      onRestore={record.previousRevisionId ? () => void data.onRestoreRevision(record.id, record.previousRevisionId as string) : null}
+      onRestore={null}
     >
       <div className="nodrag nopan relative min-h-0 flex-1 overflow-hidden bg-[var(--cp-bg-subtle)]" data-canvas-image-stage>
         <button
@@ -616,6 +664,11 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
             图片工作区
           </span>
         </button>
+        {editing ? (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-white/45 backdrop-blur-md" role="status" aria-live="polite" aria-busy="true">
+            <span className="rounded-full border border-white/70 bg-white/80 px-4 py-2 text-xs text-[var(--cp-text)] shadow-[var(--cp-shadow-soft)]">AI快速修改ing..</span>
+          </div>
+        ) : null}
         {content.textLayers.map((layer) => (
           <ImageTextLayerEditor
             key={layer.id}
@@ -629,22 +682,16 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
             }}
           />
         ))}
-        <Button
-          type="button"
-          variant="subtle"
-          size="sm"
-          className="nodrag nopan absolute bottom-2 left-2 h-8 rounded-[8px] px-2 text-[11px]"
-          onClick={addTextLayer}
-        >
-          <Plus className="size-3.5" />
-          添加文字
-        </Button>
       </div>
-      <div className="nodrag nopan flex shrink-0 items-center gap-1 border-t border-[var(--cp-border-subtle)] px-2 py-1.5">
-        <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--cp-text-faint)]">
-          原生图片不可覆盖 · {content.textLayers.length} 个文字图层
-        </span>
-        {data.saving ? <LoaderCircle className="size-3 animate-spin text-[var(--cp-text-faint)]" /> : <Save className="size-3 text-[var(--cp-text-faint)]" />}
+      <div className="nodrag nopan flex min-h-11 shrink-0 flex-wrap items-center gap-1 border-t border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] px-2 py-1">
+        <span className="flex-1" />
+        {navigation ? <Button type="button" variant="ghost" size="sm" onClick={() => navigation.openImageStudio({
+          artifactId: content.image.artifactId, url: content.image.url, filename: content.image.filename,
+          model: content.image.model, title: content.title, nodeId: record.id,
+        })} className="h-8 px-2 text-xs">编辑图片</Button> : null}
+        <ImageVersionsPanel filename={content.image.filename} images={navigation?.images ?? []} title={content.title} nodeId={record.id} />
+        <ImageDownloadButton filename={content.image.filename} />
+        {data.saving ? <span role="status" aria-label="正在保存" className="px-1"><LoaderCircle className="size-3 animate-spin text-[var(--cp-text-faint)]" /></span> : null}
       </div>
     </CreativeNodeFrame>
   );
@@ -775,7 +822,7 @@ function CreativeTableNode({ data, selected }: NodeProps<CanvasFlowNode>) {
       onToggleLock={() => void data.onSaveLayout(record.id, { ...record.layout, locked: !record.layout.locked })}
       onRestore={record.previousRevisionId ? () => void data.onRestoreRevision(record.id, record.previousRevisionId as string) : null}
     >
-      <div className="nodrag nopan min-h-0 flex-1 overflow-auto">
+      <div className="nodrag nopan nowheel min-h-0 flex-1 overflow-auto overscroll-contain">
         <table className="w-full min-w-[620px] border-collapse text-left text-[12px] leading-5">
           <thead className="sticky top-0 z-10 bg-[var(--cp-bg-subtle)]">
             <tr>
@@ -802,7 +849,9 @@ function CreativeTableNode({ data, selected }: NodeProps<CanvasFlowNode>) {
                 {row.cells.map((cell, columnIndex) => (
                   <td key={`${row.id}-${columnIndex}`} className="border-b border-[var(--cp-border-subtle)] px-2 py-1.5">
                     <textarea
-                      className="block min-h-10 w-full resize-none bg-transparent outline-none"
+                      className="block min-h-10 w-full resize-none overflow-hidden bg-transparent outline-none"
+                      ref={(element) => { if (element) { element.style.height = "auto"; element.style.height = `${element.scrollHeight}px`; } }}
+                      onInput={(event) => { event.currentTarget.style.height = "auto"; event.currentTarget.style.height = `${event.currentTarget.scrollHeight}px`; }}
                       aria-label={`第 ${rowIndex + 1} 行第 ${columnIndex + 1} 列`}
                       value={cell}
                       onChange={(event) => updateCell(row.id, columnIndex, event.target.value)}

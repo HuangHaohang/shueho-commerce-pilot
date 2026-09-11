@@ -1,0 +1,4 @@
+interface:
+  display_name: "商品主图与卖点图"
+  short_description: "用清晰的产品图讲清卖点"
+  icon_large: "./assets/preview.webp"

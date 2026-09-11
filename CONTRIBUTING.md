@@ -35,6 +35,8 @@ npm run web:dev
 npm run jobs:thread-deletion
 ```
 
+The deletion worker is a required separate process for the local delete UI. Set `COMMERCE_RUNTIME_TENANT_ID` in ignored `apps/web/.env` to the provisioned local tenant UUID before starting it. Without this worker, confirmed deletion jobs remain queued and the sidebar continues showing deletion spinners.
+
 - Web: `http://127.0.0.1:3000`
 - Private Gateway: `http://127.0.0.1:8787`
 
@@ -130,3 +132,7 @@ Lifecycle changes must test the adapter state contract against the applied resea
 Nullable monthly call-count policy changes require the real PostgreSQL governance verifier: admit more than 100 reservations with only a money cap and still reject spending beyond that cap. Verify the actual UI preserves null on save, and deterministic quota failures finish without retries.
 
 Relevance changes must run evaluateProductionRelevance (production query construction, real local models, paired admission and date checks), retain DB evaluation and test per-request instructions. Optional semantic_scope comes from Harness/user constraints, never a backend intent classifier. Verify source-field coverage independently of delivered evidence with research-quality-summary.integration.test.ts against a disposable database. The hardcoding audit must distinguish remaining policies from verified fixes.
+
+### Local load validation
+
+Use the isolated drivers in [`scripts/load-test/`](scripts/load-test/README.md) for authenticated 20/30-user reads and an explicitly authorized batch of 10 native image Turns. Keep credentials/fixtures under ignored runtime storage, use disposable databases and a separate `CODEX_HOME`, and never restart the daily development/production Gateway to run these tests. Keep failed baseline results, actual image and native terminal timings, and the test environment in the report. Local production Web builds do not certify production transport, OS isolation, upstream quotas, or long-duration capacity.

@@ -1,5 +1,12 @@
 "use client";
 
+import { imageAssetRoot } from "@/lib/creative/image-assets";
+import { useImageEditSessions } from "@/lib/creative/use-image-edit-sessions";
+import { imageEditSource, imageEditFamily } from "@/lib/creative/image-edit-history";
+import { pasteComposerImages } from "@/lib/agent/clipboard-images";
+import { ImageEditMessage } from "@/components/creative/image-edit-message";
+import { isStudioSkillName } from "@/lib/creative/creative-method-contract";
+
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import {
@@ -42,7 +49,6 @@ import {
   Plus,
   SendHorizontal,
   Settings,
-  SlidersHorizontal,
   Sparkles,
   SquarePen,
   Store,
@@ -61,7 +67,7 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 
 import { AgentRequestUserInputPanel } from "@/components/agent/request-user-input-panel";
 import { AssistantMessageActions } from "@/components/agent/assistant-message-actions";
@@ -69,6 +75,7 @@ import { AssistantMarkdown } from "@/components/agent/assistant-markdown";
 import { ImagePreview } from "@/components/agent/image-preview";
 import {
   ComposerAddMenu,
+  SkillNavigationContext,
   SelectedSkillChip,
   useComposerSkillSelector,
 } from "@/components/agent/skill-selector";
@@ -166,11 +173,15 @@ import {
   type ProductInsightMethod,
 } from "@/lib/research/product-insight-contract";
 import {
+  isStructuredCopywritingEnvelope,
   tryParseStructuredCopywritingAnswer,
   tryParseStructuredCopywritingDraft,
   type CopywritingDraft,
 } from "@/lib/copywriting/brief";
 import { cn } from "@/lib/utils";
+import { ImageDownloadButton } from "@/components/creative/image-download-button";
+import { ModelAndReasoningControl } from "@/components/agent/model-and-reasoning-control";
+import { formatModelName, supportsReasoningControl, reasoningEffortOptions, type ReasoningEffort } from "@/lib/agent/model-presentation";
 
 type WorkMode = "chat" | "work";
 type WorkbenchView = "workbench" | "plugins" | "skills" | "creative" | "research" | "products";
@@ -206,7 +217,7 @@ type ThreadDeletionJobView = {
   }>;
 };
 
-type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max" | "ultra";
+
 type ExternalDataApprovalMode = "always_ask" | "task" | "policy";
 
 type ProviderModelSummary = {
@@ -292,19 +303,6 @@ const taskGroupDefinitions: Array<{
 
 type SidebarFlyoutId = "more";
 
-const reasoningEffortOptions: Array<{
-  value: ReasoningEffort;
-  label: string;
-  color: string;
-  gradientEnd: string;
-}> = [
-  { value: "low", label: "轻度", color: "#8f8f8f", gradientEnd: "#8f8f8f" },
-  { value: "medium", label: "中", color: "#10a37f", gradientEnd: "#10a37f" },
-  { value: "high", label: "高", color: "#1687e8", gradientEnd: "#1687e8" },
-  { value: "xhigh", label: "极高", color: "#4f66d8", gradientEnd: "#5c55d8" },
-  { value: "max", label: "最高", color: "#6f4bd8", gradientEnd: "#8c4cdb" },
-  { value: "ultra", label: "超高", color: "#4f46c8", gradientEnd: "#c64dde" },
-];
 
 export function CommerceWorkbenchShell({
   allowPublicRegistration,
@@ -321,7 +319,7 @@ export function CommerceWorkbenchShell({
   const [submittedDraft, setSubmittedDraft] = useState<string | null>(null);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
   const [authDialogMode, setAuthDialogMode] = useState<AuthMode>("login");
-  const [selectedModel, setSelectedModel] = useState("gpt-5.6-sol");
+  const [selectedModel, setSelectedModel] = useState("gpt-5.6-luna");
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffort>("low");
   const [externalDataApprovalMode, setExternalDataApprovalMode] = useState<ExternalDataApprovalMode>("always_ask");
   const [selectedSkill, setSelectedSkill] = useState<SkillInventoryItem | null>(null);
@@ -453,7 +451,7 @@ export function CommerceWorkbenchShell({
   useEffect(() => {
     const models = modelsQuery.data?.agentModels;
     if (models?.length && !models.some((model) => model.id === selectedModel)) {
-      setSelectedModel(models[0].id);
+      setSelectedModel(models.find((model) => model.id === "gpt-5.6-luna")?.id ?? models[0].id);
     }
   }, [modelsQuery.data, selectedModel]);
 
@@ -486,6 +484,11 @@ export function CommerceWorkbenchShell({
         }
       : null,
   });
+  const imageSessions = useImageEditSessions(activeView === "creative" ? agentThread.threadId : null, {
+    model: selectedModel, effort: supportsReasoningControl(selectedModel) ? reasoningEffort : undefined,
+  }, agentThread.images);
+  const editThread = imageSessions.active;
+  const projectImages = useMemo(() => [...new Map([...agentThread.images, ...imageSessions.images].map((image) => [image.filename, image])).values()], [agentThread.images, imageSessions.images]);
   const hasActiveThread = Boolean(agentThread.threadId || agentThread.messages.length);
   const navigationLocked =
     (agentThread.status === "connecting" && !agentThread.loadingHistory) ||
@@ -645,15 +648,14 @@ export function CommerceWorkbenchShell({
           : activeView === "research"
             ? "commerce-product-insight"
             : activeManagedEntryWorkflow ?? undefined;
+        flushSync(() => setDraft(""));
         const sent = steeringWorkflow
           ? await agentThread.steerMessage(value, {
               workflow: steeringWorkflow,
               ...(activeView === "research" ? { insightMethod: productInsightMethod } : {}),
             })
           : await agentThread.enqueueMessage(value);
-        if (sent) {
-          setDraft("");
-        }
+        if (!sent) setDraft((current) => current || value);
       } else if (activeView === "creative" || activeView === "research") {
         if (
           activeView === "creative" &&
@@ -675,14 +677,17 @@ export function CommerceWorkbenchShell({
         }
         setAttachmentError(null);
         const attachmentsForSubmit = takeComposerAttachments();
-        const creativeMethodForSubmit = activeView === "creative" ? creativeMethod : null;
+        const studioSkillForSubmit = activeView === "creative" && isStudioSkillName(selectedSkill?.name) ? selectedSkill : null;
+        const creativeMethodForSubmit = activeView === "creative" && !studioSkillForSubmit ? creativeMethod : null;
         const productsForSubmit = productContextMode === "selected" ? selectedProducts : [];
-        setDraft("");
+        flushSync(() => setDraft(""));
         if (creativeMethodForSubmit) setCreativeMethod(null);
+        if (studioSkillForSubmit) setSelectedSkill(null);
         const submitted = await agentThread.submit(value || "请结合附件继续处理。", {
           workflow: activeView === "creative" ? "commerce-creative-project" : "commerce-product-insight",
           ...(activeView === "research" ? { insightMethod: productInsightMethod } : {}),
           ...(creativeMethodForSubmit ? { creativeMethod: creativeMethodForSubmit } : {}),
+          ...(studioSkillForSubmit ? { skillName: studioSkillForSubmit.name, displaySkillName: studioSkillForSubmit.name } : {}),
           ...(creativeMethodForSubmit ? { displaySkillName: creativeMethodSkillName(creativeMethodForSubmit) } : {}),
           attachments: attachmentsForSubmit,
           externalDataApprovalMode,
@@ -695,14 +700,15 @@ export function CommerceWorkbenchShell({
           finalizeSubmittedAttachments(attachmentsForSubmit);
         } else {
           restoreComposerAttachments(attachmentsForSubmit);
-          setDraft(value);
+          setDraft((current) => current || value);
           if (creativeMethodForSubmit) setCreativeMethod(creativeMethodForSubmit);
+          if (studioSkillForSubmit) setSelectedSkill(studioSkillForSubmit);
         }
       } else {
         const attachmentsForSubmit = takeComposerAttachments();
         const skillForSubmit = selectedSkill;
         const productsForSubmit = productContextMode === "selected" ? selectedProducts : [];
-        setDraft("");
+        flushSync(() => setDraft(""));
         setSelectedSkill(null);
         const submitted = await agentThread.submit(
           value,
@@ -721,7 +727,7 @@ export function CommerceWorkbenchShell({
           finalizeSubmittedAttachments(attachmentsForSubmit);
         } else {
           restoreComposerAttachments(attachmentsForSubmit);
-          setDraft(value);
+          setDraft((current) => current || value);
           setSelectedSkill(skillForSubmit);
         }
       }
@@ -922,6 +928,7 @@ export function CommerceWorkbenchShell({
       agentThread.compacting
     ) return;
     setCreativeMethod(method);
+    setSelectedSkill(null);
     setDraft(creativeMethodStarterPrompt(method));
     requestAnimationFrame(() => {
       const input = document.querySelector<HTMLTextAreaElement>("[data-conversation-input]");
@@ -951,18 +958,23 @@ export function CommerceWorkbenchShell({
     message: string;
     sourceFilenames: string[];
   }) {
-    if (
-      navigationLocked || !agentThread.threadId || !sourceFilenames.length ||
-      agentThread.status === "connecting" || agentThread.status === "running" || agentThread.compacting
-    ) {
-      return false;
+    if (!editThread || !imageSessions.ready || !sourceFilenames.length || sourceFilenames[0] !== imageSessions.activeFilename || editThread.status === "running" || editThread.compacting) return false;
+    const attachments = takeComposerAttachments();
+    try {
+      const accepted = await editThread.submit(message, {
+        workflow: "commerce-creative-project",
+        imageEditSourceFilenames: sourceFilenames,
+        attachments,
+        externalDataApprovalMode,
+        productContextMode: "none",
+      });
+      if (accepted) finalizeSubmittedAttachments(attachments);
+      else restoreComposerAttachments(attachments);
+      return accepted;
+    } catch (error) {
+      restoreComposerAttachments(attachments);
+      throw error;
     }
-    return agentThread.submit(message, {
-      workflow: "commerce-creative-project",
-      imageEditSourceFilenames: sourceFilenames,
-      externalDataApprovalMode,
-      productContextMode: "none",
-    });
   }
 
   function openProductInsights() {
@@ -1102,25 +1114,25 @@ export function CommerceWorkbenchShell({
   function addComposerFiles(files: FileList | File[]) {
     const incoming = Array.from(files);
     setAttachmentError(null);
-    if (!incoming.length) return;
+    if (!incoming.length) return false;
     const accepted = incoming.filter(isAcceptedComposerFile);
     if (accepted.length !== incoming.length) {
       setAttachmentError("支持 PNG、JPEG、WebP、PDF、DOCX、XLSX、CSV、JSON、Markdown 和文本文件。");
-      return;
+      return false;
     }
     if (accepted.some((file) => !file.size || file.size > 5 * 1024 * 1024)) {
       setAttachmentError("单个附件必须小于 5 MB。");
-      return;
+      return false;
     }
     if (composerAttachments.length + accepted.length > 8) {
       setAttachmentError("每次最多添加 8 个附件。");
-      return;
+      return false;
     }
     const totalBytes = [...composerAttachments.map((attachment) => attachment.size), ...accepted.map((file) => file.size)]
       .reduce((total, size) => total + size, 0);
     if (totalBytes > 5 * 1024 * 1024) {
       setAttachmentError("一次提交的附件总大小不能超过 5 MB。");
-      return;
+      return false;
     }
     setComposerAttachments((current) => {
       const next = [
@@ -1142,6 +1154,7 @@ export function CommerceWorkbenchShell({
       composerAttachmentsRef.current = next;
       return next;
     });
+    return true;
   }
 
   function removeComposerAttachment(id: string) {
@@ -1233,11 +1246,11 @@ export function CommerceWorkbenchShell({
         canManageExternalDataPolicy={canManageExternalDataPolicy}
         productContextMode={productContextMode}
         selectedProducts={selectedProducts}
-        skills={activeView === "creative" || activeView === "research" ? [] : enabledSkills}
-        skillsLoading={activeView === "creative" || activeView === "research" ? false : skillsQuery.isLoading}
+        skills={activeView === "research" ? [] : activeView === "creative" ? enabledSkills.filter((skill) => isStudioSkillName(skill.name)) : enabledSkills}
+        skillsLoading={activeView === "research" ? false : skillsQuery.isLoading}
         plugins={enabledPlugins}
         pluginsLoading={pluginsQuery.isLoading}
-        selectedSkill={activeView === "creative" || activeView === "research" ? null : selectedSkill}
+        selectedSkill={activeView === "research" || (activeView === "creative" && !isStudioSkillName(selectedSkill?.name)) ? null : selectedSkill}
         attachments={composerAttachments}
         attachmentError={attachmentError}
         onChange={setDraft}
@@ -1257,7 +1270,7 @@ export function CommerceWorkbenchShell({
         onSelectedProductsChange={setSelectedProducts}
         onRemoveSelectedProduct={removeSelectedProduct}
         onOpenProductLibrary={openProductLibrary}
-        onSkillSelect={setSelectedSkill}
+        onSkillSelect={(skill) => { setSelectedSkill(skill); if (activeView === "creative") setCreativeMethod(null); }}
         onSkillClear={() => setSelectedSkill(null)}
         onOpenPlugin={openPluginFromComposer}
         onAddFiles={addComposerFiles}
@@ -1294,6 +1307,7 @@ export function CommerceWorkbenchShell({
   } satisfies SidebarProps;
 
   return (
+    <SkillNavigationContext.Provider value={() => setActiveView("skills")}>
     <div className="flex h-dvh overflow-hidden bg-[var(--cp-bg)] text-[var(--cp-text)]">
       {activeView !== "creative" ? (
         <Sidebar {...sidebarProps} />
@@ -1314,22 +1328,56 @@ export function CommerceWorkbenchShell({
         {activeView === "creative" ? (
           <CreativeSpaceWorkbench
             projects={creativeProjects}
+            running={agentThread.status === "connecting" || agentThread.status === "running"}
+            runError={(imageSessions.error ?? editThread?.error)}
             activeProjectId={agentThread.threadId}
             messages={agentThread.messages}
-            images={agentThread.images}
+            images={projectImages}
             navigationDisabled={navigationLocked}
             onCreateProject={startCreativeProject}
             onSelectProject={openCreativeProject}
             onBackToWorkbench={startNewTask}
+            imageEditControllers={imageSessions.controllers}
+            onActiveImageChange={imageSessions.activate}
+            editingFilenames={imageSessions.editingFilenames}
+            imageEditRunning={Boolean(editThread && ["connecting", "running"].includes(editThread.status))}
+            imageEditUnavailable={!imageSessions.ready}
             onSubmitImageEdit={submitCreativeImageEdit}
+            referenceAttachmentCount={composerAttachments.length}
+            renderImageEditConversation={(filename) => {
+              const root = imageAssetRoot(filename, projectImages);
+              const legacyTurns = new Set(agentThread.messages.filter((message) => {
+                const source = imageEditSource(message, projectImages);
+                return source && imageAssetRoot(source, projectImages) === root;
+              }).map((message) => message.turnId).filter(Boolean));
+              const legacyMessages = agentThread.messages.filter((message) => message.turnId && legacyTurns.has(message.turnId));
+              return <>
+                {legacyMessages.length ? <ImageEditingConversation filename={filename} messages={legacyMessages} images={projectImages} activities={agentThread.activities} skills={enabledSkills} running={false} currentTurnId={null} /> : null}
+                {imageSessions.olderRuntimes.map((runtime) => <ImageEditingConversation key={runtime.threadId} filename={filename} messages={runtime.messages} images={projectImages} activities={runtime.activities} skills={enabledSkills} running={runtime.status === "running"} currentTurnId={runtime.currentTurnId} />)}
+                {editThread ? <ImageEditingConversation filename={filename} messages={editThread.messages} images={projectImages} activities={editThread.activities} skills={enabledSkills} running={editThread.status === "connecting" || editThread.status === "running"} currentTurnId={editThread.currentTurnId} /> : null}
+              </>;
+            }}
+            imageEditInteraction={(
+              <>
+                {editThread?.pendingUserInput ? (
+                  <AgentRequestUserInputPanel
+                    key={editThread?.pendingUserInput.requestId}
+                    questions={editThread?.pendingUserInput.questions}
+                    submitting={editThread.answeringUserInput}
+                    onSubmit={async (answers) => { await editThread.respondToUserInput(answers); }}
+                  />
+                ) : null}
+                {(imageSessions.error ?? editThread?.error) ? <p role="alert" className="mt-1 text-xs text-[var(--cp-danger)]">{(imageSessions.error ?? editThread?.error)}</p> : null}
+              </>
+            )}
             renderImageEditComposer={(config) => (
               <AgentComposer
                 value={config.value}
                 placeholder={config.placeholder}
-                running={agentThread.status === "connecting" || agentThread.status === "running"}
-                canInterrupt={false}
-                interrupting={false}
-                compacting={agentThread.compacting}
+                running={Boolean(editThread && ["connecting", "running"].includes(editThread.status))}
+                canInterrupt={Boolean(editThread?.activeTurnId)}
+                interrupting={editThread?.interrupting ?? false}
+                compacting={editThread?.compacting ?? false}
                 queueSubmitting={false}
                 queuedMessages={[]}
                 queueOperationId={null}
@@ -1342,12 +1390,15 @@ export function CommerceWorkbenchShell({
                 skills={[]}
                 skillsLoading={false}
                 selectedSkill={null}
-                attachments={[]}
+                attachments={composerAttachments}
+                attachmentError={attachmentError}
+                onAddFiles={addComposerFiles}
+                onRemoveAttachment={removeComposerAttachment}
                 contentAboveInput={config.context}
                 submitReady={config.submitReady}
                 composerInputRef={config.inputRef}
                 toolVisibility={{
-                  add: false,
+                  add: true,
                   access: false,
                   products: false,
                   model: true,
@@ -1356,7 +1407,7 @@ export function CommerceWorkbenchShell({
                 disabled={config.disabled}
                 onChange={config.onChange}
                 onSubmit={config.onSubmit}
-                onInterrupt={() => undefined}
+                onInterrupt={() => { void editThread?.interrupt(); }}
                 onQueueDelete={async () => false}
                 onQueueSteer={async () => false}
                 onQueueClear={async () => undefined}
@@ -1608,6 +1659,7 @@ export function CommerceWorkbenchShell({
         />
       ) : null}
     </div>
+    </SkillNavigationContext.Provider>
   );
 }
 
@@ -1794,12 +1846,26 @@ function ConversationWorkspace({
   const [hoveredMinimapMarkerId, setHoveredMinimapMarkerId] = useState<string | null>(null);
   const running = !loadingHistory && (status === "connecting" || status === "running");
   const compactPanel = layout === "creative-panel";
-  const latestUserSequence = messages.reduce(
+  const retryTarget = retryingMessageId ? messages.find((message) => message.id === retryingMessageId) : undefined;
+  const retrySource = retryTarget ? findRetrySourceMessage(messages, retryTarget) : null;
+  const visibleDuringRetry = (entry: { id: string; sequence: number; turnId?: string | null }) =>
+    !retrySource || entry.sequence < retrySource.sequence || entry.id === retrySource.id ||
+    Boolean(currentTurnId && currentTurnId !== retrySource.turnId && entry.turnId === currentTurnId);
+  // Hide only the local presentation while native retry acceptance is pending.
+  // The original history stays intact and reappears if the request is rejected.
+  const retryVisibleMessages = messages.filter(visibleDuringRetry);
+  const retryVisibleImages = images.filter(visibleDuringRetry);
+  const latestUserSequence = retryVisibleMessages.reduce(
     (latestSequence, message) => (message.role === "user" ? Math.max(latestSequence, message.sequence) : latestSequence),
     -1,
   );
-  const visibleMessages = messages
+  const editStarts = retryVisibleMessages.filter((message) => imageEditSource(message, retryVisibleImages));
+  const editMessageIds = new Set(editStarts.map((message) => message.id));
+  const editTurnIds = new Set(editStarts.map((message) => message.turnId).filter(Boolean));
+  const currentImageEdit = Boolean(currentTurnId && editTurnIds.has(currentTurnId));
+  const visibleMessages = retryVisibleMessages
     .filter((message) => {
+      if (message.turnId && editTurnIds.has(message.turnId) && !editMessageIds.has(message.id)) return false;
       if (message.role === "user" || message.phase === "final_answer") {
         return true;
       }
@@ -1811,14 +1877,14 @@ function ConversationWorkspace({
     .sort((left, right) => left.sequence - right.sequence);
   const messagesBeforeStatus = visibleMessages.filter((message) => message.sequence <= latestUserSequence);
   const messagesAfterStatus = visibleMessages.filter((message) => message.sequence > latestUserSequence);
-  const imagesBeforeStatus = images.filter((image) => image.sequence <= latestUserSequence);
-  const imagesAfterStatus = images.filter((image) => image.sequence > latestUserSequence);
+  const imagesBeforeStatus = retryVisibleImages.filter((image) => !editTurnIds.has(image.turnId) && image.sequence <= latestUserSequence);
+  const imagesAfterStatus = retryVisibleImages.filter((image) => !editTurnIds.has(image.turnId) && image.sequence > latestUserSequence);
   const timelineBeforeStatus = [
     ...messagesBeforeStatus.map((message) => ({ type: "message" as const, sequence: message.sequence, message })),
     ...imagesBeforeStatus.map((image) => ({ type: "image" as const, sequence: image.sequence, image })),
   ].sort((left, right) => left.sequence - right.sequence);
-  const currentActivities = currentTurnId
-    ? activities.filter((activity) => activity.turnId === currentTurnId)
+  const currentActivities = currentTurnId && !currentImageEdit
+    ? activities.filter((activity) => activity.turnId === currentTurnId && visibleDuringRetry(activity))
     : [];
   const activitiesByTurnId = useMemo(() => {
     const grouped = new Map<string, AgentActivity[]>();
@@ -2027,7 +2093,7 @@ function ConversationWorkspace({
         >
           <h1 className="sr-only">{title}</h1>
 
-          {loadingHistory ? (
+          {loadingHistory && !messages.length && !images.length ? (
             <div className="flex min-h-28 items-center justify-center gap-2 text-sm text-[var(--cp-text-faint)]" role="status">
               <Loader2 className="size-4 animate-spin" aria-hidden="true" />
               <span>正在加载对话</span>
@@ -2054,11 +2120,11 @@ function ConversationWorkspace({
             </div>
           ) : null}
 
-          {!loadingHistory ? (
+          {!loadingHistory || messages.length > 0 || images.length > 0 ? (
             <div className="space-y-6">
               {timelineBeforeStatus.map((entry) =>
                 entry.type === "message" ? (
-                  <ConversationTimelineMessage
+                  (editMessageIds.has(entry.message.id) ? null : <ConversationTimelineMessage
                     key={entry.message.id}
                     message={entry.message}
                     activities={entry.message.turnId ? activitiesByTurnId.get(entry.message.turnId) ?? [] : []}
@@ -2069,26 +2135,28 @@ function ConversationWorkspace({
                     retryDisabled={running || compacting || Boolean(retryingMessageId)}
                     onMessageFeedback={onMessageFeedback}
                     onMessageRetry={onMessageRetry}
-                  />
+                  />)
                 ) : (
                   <GeneratedImageCard key={entry.image.id} image={entry.image} />
                 ),
               )}
               <ProcessingStatus
                 key={startedAt ?? "no-active-turn"}
-                running={running}
+                running={running && !currentImageEdit}
+                preparing={status === "connecting"}
+                retrying={Boolean(retryingMessageId)}
                 compacting={compacting}
-                durationMs={durationMs}
+                durationMs={currentImageEdit ? null : durationMs}
                 startedAt={startedAt}
               />
-              {pendingUserInput ? (
+              {pendingUserInput && !currentImageEdit ? (
                 <p className="cp-running-shimmer m-0 min-h-7 py-1 text-[13px]">正在等待你的回答</p>
               ) : null}
               {activeTimeline.length > 0 ? (
                 <div className="space-y-4">
                   {activeTimeline.map((entry) =>
                     entry.type === "message" ? (
-                      <ConversationTimelineMessage
+                      (editMessageIds.has(entry.message.id) ? null : <ConversationTimelineMessage
                         key={entry.message.id}
                         message={entry.message}
                         activities={entry.message.turnId ? activitiesByTurnId.get(entry.message.turnId) ?? [] : []}
@@ -2099,7 +2167,7 @@ function ConversationWorkspace({
                         retryDisabled={running || compacting || Boolean(retryingMessageId)}
                         onMessageFeedback={onMessageFeedback}
                         onMessageRetry={onMessageRetry}
-                      />
+                      />)
                     ) : entry.type === "image" ? (
                       <GeneratedImageCard key={entry.image.id} image={entry.image} />
                     ) : entry.type === "activity" ? (
@@ -2170,7 +2238,7 @@ function ConversationWorkspace({
             </IconTooltip>
           </div>
         ) : null}
-        {pendingUserInput ? (
+        {pendingUserInput && !currentImageEdit ? (
           <AgentRequestUserInputPanel
             key={pendingUserInput.requestId}
             questions={pendingUserInput.questions}
@@ -2420,7 +2488,10 @@ function AgentComposer({
       ) : null}
       <form
         ref={formRef}
-        className="relative mx-auto grid min-h-[92px] max-h-[260px] w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[auto_36px] items-end gap-x-1 gap-y-1 rounded-[24px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)]"
+        onPaste={(event) => {
+          if (!disabled && !running && visibleTools.add) pasteComposerImages(event, onAddFiles);
+        }}
+        className="relative mx-auto grid min-h-[92px] max-h-[260px] w-full max-w-[768px] grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[minmax(0,1fr)_36px] items-end gap-x-1 gap-y-1 rounded-[24px] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-2 py-2 shadow-[var(--cp-shadow-composer)]"
         onSubmit={(event) => {
           event.preventDefault();
           if (submissionReady && !disabled && (!running || canInterrupt)) void onSubmit();
@@ -2519,7 +2590,7 @@ function AgentComposer({
             />
           ) : null}
         </div>
-        <div className="col-span-3 col-start-1 row-start-1 min-w-0 px-3 pt-1">
+        <div className="cp-flat-scrollbar col-span-3 col-start-1 row-start-1 min-h-0 min-w-0 overflow-y-auto overscroll-contain px-3 pt-1">
           {contentAboveInput ? <div className="mb-1.5">{contentAboveInput}</div> : null}
           {selectedSkill ? (
             <div className="mb-1.5 flex min-w-0">
@@ -2568,7 +2639,7 @@ function AgentComposer({
               }
             }}
             placeholder={placeholder}
-            className="cp-composer-textarea block min-h-[60px] max-h-[120px] w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-2 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
+            className="cp-composer-textarea block min-h-[60px] max-h-[120px] w-full min-w-0 resize-none overflow-y-hidden border-0 bg-transparent px-0 py-1.5 text-[14px] leading-5 text-[var(--cp-text)] outline-none placeholder:text-[var(--cp-text-faint)]"
             aria-label={placeholder}
             disabled={disabled}
           />
@@ -3081,6 +3152,37 @@ function ConversationAttachmentList({ attachments }: { attachments: Conversation
   );
 }
 
+function ImageEditingConversation({ filename, messages, images, activities, skills, running, currentTurnId }: {
+  filename: string; messages: ConversationMessage[]; images: GeneratedImageItem[]; activities: AgentActivity[];
+  skills: SkillInventoryItem[]; running: boolean; currentTurnId: string | null;
+}) {
+  const turns = new Set(messages.map((message) => message.turnId).filter(Boolean));
+  const visible = messages;
+  const timeline = [
+    ...visible.map((message) => ({ type: "message" as const, sequence: message.sequence, message })),
+    ...images.filter((image) => image.turnId && turns.has(image.turnId)).map((image) => ({ type: "image" as const, sequence: image.sequence, image })),
+  ].sort((a, b) => a.sequence - b.sequence);
+  const editActivities = activities.filter((activity) => activity.turnId && turns.has(activity.turnId));
+  const turnActivities = editActivities.filter((activity) => activity.kind !== "image");
+  const imageReady = Boolean(currentTurnId && images.some((image) => image.turnId === currentTurnId));
+  const imageActivity = [...editActivities].reverse().find((activity) => activity.turnId === currentTurnId && activity.kind === "image");
+  const generatingMore = editActivities.some((activity) => activity.turnId === currentTurnId && activity.kind === "image" && activity.status === "running");
+  const imageProgress = imageReady
+    ? generatingMore ? "正在生成后续图片…" : null
+    : imageActivity?.status === "failed" ? "图片工具未完成，等待任务返回结果…"
+    : imageActivity?.status === "completed" ? "正在载入图片…" : "正在处理修改…";
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "nearest" }); }, [messages, images]);
+  return <div className="space-y-4" aria-label="完整图片编辑记录">
+    {timeline.map((entry) => entry.type === "message"
+      ? <ConversationMessageView key={entry.message.id} message={entry.message} activities={activities.filter((activity) => activity.turnId === entry.message.turnId)} skills={skills} />
+      : <GeneratedImageCard key={entry.image.id} image={entry.image} />)}
+    {turnActivities.length ? <ActivityDisclosure activities={turnActivities} /> : null}
+    {running && imageProgress && currentTurnId && turns.has(currentTurnId) ? <div role="status" className="text-xs text-[var(--cp-text-muted)]">{imageProgress}</div> : null}
+    <div ref={endRef} />
+  </div>;
+}
+
 function ConversationMessageView({
   message,
   activities,
@@ -3108,7 +3210,7 @@ function ConversationMessageView({
           {message.products?.length ? (
             <SelectedProductChips products={message.products} compact readOnly inline />
           ) : null}
-          {content}
+          <ImageEditMessage content={content} turnId={message.turnId} />
         </div>
         {message.variant === "steer" && message.delivery === "pending" ? (
           <span className="cp-running-shimmer pr-2 text-[11px] text-[var(--cp-text-faint)]">
@@ -3133,12 +3235,21 @@ function ConversationMessageView({
   }
   const copywritingDraft = tryParseStructuredCopywritingDraft(message.content);
   if (copywritingDraft) return <CopywritingDraftResponse draft={copywritingDraft} />;
-  const content = tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
+  const answer = tryParseStructuredCopywritingAnswer(message.content);
+  if (answer === "") return null;
+  if (answer === null && isStructuredCopywritingEnvelope(message.content)) {
+    return (
+      <p role="status" className="m-0 text-[13px] leading-5 text-[var(--cp-text-muted)]">
+        {message.status === "streaming" ? "正在生成创作内容…" : "创作结果格式不完整，暂时无法展示。"}
+      </p>
+    );
+  }
+  const content = answer ?? message.content;
 
   return (
     <div
       className={cn(
-        "text-[14px] leading-6 text-[var(--cp-text)]",
+        "min-w-0 max-w-full break-words [overflow-wrap:anywhere] text-[14px] leading-6 text-[var(--cp-text)]",
         message.phase === "commentary" && "text-[13px] font-medium leading-5 text-[var(--cp-text)]",
       )}
     >
@@ -3199,21 +3310,13 @@ function guessComposerFileMimeType(filename: string): string {
 
 function CopywritingDraftResponse({ draft }: { draft: CopywritingDraft }) {
   return (
-    <article className="text-[14px] leading-6 text-[var(--cp-text)]" data-copywriting-delivery>
-      <h2 className="mb-4 mt-0 text-[19px] font-semibold leading-7">{draft.title}</h2>
+    <article className="min-w-0 max-w-full overflow-hidden break-words [overflow-wrap:anywhere] text-[14px] leading-6 text-[var(--cp-text)]" data-copywriting-delivery>
+      {draft.title ? <h2 className="mb-4 mt-0 text-[19px] font-semibold leading-7">{draft.title}</h2> : null}
       <AssistantMarkdown content={draft.body} />
       {draft.callToAction ? (
         <div className="mt-5 border-t border-[var(--cp-border-subtle)] pt-4">
           <div className="mb-1 text-xs font-medium text-[var(--cp-text-muted)]">行动引导</div>
           <p className="m-0">{draft.callToAction}</p>
-        </div>
-      ) : null}
-      {draft.complianceNotes.length ? (
-        <div className="mt-5 flex items-start gap-2 border-t border-[var(--cp-border-subtle)] pt-4 text-xs leading-5 text-[var(--cp-warning)]">
-          <CircleAlert className="mt-0.5 size-4 shrink-0" strokeWidth={1.8} />
-          <div className="space-y-1">
-            {draft.complianceNotes.map((note) => <p key={note} className="m-0">{note}</p>)}
-          </div>
         </div>
       ) : null}
     </article>
@@ -3254,9 +3357,6 @@ function readAssistantResponseText(message: ConversationMessage): string {
       draft.title,
       draft.body,
       draft.callToAction ? `行动引导\n${draft.callToAction}` : "",
-      draft.complianceNotes.length
-        ? `合规备注\n${draft.complianceNotes.join("\n")}`
-        : "",
     ].filter(Boolean).join("\n\n");
   }
   return tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
@@ -3581,35 +3681,40 @@ function QueuedSubmissionList({
 
 function ProcessingStatus({
   running,
+  preparing = false,
+  retrying = false,
   compacting,
   durationMs,
   startedAt,
 }: {
   running: boolean;
+  preparing?: boolean;
+  retrying?: boolean;
   compacting: boolean;
   durationMs: number | null;
   startedAt: number | null;
 }) {
-  const [elapsedMs, setElapsedMs] = useState(() =>
-    startedAt ? Math.max(0, Date.now() - startedAt) : 0,
-  );
+  const thinkingStartedAt = useRef<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
-    if (!running) {
-      return;
-    }
-    const updateElapsed = () => {
-      const nextElapsed = startedAt ? Math.max(0, Date.now() - startedAt) : 0;
-      setElapsedMs((currentElapsed) => Math.max(currentElapsed, nextElapsed));
-    };
+    if (!running && !preparing) { thinkingStartedAt.current = null; return; }
+    thinkingStartedAt.current ??= startedAt ?? Date.now();
+    if (startedAt) thinkingStartedAt.current = Math.min(thinkingStartedAt.current, startedAt);
+    const updateElapsed = () => setElapsedMs(Math.max(0, Date.now() - thinkingStartedAt.current!));
     updateElapsed();
     const timer = window.setInterval(updateElapsed, 1_000);
     return () => window.clearInterval(timer);
-  }, [running, startedAt]);
+  }, [running, startedAt, preparing]);
 
+  if (preparing) {
+    return <div role="status" className="cp-running-shimmer min-h-5 text-sm text-[var(--cp-text-muted)]">
+      正在思考 {formatDuration(elapsedMs)}
+    </div>;
+  }
   if (!running && durationMs === null) {
     return null;
   }
-  const elapsed = durationMs ?? elapsedMs;
+  const elapsed = running ? elapsedMs : durationMs ?? elapsedMs;
   return (
     <div
       data-conversation-minimap-anchor
@@ -3617,7 +3722,7 @@ function ProcessingStatus({
       data-minimap-kind="status"
       data-minimap-preview={
         running
-          ? `${compacting ? "正在整理上下文" : "正在处理"} ${formatDuration(elapsed)}`
+          ? `${compacting ? "正在整理上下文" : "正在思考"} ${formatDuration(elapsed)}`
           : `已处理 ${formatDuration(elapsed)}`
       }
       className="min-h-5 text-sm text-[var(--cp-text-muted)]"
@@ -3625,7 +3730,7 @@ function ProcessingStatus({
     >
       {running ? (
         <span className="cp-running-shimmer">
-          {compacting ? "正在整理上下文" : "正在处理"} {formatDuration(elapsed)}
+          {compacting ? "正在整理上下文" : "正在思考"} {formatDuration(elapsed)}
         </span>
       ) : (
         `已处理 ${formatDuration(elapsed)}`
@@ -3673,6 +3778,10 @@ function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
           imageClassName={imageClassName}
         />
       )}
+      <div className="flex flex-wrap items-center gap-1 sm:col-span-2">
+        {navigation ? <Button type="button" variant="ghost" size="sm" onClick={() => navigation.openImageStudio({ artifactId: image.id, url: image.url, filename: image.filename, model: image.model, title: "AI 生成图片", nodeId: null })}>查看详情</Button> : null}
+        <ImageDownloadButton filename={image.filename} />
+      </div>
     </div>
   );
 }
@@ -4948,6 +5057,7 @@ function WorkComposer({
     <div className="w-full">
       <div
         ref={composerRootRef}
+        onPaste={(event) => pasteComposerImages(event, onAddFiles)}
         className="relative min-h-[var(--cp-composer-min-height)] rounded-[var(--cp-radius-composer)] border border-[var(--cp-border)] bg-[var(--cp-surface)] px-5 py-4 shadow-[var(--cp-shadow-composer)] transition-[border-color,box-shadow] duration-[var(--cp-duration-base)] focus-within:border-[var(--cp-border-strong)] focus-within:shadow-[var(--cp-shadow-composer)]"
       >
         <ComposerAddMenu
@@ -5278,327 +5388,6 @@ function ExternalDataAccessControl({
   );
 }
 
-function ModelAndReasoningControl({
-  compact = false,
-  models,
-  loading,
-  selectedModel,
-  reasoningEffort,
-  open,
-  disabled = false,
-  placement = "bottom",
-  onModelChange,
-  onReasoningEffortChange,
-  onOpenChange,
-}: {
-  compact?: boolean;
-  models: ProviderModelSummary[];
-  loading: boolean;
-  selectedModel: string;
-  reasoningEffort: ReasoningEffort;
-  open: boolean;
-  disabled?: boolean;
-  placement?: "top" | "bottom";
-  onModelChange: (model: string) => void;
-  onReasoningEffortChange: (effort: ReasoningEffort) => void;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const [panel, setPanel] = useState<"quick" | "advanced">("quick");
-  const [submenu, setSubmenu] = useState<"model" | "effort" | null>(null);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const effortIndex = Math.max(
-    0,
-    reasoningEffortOptions.findIndex((option) => option.value === reasoningEffort),
-  );
-  const effortOption = reasoningEffortOptions[effortIndex] ?? reasoningEffortOptions[0];
-  const effortLabel = effortOption.label;
-  const reasoningSupported = supportsReasoningControl(selectedModel);
-
-  useEffect(() => {
-    if (disabled) {
-      onOpenChange(false);
-      setSubmenu(null);
-    }
-  }, [disabled, onOpenChange]);
-
-  useEffect(() => {
-    if (!open) setSubmenu(null);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    function closeOnOutsidePointer(event: PointerEvent) {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
-        onOpenChange(false);
-        setSubmenu(null);
-      }
-    }
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        onOpenChange(false);
-        setSubmenu(null);
-      }
-    }
-    document.addEventListener("pointerdown", closeOnOutsidePointer);
-    window.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointer);
-      window.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [onOpenChange, open]);
-
-  function toggleControl() {
-    if (disabled) {
-      return;
-    }
-    onOpenChange(!open);
-    setPanel(reasoningSupported ? "quick" : "advanced");
-    setSubmenu(reasoningSupported ? null : "model");
-  }
-
-  return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        className={cn(
-          "flex h-9 items-center rounded-full bg-[var(--cp-bg-subtle)] text-sm text-[var(--cp-text)] transition-colors hover:bg-[var(--cp-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)] disabled:cursor-not-allowed disabled:text-[var(--cp-text-muted)] disabled:opacity-70 disabled:hover:bg-[var(--cp-bg-subtle)]",
-          compact ? "w-9 justify-center p-0" : "max-w-[210px] gap-1.5 px-4 max-sm:w-9 max-sm:justify-center max-sm:p-0",
-        )}
-        aria-label={disabled ? "任务运行中不可切换模型" : "模型和推理设置"}
-        aria-expanded={!disabled && open}
-        aria-haspopup="menu"
-        disabled={disabled}
-        title={disabled ? "任务运行中不可切换模型" : undefined}
-        onClick={toggleControl}
-      >
-        <Sparkles className={cn("size-4", !compact && "sm:hidden")} strokeWidth={1.8} aria-hidden="true" />
-        {!compact ? <span className="truncate font-medium max-sm:hidden">{loading ? "加载模型" : formatModelName(selectedModel)}</span> : null}
-        {!compact && reasoningSupported ? (
-          <span className="shrink-0 font-medium max-sm:hidden" style={{ color: effortOption.color }}>
-            {effortLabel}
-          </span>
-        ) : null}
-        {!compact ? <ChevronDown className="size-3.5 shrink-0 text-[var(--cp-text-faint)] max-sm:hidden" strokeWidth={1.8} /> : null}
-      </button>
-
-      {!disabled && open && panel === "quick" && reasoningSupported ? (
-        <div
-          role="menu"
-          aria-label="推理设置"
-          className={cn(
-            "absolute right-0 z-50 w-[226px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-3 shadow-[var(--cp-shadow-popover)]",
-            placement === "top" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
-          )}
-        >
-          <div className="relative h-8">
-            <input
-              type="range"
-              className="cp-reasoning-slider absolute inset-0 z-10 w-full cursor-grab active:cursor-grabbing"
-              min={0}
-              max={reasoningEffortOptions.length - 1}
-              step={1}
-              value={effortIndex}
-              aria-label={`推理强度：${effortLabel}`}
-              data-effort={reasoningEffort}
-              style={
-                {
-                  "--cp-slider-progress": `${(effortIndex / (reasoningEffortOptions.length - 1)) * 100}%`,
-                  "--cp-slider-color-start": effortOption.color,
-                  "--cp-slider-color-end": effortOption.gradientEnd,
-                } as React.CSSProperties
-              }
-              onChange={(event) => {
-                const option = reasoningEffortOptions[Number(event.target.value)];
-                if (option) {
-                  onReasoningEffortChange(option.value);
-                }
-              }}
-            />
-            <div className="pointer-events-none absolute inset-x-3 top-1/2 z-20 flex -translate-y-1/2 justify-between">
-              {reasoningEffortOptions.map((option, index) => (
-                <span
-                  key={option.value}
-                  className={cn(
-                    "size-1 rounded-full",
-                    index <= effortIndex ? "bg-white/70" : "bg-[var(--cp-border-strong)]",
-                  )}
-                />
-              ))}
-            </div>
-          </div>
-
-          {reasoningEffort === "ultra" ? (
-            <p className="mb-0 mt-1 text-center text-xs font-medium text-[#9847d1]">更快消耗用量额度</p>
-          ) : null}
-
-          <button
-            type="button"
-            className="mt-2 flex h-9 w-full items-center justify-between rounded-[var(--cp-radius-item)] px-2 text-sm text-[var(--cp-text-muted)] hover:bg-[var(--cp-bg-subtle)] hover:text-[var(--cp-text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-            onClick={() => {
-              setPanel("advanced");
-              setSubmenu(null);
-            }}
-          >
-            <span className="flex items-center gap-2">
-              <SlidersHorizontal className="size-4" strokeWidth={1.8} />
-              高级
-            </span>
-            <ChevronRight className="size-4" strokeWidth={1.8} />
-          </button>
-        </div>
-      ) : null}
-
-      {!disabled && open && panel === "advanced" ? (
-        <div
-          role="menu"
-          aria-label="高级模型设置"
-          className={cn(
-            "absolute right-0 z-50 w-[226px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)]",
-            placement === "top" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
-          )}
-        >
-          <button
-            type="button"
-            className="flex h-9 w-full items-center gap-1 rounded-[var(--cp-radius-item)] px-2 text-sm text-[var(--cp-text-muted)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-            onClick={() => {
-              setPanel("quick");
-              setSubmenu(null);
-            }}
-          >
-            高级
-            <ChevronDown className="size-3.5" strokeWidth={1.8} />
-          </button>
-
-          <SettingsMenuRow
-            label="模型"
-            value={formatModelName(selectedModel)}
-            active={submenu === "model"}
-            onClick={() => setSubmenu((current) => (current === "model" ? null : "model"))}
-          />
-          {reasoningSupported ? (
-            <SettingsMenuRow
-              label="推理强度"
-              value={effortLabel}
-              valueColor={effortOption.color}
-              active={submenu === "effort"}
-              onClick={() => setSubmenu((current) => (current === "effort" ? null : "effort"))}
-            />
-          ) : null}
-
-          {submenu === "model" ? (
-            <div className="absolute left-[calc(100%+8px)] top-9 max-h-[360px] w-[252px] overflow-y-auto rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)] max-[1500px]:left-auto max-[1500px]:right-[calc(100%+8px)]">
-              {models.length ? (
-                models.map((model) => (
-                  <button
-                    key={model.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={model.id === selectedModel}
-                    className="flex min-h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 py-2 text-left text-sm text-[var(--cp-text-soft)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                    onClick={() => {
-                      onModelChange(model.id);
-                      setSubmenu(null);
-                    }}
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block break-words">{formatModelName(model.id)}</span>
-                      {model.ownedBy ? (
-                        <span className="block text-xs text-[var(--cp-text-faint)]">{model.ownedBy}</span>
-                      ) : null}
-                    </span>
-                    {model.id === selectedModel ? <Check className="size-4 shrink-0" strokeWidth={2} /> : null}
-                  </button>
-                ))
-              ) : (
-                <div className="px-3 py-2 text-sm text-[var(--cp-text-muted)]">
-                  {loading ? "正在加载模型" : "模型列表不可用"}
-                </div>
-              )}
-            </div>
-          ) : null}
-
-          {submenu === "effort" && reasoningSupported ? (
-            <div className="absolute left-[calc(100%+8px)] top-[84px] w-[190px] rounded-[var(--cp-radius-popover)] border border-[var(--cp-border-subtle)] bg-[var(--cp-surface)] p-2 shadow-[var(--cp-shadow-popover)] max-[1500px]:left-auto max-[1500px]:right-[calc(100%+8px)]">
-              {reasoningEffortOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={option.value === reasoningEffort}
-                  className="flex h-10 w-full items-center justify-between rounded-[var(--cp-radius-item)] px-3 text-sm text-[var(--cp-text-soft)] hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]"
-                  onClick={() => {
-                    onReasoningEffortChange(option.value);
-                    setSubmenu(null);
-                  }}
-                >
-                  <span style={{ color: option.color }}>{option.label}</span>
-                  {option.value === reasoningEffort ? <Check className="size-4" strokeWidth={2} /> : null}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function SettingsMenuRow({
-  label,
-  value,
-  valueColor,
-  active,
-  onClick,
-}: {
-  label: string;
-  value: string;
-  valueColor?: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      className={cn(
-        "flex min-h-10 w-full items-center gap-3 rounded-[var(--cp-radius-item)] px-3 text-left text-sm hover:bg-[var(--cp-bg-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--cp-focus)]",
-        active && "bg-[var(--cp-bg-subtle)]",
-      )}
-      onClick={onClick}
-    >
-      <span className="shrink-0 text-[var(--cp-text)]">{label}</span>
-      <span
-        className="min-w-0 flex-1 truncate text-right text-[var(--cp-text-muted)]"
-        style={valueColor ? { color: valueColor } : undefined}
-      >
-        {value}
-      </span>
-      <ChevronRight className="size-4 shrink-0 text-[var(--cp-text-faint)]" strokeWidth={1.8} />
-    </button>
-  );
-}
-
-function formatModelName(modelId: string): string {
-  const friendlyNames: Record<string, string> = {
-    "gpt-5.6-sol": "5.6 Sol",
-    "gpt-5.6-terra": "5.6 Terra",
-    "gpt-5.6-luna": "5.6 Luna",
-    "gpt-5.5": "GPT-5.5",
-    "gpt-5.4": "GPT-5.4",
-    "gpt-5.4-mini": "GPT-5.4 mini",
-    "gpt-5.3-codex-spark": "GPT-5.3 Codex Spark",
-    "gemini-3.7-flash-high": "Gemini 3.7 Flash",
-    "claude-sonnet-4-6": "Claude 4.6 Sonnet",
-    "claude-opus-4-6-thinking": "Claude 4.6 Opus Thinking",
-  };
-  return friendlyNames[modelId] ?? modelId;
-}
-
-function supportsReasoningControl(modelId: string): boolean {
-  return /^gpt-5\.(5|6)(?:-|$)/i.test(modelId);
-}
 
 function RuntimeStatusInline({ runtimeStatus }: { runtimeStatus: RuntimeStatus }) {
   const Icon = runtimeStatus.icon;

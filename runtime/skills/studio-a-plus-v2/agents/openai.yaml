@@ -1,0 +1,4 @@
+interface:
+  display_name: "商品详情与 A+ 内容"
+  short_description: "把产品信息整理成一组视觉内容"
+  icon_large: "./assets/preview.webp"

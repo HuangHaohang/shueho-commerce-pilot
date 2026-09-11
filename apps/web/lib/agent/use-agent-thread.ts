@@ -239,6 +239,7 @@ type UseAgentThreadOptions = {
 export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadOptions) {
   const [threadId, setThreadId] = useState<string | null>(null);
   const [threadTitle, setThreadTitle] = useState<string | null>(null);
+  const historyCache = useRef(new Map<string, { payload: StoredThreadResponse; updatedAt: string; cachedAt: number }>());
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
   const [activities, setActivities] = useState<AgentActivity[]>([]);
   const [images, setImages] = useState<GeneratedImageItem[]>([]);
@@ -728,6 +729,19 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setError(null);
           setStatus("running");
           void refreshPendingUserInput(threadId);
+          // Reconcile persisted native images while the Turn is still running:
+          // the artifact notification can be missed during SSE reconnects.
+          const imageResponse = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/images`, { cache: "no-store" });
+          const imagePayload = (await imageResponse.json().catch(() => null)) as StoredThreadResponse | null;
+          if (cancelled) return;
+          if (imageResponse.ok && imagePayload?.images) {
+            setImages((current) => {
+              const byFilename = new Map(current.map((image) => [image.filename, image]));
+              for (const image of imagePayload.images) byFilename.set(image.filename, image);
+              return [...byFilename.values()].sort((a, b) => a.sequence - b.sequence);
+            });
+            sequenceRef.current = Math.max(sequenceRef.current, ...imagePayload.images.map((image) => image.sequence));
+          }
           if (!eventSourceRef.current && runtimeHealth?.available !== false) {
             void connectEventStream(threadId).catch(() => undefined);
           }
@@ -915,6 +929,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
 
   const resetThread = useCallback(() => {
+    historyCache.current.clear();
     historyLoadRequestRef.current += 1;
     historyLoadControllerRef.current?.abort();
     historyLoadControllerRef.current = null;
@@ -961,12 +976,28 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     historySequenceFloorRef.current = 0;
   }, []);
 
+  useEffect(() => {
+    if (!threadId || loadingHistory || status === "connecting" || status === "idle") return;
+    let cached = historyCache.current.get(threadId);
+    if (!cached) {
+      cached = { updatedAt: "", cachedAt: 0, payload: { messages, activities, images, nextCursor: historyCursor,
+        thread: { id: threadId, title: threadTitle ?? "", status, lastTurnId: activeTurnId ?? lastTurnId,
+          durationMs, startedAt: startedAt ? new Date(startedAt).toISOString() : null, recipeId: null, category: "general" } } };
+      historyCache.current.set(threadId, cached);
+      while (historyCache.current.size > 12) historyCache.current.delete(historyCache.current.keys().next().value!);
+    }
+    cached.payload = { ...cached.payload, messages, activities, images, nextCursor: historyCursor,
+      thread: { ...cached.payload.thread, title: threadTitle ?? cached.payload.thread.title, status,
+        lastTurnId: activeTurnId ?? lastTurnId, durationMs, startedAt: startedAt ? new Date(startedAt).toISOString() : null } };
+  }, [threadId, loadingHistory, status, messages, activities, images, historyCursor, threadTitle, activeTurnId, lastTurnId, durationMs, startedAt]);
+
   const loadThread = useCallback(
     async (summary: AgentThreadSummary): Promise<boolean> => {
       const requestId = ++historyLoadRequestRef.current;
       historyLoadControllerRef.current?.abort();
       const controller = new AbortController();
       historyLoadControllerRef.current = controller;
+      const cached = historyCache.current.get(summary.threadId);
       setLoadingHistory(true);
       setError(null);
       sequenceRef.current = 0;
@@ -976,9 +1007,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       compactingRef.current = false;
       setThreadId(summary.threadId);
       setThreadTitle(summary.title);
-      setMessages([]);
-      setActivities([]);
-      setImages([]);
+      setMessages(cached?.payload.messages ?? []);
+      setActivities(cached?.payload.activities ?? []);
+      setImages(cached?.payload.images ?? []);
       setStatus("connecting");
       setActiveTurnId(null);
       setLastTurnId(null);
@@ -1007,20 +1038,33 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       eventSourceRef.current?.close();
       eventSourceRef.current = null;
       try {
-        const response = await fetch(`/api/agent/threads/${encodeURIComponent(summary.threadId)}`, {
+        let useCachedHistory = false;
+        if (cached && cached.updatedAt === summary.updatedAt && cached.payload.thread.status !== "running" && summary.status !== "running" && Date.now() - cached.cachedAt < 60_000) {
+          const statusResponse = await fetch(`/api/agent/threads/${encodeURIComponent(summary.threadId)}/status`, { cache: "no-store", signal: controller.signal });
+          const statusPayload = await statusResponse.json().catch(() => null);
+          if (controller.signal.aborted || requestId !== historyLoadRequestRef.current) return false;
+          useCachedHistory = statusResponse.ok && statusPayload?.thread?.lastTurnId === cached.payload.thread.lastTurnId && statusPayload.thread.status === cached.payload.thread.status;
+        }
+        const response = useCachedHistory ? null : await fetch(`/api/agent/threads/${encodeURIComponent(summary.threadId)}`, {
           cache: "no-store",
           signal: controller.signal,
         });
-        const payload = (await response.json().catch(() => null)) as StoredThreadResponse | { error?: string } | null;
+        const payload = (useCachedHistory ? cached!.payload : await response!.json().catch(() => null)) as StoredThreadResponse | { error?: string } | null;
         if (controller.signal.aborted || requestId !== historyLoadRequestRef.current) return false;
-        if (!response.ok || !payload || !("thread" in payload)) {
-          if (response.status === 404) {
+        if ((response && !response.ok) || !payload || !("thread" in payload)) {
+          if (response && [401, 403, 404].includes(response.status)) {
+            historyCache.current.delete(summary.threadId);
             resetThread();
           } else {
             setStatus("failed");
           }
           setError(payload && "error" in payload && typeof payload.error === "string" ? payload.error : "无法读取对话记录。");
           return false;
+        }
+        if (!useCachedHistory) {
+          historyCache.current.delete(summary.threadId);
+          historyCache.current.set(summary.threadId, { payload, updatedAt: summary.updatedAt, cachedAt: Date.now() });
+          while (historyCache.current.size > 12) historyCache.current.delete(historyCache.current.keys().next().value!);
         }
         const maxSequence = [...payload.messages, ...payload.activities, ...payload.images].reduce(
           (maximum, item) => Math.max(maximum, item.sequence),
@@ -1180,8 +1224,12 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setThreadId(currentThreadId);
         }
 
-        await connectEventStream(currentThreadId);
-        let uploadedAttachments = await uploadThreadAttachments(currentThreadId, clientRequestId, pendingAttachments);
+        // Both operations require the owned thread, but neither depends on the
+        // other. Keep turn/start behind both so early native events cannot be lost.
+        let [, uploadedAttachments] = await Promise.all([
+          connectEventStream(currentThreadId),
+          uploadThreadAttachments(currentThreadId, clientRequestId, pendingAttachments),
+        ]);
         if (uploadedAttachments.length) {
           setMessages((current) => current.map((item) =>
             item.id === optimisticMessageId ? { ...item, attachments: uploadedAttachments } : item,
@@ -1233,12 +1281,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             setActivities([]);
             setImages([]);
             setMessages((current) => current.filter((item) => item.role === "user").slice(-1));
-            await connectEventStream(replacementThreadId);
-            uploadedAttachments = await uploadThreadAttachments(
-              replacementThreadId,
-              clientRequestId,
-              pendingAttachments,
-            );
+            [, uploadedAttachments] = await Promise.all([
+              connectEventStream(replacementThreadId),
+              uploadThreadAttachments(replacementThreadId, clientRequestId, pendingAttachments),
+            ]);
             setMessages((current) => current.map((item) =>
               item.role === "user" ? { ...item, attachments: uploadedAttachments } : item,
             ));
@@ -1902,7 +1948,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     currentTurnId: activeTurnId ?? lastTurnId,
     durationMs,
     startedAt,
-    error,
+    error: presentRuntimeError(error),
     feedbackError,
     feedbackSubmittingIds,
     retryingMessageId,
@@ -2167,7 +2213,7 @@ function activityFromItem(
       label: completed
         ? status === "failed"
           ? "图片生成未完成"
-          : "图片生成完成"
+          : "图片工具已返回"
         : "正在生成图片",
       durationMs: typeof item.durationMs === "number" ? item.durationMs : null,
       status,
@@ -2196,7 +2242,7 @@ function activityFromItem(
       label:
         metadata.kind === "image"
           ? completed
-            ? "图片生成完成"
+            ? "图片工具已返回"
             : "正在生成图片"
           : metadata.isWebSearch
             ? completed
@@ -2463,4 +2509,11 @@ export function readUserMessageSkillName(item: Record<string, unknown>): string 
     .filter((entry) => entry.type === "skill" && typeof entry.name === "string")
     .at(-1);
   return skill && typeof skill.name === "string" ? skill.name : null;
+}
+
+function presentRuntimeError(error: string | null): string | null {
+  if (!error) return null;
+  if (/\b524\b/.test(error)) return "图片服务响应超时（524）。请等待当前任务状态更新；若任务已失败，可手动重试。";
+  if (/<!doctype\s+html|<html[\s>]/i.test(error)) return "上游服务暂时不可用，请稍后重试。";
+  return error;
 }

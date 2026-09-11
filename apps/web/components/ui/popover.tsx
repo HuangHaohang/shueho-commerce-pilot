@@ -1,7 +1,9 @@
 "use client";
 
 import * as PopoverPrimitive from "@radix-ui/react-popover";
-import { forwardRef, type ComponentPropsWithoutRef, type ElementRef } from "react";
+import { useContext, forwardRef, type ComponentPropsWithoutRef, type ElementRef } from "react";
+
+import { DialogLayerContext } from "./dialog";
 
 import { cn } from "@/lib/utils";
 
@@ -13,10 +15,13 @@ export const PopoverClose = PopoverPrimitive.Close;
 export const PopoverContent = forwardRef<
   ElementRef<typeof PopoverPrimitive.Content>,
   ComponentPropsWithoutRef<typeof PopoverPrimitive.Content>
->(({ className, align = "start", sideOffset = 8, collisionPadding = 16, ...props }, ref) => (
+>(({ className, align = "start", sideOffset = 8, collisionPadding = 16, style, ...props }, ref) => {
+  const dialogLayer = useContext(DialogLayerContext);
+  return (
   <PopoverPrimitive.Portal>
     <PopoverPrimitive.Content
       ref={ref}
+      style={{ zIndex: Math.max(70, dialogLayer + 1), ...style }}
       align={align}
       sideOffset={sideOffset}
       collisionPadding={collisionPadding}
@@ -27,5 +32,6 @@ export const PopoverContent = forwardRef<
       {...props}
     />
   </PopoverPrimitive.Portal>
-));
+);
+});
 PopoverContent.displayName = PopoverPrimitive.Content.displayName;

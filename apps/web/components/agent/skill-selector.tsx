@@ -1,7 +1,7 @@
 "use client";
 
-import { Check, ChevronRight, FileUp, ImageIcon, Loader2, PackageSearch, Search, WandSparkles, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Check, ChevronRight, Files, FileUp, ImageIcon, Loader2, PackageSearch, Search, WandSparkles, X } from "lucide-react";
+import { createContext, useContext, useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 
 import {
   readSkillMention,
@@ -11,6 +11,11 @@ import {
 import type { SkillInventoryItem } from "@/lib/agent/skills";
 import type { CommercePluginInventoryItem } from "@/lib/plugins/catalog";
 import { cn } from "@/lib/utils";
+
+import { SkillPreviewMotion } from "@/components/skills/SkillPreviewMotion";
+import { SkillPreviewDialog } from "@/components/skills/skill-preview-dialog";
+
+export const SkillNavigationContext = createContext<(() => void) | null>(null);
 
 type SkillMenuState =
   | { source: "button"; query: "" }
@@ -56,6 +61,7 @@ export function useComposerSkillSelector({
   useEffect(() => {
     if (!menu) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
+      if ((event.target as Element).closest?.("[data-skill-detail]")) return;
       if (!rootRef.current?.contains(event.target as Node)) setMenu(null);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
@@ -163,6 +169,10 @@ export function ComposerAddMenu({
   onOpenPlugin: (plugin: CommercePluginInventoryItem) => void;
   onAddFiles: () => void;
 }) {
+  const [detailSkill, setDetailSkill] = useState<SkillInventoryItem | null>(null);
+  const openDirectory = useContext(SkillNavigationContext);
+  const previewSkill = skills[activeIndex] ?? skills[0];
+  useEffect(() => { if (!open) setDetailSkill(null); }, [open]);
   if (!open) return null;
   const normalizedQuery = query.trim().toLocaleLowerCase("zh-CN");
   const visiblePlugins = normalizedQuery
@@ -180,13 +190,13 @@ export function ComposerAddMenu({
   return (
     <div
       className={cn(
-        "absolute left-0 z-50 w-full overflow-hidden rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-1.5 shadow-[var(--cp-shadow-popover)]",
+        "absolute left-0 z-50 w-[min(560px,100%)] overflow-hidden rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)] bg-[var(--cp-surface)] p-1.5 shadow-[var(--cp-shadow-popover)]",
         placement === "above" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
       )}
       role="menu"
       aria-label="添加内容"
     >
-      <div className="cp-flat-scrollbar max-h-[320px] overflow-y-auto overscroll-contain">
+      <div className="cp-flat-scrollbar max-h-[min(440px,55dvh)] overflow-y-auto overscroll-contain">
         {source === "button" && !normalizedQuery ? (
           <MenuSection label="添加">
             <button
@@ -250,43 +260,48 @@ export function ComposerAddMenu({
           )}
         </MenuSection>
 
-        <MenuSection label="技能">
-          {loading ? (
-            <MenuLoading label="正在读取技能" />
-          ) : skills.length ? (
-            skills.map((skill, index) => (
-              <button
-                key={`${skill.scope}:${skill.name}`}
-                type="button"
-                role="menuitemradio"
-                aria-checked={selectedSkill?.name === skill.name}
-                className={cn(
-                  "grid h-10 w-full grid-cols-[24px_minmax(0,1fr)_18px] items-center gap-2 rounded-[var(--cp-radius-item)] px-2 text-left",
-                  index === activeIndex ? "bg-[var(--cp-bg-muted)]" : "hover:bg-[var(--cp-bg-subtle)]",
-                )}
-                onPointerMove={() => onActiveIndexChange(index)}
-                onClick={() => onSelect(skill)}
-              >
-                <span className="flex size-6 items-center justify-center rounded-[6px] border border-[var(--cp-border-subtle)] bg-[#f2edff] text-[#6750a4]">
-                  <WandSparkles className="size-3.5" strokeWidth={1.8} />
-                </span>
-                <span className="flex min-w-0 items-baseline gap-2">
-                  <span className="shrink-0 truncate text-sm font-medium text-[var(--cp-text)]">{skill.displayName}</span>
-                  <span className="min-w-0 truncate text-xs text-[var(--cp-text-muted)]">
-                    {skill.shortDescription || skill.description}
-                  </span>
-                </span>
-                {selectedSkill?.name === skill.name ? <Check className="size-4 text-[var(--cp-success)]" /> : null}
-              </button>
-            ))
-          ) : (
-            <MenuEmpty label="没有匹配的技能" />
-          )}
-        </MenuSection>
+        <section aria-label="技能" className="mt-1 border-t border-[var(--cp-border-subtle)] pt-1">
+          <header className="flex items-center justify-between px-2 py-1">
+            <span className="text-sm font-medium">Skill</span>
+            {openDirectory ? <button type="button" role="menuitem" onClick={openDirectory}
+              className="flex items-center gap-1 text-xs text-[var(--cp-text-muted)] hover:text-[var(--cp-text)]">
+              Skill 广场 <ChevronRight className="size-3.5" />
+            </button> : null}
+          </header>
+          <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[minmax(0,1fr)_200px]">
+            <div className="cp-flat-scrollbar max-h-[240px] min-w-0 overflow-y-auto overscroll-contain">
+              <p className="px-2 py-1 text-[11px] text-[var(--cp-text-faint)]">探索</p>
+              {loading ? <MenuLoading label="正在读取技能" /> : skills.length ? skills.map((skill, index) => (
+                <button key={`${skill.scope}:${skill.name}`} type="button" role="menuitemradio"
+                  aria-checked={selectedSkill?.name === skill.name}
+                  className={cn("grid min-h-9 w-full grid-cols-[18px_minmax(0,1fr)_16px] items-center gap-2 rounded-[var(--cp-radius-item)] px-2 py-1.5 text-left text-sm",
+                    index === activeIndex ? "bg-[var(--cp-bg-muted)]" : "hover:bg-[var(--cp-bg-subtle)]")}
+                  onPointerMove={() => onActiveIndexChange(index)} onFocus={() => onActiveIndexChange(index)}
+                  onClick={() => onSelect(skill)}>
+                  <Files className="size-3.5 text-[var(--cp-text-muted)]" strokeWidth={1.6} />
+                  <span className="min-w-0 truncate">{skill.displayName}</span>
+                  {selectedSkill?.name === skill.name ? <Check className="size-3.5" /> : null}
+                </button>
+              )) : <MenuEmpty label="没有匹配的技能" />}
+            </div>
+            {previewSkill && !loading ? <aside className="min-w-0 overflow-hidden rounded-[var(--cp-radius-panel)] border border-[var(--cp-border)]">
+              {previewSkill.presentation ? <div className="skill-demo-frame h-[120px] overflow-hidden sm:h-[150px]">
+                <SkillPreviewMotion src={previewSkill.presentation.preview_url} title={previewSkill.displayName}
+                  layout={previewSkill.presentation.preview_layout} examples={previewSkill.presentation.preview_examples} />
+              </div> : null}
+              <div className="p-2">
+                <p className="mb-2 text-xs leading-5 text-[var(--cp-text-soft)]">{previewSkill.shortDescription || previewSkill.description}</p>
+                <button type="button" role="menuitem" className="w-full rounded-[var(--cp-radius-item)] border border-[var(--cp-border)] py-1 text-xs hover:bg-[var(--cp-bg-subtle)]"
+                  onClick={() => setDetailSkill(previewSkill)}>查看 Skill</button>
+              </div>
+            </aside> : null}
+          </div>
+        </section>
       </div>
       <div className="mt-1 border-t border-[var(--cp-border-subtle)] px-2 pt-1.5 text-[11px] leading-5 text-[var(--cp-text-faint)]">
         {source === "mention" ? "继续输入可筛选插件和技能，回车选择技能" : "输入 @ 可直接筛选插件和技能"}
       </div>
+      <SkillPreviewDialog skill={detailSkill} onClose={() => setDetailSkill(null)} onUse={(skill) => { setDetailSkill(null); onSelect(skill); }} />
     </div>
   );
 }
@@ -339,7 +354,7 @@ export function SelectedSkillChip({
       data-selected-skill={skill.name}
     >
       <WandSparkles className="size-3.5 shrink-0" strokeWidth={1.9} />
-      <span className="truncate">{inlineMessage ? "" : "@"}{skill.displayName || skill.name}</span>
+      <span className="truncate">{skill.displayName || skill.name}</span>
       {onRemove ? (
         <button
           type="button"

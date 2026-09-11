@@ -110,3 +110,5 @@ export function creativeMethodSkillName(
 ): (typeof creativeMethodSkillNames)[CreativeMethod] {
   return creativeMethodSkillNames[method];
 }
+
+export { isStudioSkillName } from "../../../../src/codex/studio-skill-catalog";

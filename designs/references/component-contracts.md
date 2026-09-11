@@ -515,3 +515,66 @@ Footer: 更新时间 / 数据来源 / 操作
 - 不伪造运营主体、地址、联系方式、备案号或数据保存期限。
 - 未确定的生产信息必须明确标注为正式上线前补齐。
 - 法规链接优先使用中国人大网、中国政府网、中国网信网等权威来源。
+
+
+## Studio Skill Selector and Gallery
+
+- The general composer retains plugin/file entries and adds a compact native Skill list. Desktop previews occupy a bounded 200px column inside the popover; narrow screens stack the preview beneath the list within a viewport-bounded scroll region.
+- Hover or keyboard focus changes the preview. Clicking a list item selects its Skill; “查看 Skill” opens a Radix dialog with example switching, required materials and “使用此 Skill”. The directory offers the same examples grouped by category. All actions use actual runtime inventory.
+- Use existing grayscale tokens, lucide icons and Radix Dialog. Source Studio Ant Design components are adapted, not imported. Demo motion respects reduced-motion and images retain their example identity. Missing/loading/error/disabled inventory remains explicit.
+- Demos are display-only public examples. Skill invocation never attaches demo assets or changes the original user request. Closed Creative Space and Product Insight workflows keep their existing selector restrictions.
+
+
+## Model and reasoning popover
+
+The shared composer model control uses Radix Popover with end alignment, viewport collision avoidance and available-height scrolling. Quick reasoning, advanced settings, model list and reasoning list navigate within one bounded panel; there are no fixed-direction nested flyouts based on whole-window breakpoints. This applies equally to the centered workbench composer and the narrow right-hand Creative Space composer. Keyboard dismissal/focus return follows Radix, running Turns disable selection, and model labels remain derived from the server-returned catalog.
+
+### 创作结果接收与画布同步
+
+- 不完整的托管 JSON 仅显示生成状态；完整结果按标题、正文、列表渲染，终态格式错误显示明确提示，禁止回退为原始协议文本。
+- 同步状态只显示在画布工具栏，并绑定真实请求生命周期；不得用等待消息 ID 匹配的预览浮层遮挡已有画布。
+- 新交付节点完成同步后自动进入可见区域；初次读取项目保留已保存视口。Turn 结束触发重新同步；并发触发合并为一个在途请求和一个待执行读回，成功结果立即呈现。20 秒超时后显示明确错误与刷新入口。
+
+- 原生重试等待接收时显示“正在准备重试”，局部隐藏被重试轮次及之后的旧结果，保留原始用户输入；该隐藏只作用于视图，确认失败时恢复。收到新 Turn 后切换到运行状态，新一轮计时不得继承上一轮 duration。普通连接等待显示“正在连接”，不提前宣称正在执行。
+
+- 画布空白区支持左键拖动平移；节点从标题栏拖动，锁定节点必须先解锁。文案与表格内容区使用 `nodrag nopan nowheel` 和独立滚动容器，滚到底也不得将滚轮交给画布；滚轮在空白区平移，捏合可缩放。
+- 工具栏提供节点列表、上一个/下一个逐个定位与恢复 100% 缩放；初次读取过小（低于 50%）的视口时优先聚焦最后一个节点。显式定位请求只消费一次，不得在拖动、编辑或保存时反复拉回视口。表格文本单元格随内容增高，避免每格出现独立滚动条。
+
+- 原生图片在对话和画布卡片上均提供常驻“查看详情”“下载原图”按钮。图片工作区顶部提供当前图片详情与下载入口；切换版本后下载目标随当前图片切换。下载仅导出原生图片文件，不包含应用文字图层；显示真实下载中和失败状态。
+
+- 创作空间的 @ 菜单显示经原生技能列表确认启用的五个 Studio Skill，沿用 demo 预览与详情；选择后显示 chip 并以原生 Skill Item 提交，重试保留该选择。不得用空数组制造“没有匹配的技能”，也不得仅展示而不提交技能。
+
+### 图片编辑窗口的弹层与标注布局
+
+- Dialog 向内部控件提供所在层级，Popover 通过 Portal 展示在所属 Dialog 上方；普通页面的 Popover 保持原有层级，嵌套 Dialog 逐层递增。
+- 共享 composer 的内容行可收缩并独立滚动，底部模型与发送按钮保持在固定操作行。图片标注在预览旁的独立区域修改栏中编辑，小屏排列到预览下方并限制高度；标注列表不得堆进 composer。
+- 图片预览按图片区域的实际可用空间等比适配；标注仍相对真实图片边界定位，不使用固定页脚高度推算图片尺寸。
+
+- 图片编辑沿用全局 AgentComposer，输入区仅呈现所选图片、尺寸要求与补充说明。添加标注后聚焦对应的区域输入项。
+- 提交修改后留在图片工作区，图片区域显示毛玻璃与“AI快速修改ing..”，直至对应的原生图片产物返回或本轮结束。失败保留标注和输入，成功就地展示新版本；外层画布及对话使用同一份 Harness 图片事件更新，不发起第二次生图请求。
+
+- 图片集合卡片的预览区单击切换选择状态，和底部选择／取消按钮共用同一处理函数；预览按钮使用 aria-pressed，支持键盘操作。打开图片使用独立的“查看此版本”入口，避免双击预览与选择动作冲突。
+
+- 图片编辑消息以“批注1、批注2…”与带编号标记的原图展示，隐藏应用生成的坐标及执行说明。点击批注卡片或图片标记打开对应原图并高亮同编号批注；编辑面板输入聚焦与图片标记选择双向联动。
+
+- 首页与会话共享图片粘贴处理：用户粘贴实际剪贴板图片文件时，加入现有附件预览及校验流程；图片编辑复用相同行为。纯文本保留浏览器默认粘贴，不抓取剪贴板 HTML 中的远程图片 URL，不自动发送或打断正在运行的任务。
+
+- 图片工作区采用左侧全高预览、右侧 380–400px 编辑面板；批注可折叠，编辑历史独立滚动，原生提问与统一输入框放在右侧底部。小屏纵向排列并限制面板高度。外层对应编辑轮次显示可点击的摘要卡片，点击进入完整编辑记录，不重复铺开内部消息和生成结果。
+
+- 编辑面板的批注采用轻量卡片：顶部小编号、标题与删除按钮，下面无边框正文；单行正文约 64px 高，随内容自动增高，最多 104px 正文后内部滚动。只保留折叠区标题，不重复显示批注数量标题。键盘聚焦通过卡片浅边框表达，正文不叠加全局矩形焦点框。
+
+- 对话中的图片批注以“批注1、批注2…”紧凑 tag 展示，自动换行；悬停或键盘聚焦通过 Tooltip 展示修改正文，点击定位原图批注。Tooltip 层级跟随所属 Dialog。无用户补充说明时直接展示原图和标签，不泄露内部保留要求。
+
+- 图片位置修改通过直接点击图片创建编号标记，无需“添加批注”模式；右侧不再常驻批注编辑卡片。标记旁优先向右显示可编辑 Popover，边缘通过碰撞检测调整位置。完成或点击外部收起，悬停显示修改内容，点击标记重新编辑；键盘可聚焦标记和编辑框，关闭编辑框不发送任务。
+
+- 新增图片位置仅绑定原图 img 的 click 事件，不绑定包含 Portal 子树的舞台 pointerdown；输入浮层、提示与已有标记的交互不得新增位置。关闭非当前标记的浮层不得清除当前编辑焦点。
+
+- 创作回复不再渲染独立 complianceNotes 警告面板，复制回复也不拼接该附加字段；兼容历史消息，原生历史内容不作覆写。
+
+- 画布图片卡片使用单行标题与轻量版本徽标，保留拖动和锁定等现有控制；底栏集中“文字 / 打开编辑 / 下载原图”，文字操作不再覆盖图片。移除 Agent 来源及不可覆盖的技术提示，保存状态仅在保存中出现。
+
+图片编辑窗口使用独立原生编辑会话：同一项目中的不同原图可在额度内并行编辑；毛玻璃仅覆盖对应会话本轮输入的图片。项目外层显示编辑记录入口和汇集后的图片，不回放内部编辑对话。关闭窗口不发送 interrupt，显式停止按钮只作用于当前编辑 thread。上游 HTML 错误页不得作为界面文本直出；524 显示简短超时信息，任务是否结束仍以 Harness 原生状态为准。
+
+发送通过本地校验后，统一输入框立即清空已提交的文字，不等待连接或原生 Turn 接收；未成功提交时恢复草稿，并保留用户已经输入的新内容。准备连接与执行阶段统一呈现“正在思考”，界面计时覆盖准备阶段；内部 connecting/running 状态及 Harness 生命周期保持原样，不以文案变化伪造执行或完成事件。
+
+画布中每个图片资产仅显示当前版本的一张卡片，底部使用“编辑图片”“版本 · N”“下载”入口。旧版本与对比收进版本面板；编辑旧版继续同一资产会话，明确另存才新增独立卡片。当前资产任一版本正在编辑时，卡片显示毛玻璃状态。外层项目对话不显示逐轮图片修改记录，内部工作区保留批注、完整编辑历史和统一输入框。

@@ -26,6 +26,16 @@ $CODEX_HOME/workspaces/default/.agents/skills
 
 The globally discoverable `skill-creator` remains the Codex system Skill. In the hosted product it may guide creation, but publishing a generated Skill must go through an application-owned validator and a path-confined write operation. The browser may not select arbitrary roots, upload executable scripts, run the bundled initializer, or write directly to the deployment host.
 
+## Bundled Studio Skills
+
+Commerce Pilot ships the five active v2 Skills migrated from the local Luusmosh Creative Studio catalog: `studio-product-listing-v2`, `studio-a-plus-v2`, `studio-lifestyle-v2`, `studio-brand-v2`, and `studio-creative-v2`. Legacy v1 definitions are superseded in the source catalog and are not installed as duplicate choices.
+
+The reviewed source folders live in `runtime/skills/`. Gateway startup installs only their fixed `SKILL.md`, `agents/openai.yaml`, and `assets/preview.webp` files into the application runtime `.agents/skills` directory before starting App Server. Installation preserves unchanged files and rejects symbolic-link destinations. Docker includes these application assets; no developer home or source checkout is needed at runtime. These names cannot be published over by `commerce_skill.publish`, which accepts only the `commerce-` namespace.
+
+These are independently selectable native Skills, separate from the closed Creative Space workflow registry. `/api/skills` attaches application-owned presentation metadata from `src/codex/studio-skill-catalog.ts` only to Skills returned by native `skills/list`; a missing Skill is never fabricated by the UI. Disabled Skills remain unusable, and native paths stay on the server. The existing explicit-selection resolver creates the unchanged user text plus one native `skill` Item; no custom agent loop, image tool, provider call, or prompt-injection substitute is introduced.
+
+The composer offers a compact Skill list, hover/focus preview, detail dialog and Skill directory. The directory includes category filters, two examples per Skill, and a material checklist. Presentation assets in `apps/web/public/skill-demos/` are copied from the source project's public demo collection, including the A+ product/detail pairs. They are public illustrative content, never tenant uploads, factual product evidence, or generated results. Selecting a Skill sends only its name; preview images are never automatically attached to a Turn. Image understanding/generation uses tenant-scoped native inputs and Harness `imageGeneration` Items under the existing runtime policy.
+
 ## Managed Commerce Creative Skills
 
 Creative Space keeps `commerce-creative-project` as the project-level Skill and adds one optional application-managed specialist Skill to the same native Turn input. These are product capabilities, not tenant-authored prompts:

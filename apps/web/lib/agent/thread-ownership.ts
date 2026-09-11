@@ -1,3 +1,4 @@
+import type { PoolClient } from "pg";
 import { withEnterpriseDatabaseContext } from "@/lib/enterprise/database-context";
 import type { EnterpriseScope } from "@/lib/enterprise/types";
 import {
@@ -51,8 +52,9 @@ export async function registerAgentThreadOwner(
   title: string,
   recipeId: AgentRecipeId | null = null,
   category: TaskCategory = categoryForRecipeId(recipeId),
+  transactionClient?: PoolClient,
 ): Promise<void> {
-  await withEnterpriseDatabaseContext(scope, async (client) => {
+  const register = async (client: PoolClient) => {
     const result = await client.query<{ created_by_user_id: string }>(
       `
         INSERT INTO commerce_agent_thread
@@ -97,7 +99,9 @@ export async function registerAgentThreadOwner(
     if (result.rows[0]?.created_by_user_id !== scope.userId) {
       throw new Error("Agent thread is already bound to another enterprise principal.");
     }
-  });
+  };
+  if (transactionClient) await register(transactionClient);
+  else await withEnterpriseDatabaseContext(scope, register);
 }
 
 export async function listAgentThreadsForUser(scope: EnterpriseScope, limit = 50): Promise<AgentThreadRecord[]> {
@@ -109,6 +113,7 @@ export async function listAgentThreadsForUser(scope: EnterpriseScope, limit = 50
                title_model, title_generated_at, recipe_id, category, tool_contract_version
         FROM commerce_agent_thread
         WHERE tenant_id = $1 AND workspace_id = $2 AND created_by_user_id = $3
+        AND NOT EXISTS (SELECT 1 FROM commerce_creative_image_session s WHERE s.thread_id = commerce_agent_thread.thread_id)
         ORDER BY COALESCE(turn_started_at, created_at) DESC, created_at DESC
         LIMIT $4
       `,

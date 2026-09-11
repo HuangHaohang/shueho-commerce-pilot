@@ -1,0 +1,4 @@
+interface:
+  display_name: "产品生活场景"
+  short_description: "让产品自然融入日常生活"
+  icon_large: "./assets/preview.webp"

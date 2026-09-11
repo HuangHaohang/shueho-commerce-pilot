@@ -1,3 +1,4 @@
+import { isStudioSkillName } from "../codex/studio-skill-catalog.js";
 import {
   commerceInsightMethodForSkillName,
   creativeMethodForSkillName,
@@ -55,8 +56,9 @@ export function readHarnessRetryContract(content: unknown): HarnessRetryContract
   const insightMethod = skillNames.map(commerceInsightMethodForSkillName).find(Boolean) ?? null;
   if (!workflow && creativeMethod) workflow = "commerce-creative-project";
   if (!workflow && insightMethod) workflow = "commerce-product-insight";
-  const explicitSkillName = workflow
-    ? null
+  const explicitSkillName = workflow === "commerce-creative-project"
+    ? [...skillNames].reverse().find(isStudioSkillName) ?? null
+    : workflow ? null
     : [...skillNames].reverse().find((name) => !isAppOwnedManagedSkillName(name)) ?? null;
   const productContextMode = readProductContextMode(entries);
   return {

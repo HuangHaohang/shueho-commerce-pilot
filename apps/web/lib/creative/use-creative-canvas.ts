@@ -1,5 +1,6 @@
 "use client";
 
+import { useCreativeCanvasNavigation } from "./creative-canvas-navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
@@ -13,44 +14,83 @@ import type {
 export function useCreativeCanvas({
   threadId,
   sourceSignature,
+  running = false,
 }: {
   threadId: string | null;
   sourceSignature: string;
+  running?: boolean;
 }) {
   const [state, setState] = useState<CreativeCanvasState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savingNodeIds, setSavingNodeIds] = useState<ReadonlySet<string>>(() => new Set());
   const requestGeneration = useRef(0);
+  const localSnapshots = useRef(new Map<string, CreativeCanvasState>());
+  const navigation = useCreativeCanvasNavigation();
+  const snapshots = { current: navigation?.canvasSnapshots ?? localSnapshots.current };
 
-  const load = useCallback(async () => {
+  const inFlight = useRef<{ threadId: string; queued: boolean; promise: Promise<void> } | null>(null);
+
+  const load = useCallback((): Promise<void> => {
     if (!threadId) {
       setState(null);
       setError(null);
-      return;
+      setLoading(false);
+      return Promise.resolve();
     }
-    const generation = ++requestGeneration.current;
+    if (inFlight.current?.threadId === threadId) {
+      inFlight.current.queued = true;
+      return inFlight.current.promise;
+    }
+    const request = { threadId, queued: false, promise: Promise.resolve() };
+    inFlight.current = request;
     setLoading(true);
-    try {
-      const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/canvas`, {
-        cache: "no-store",
-      });
-      const payload = (await response.json().catch(() => null)) as (CreativeCanvasState & { error?: string }) | null;
-      if (!response.ok || !payload) throw new Error(payload?.error || "无法读取创作画布。");
-      if (requestGeneration.current !== generation) return;
-      setState(payload);
-      setError(null);
-    } catch (loadError) {
-      if (requestGeneration.current !== generation) return;
-      setError(loadError instanceof Error ? loadError.message : "无法读取创作画布。");
-    } finally {
-      if (requestGeneration.current === generation) setLoading(false);
-    }
+    request.promise = (async () => {
+      do {
+        request.queued = false;
+        const generation = ++requestGeneration.current;
+        try {
+          const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/canvas`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(20_000),
+          });
+          const payload = (await response.json().catch(() => null)) as (CreativeCanvasState & { error?: string }) | null;
+          if (!response.ok || !payload) throw new Error(payload?.error || "无法读取创作画布。");
+          if (requestGeneration.current !== generation || inFlight.current !== request) return;
+          snapshots.current.delete(threadId);
+          snapshots.current.set(threadId, payload);
+          while (snapshots.current.size > 12) snapshots.current.delete(snapshots.current.keys().next().value!);
+          setState(payload);
+          setError(null);
+        } catch (loadError) {
+          if (requestGeneration.current !== generation || inFlight.current !== request) return;
+          setError(loadError instanceof Error && loadError.name === "TimeoutError"
+            ? "画布同步超时，请点击刷新重试。"
+            : loadError instanceof Error ? loadError.message : "无法读取创作画布。");
+        }
+      } while (request.queued && inFlight.current === request);
+    })().finally(() => {
+      if (inFlight.current === request) {
+        inFlight.current = null;
+        setLoading(false);
+      }
+    });
+    return request.promise;
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!threadId) snapshots.current.clear();
+    setState(threadId ? snapshots.current.get(threadId) ?? null : null);
+    setError(null);
+    return () => {
+      requestGeneration.current += 1;
+      inFlight.current = null;
+    };
   }, [threadId]);
 
   useEffect(() => {
     void load();
-  }, [load, sourceSignature]);
+  }, [load, sourceSignature, running]);
 
   const saveNodeContent = useCallback(async (nodeId: string, content: CreativeCanvasNodeContent) => {
     if (!threadId) return null;

@@ -85,3 +85,37 @@ test("builds owned localImage inputs and preserves image-edit lineage", async ()
     /does not belong to this thread/,
   );
 });
+
+test("inventory cache observes another store's writes and deletes without sharing mutable state", async () => {
+  const home = await mkdtemp(join(tmpdir(), "commerce-image-cache-"));
+  const first = new GeneratedImageStore(home), second = new GeneratedImageStore(home);
+  const input = { base64: Buffer.from("image").toString("base64"), threadId: "thread-cache123", turnId: "turn-cache123", callId: "call-cache123", model: "gpt-image-2", mimeType: "image/png" as const, quality: null, size: null };
+  await first.save(input);
+  const views = await Promise.all(Array.from({ length: 30 }, () => first.listForThread(input.threadId)));
+  assert.ok(views.every((view) => view.length === 1));
+  views[0]![0]!.sourceFilenames.push("modified");
+  assert.deepEqual((await first.listForThread(input.threadId))[0]!.sourceFilenames, []);
+  await second.save({ ...input, callId: "call-next123" });
+  assert.equal((await first.listForThread(input.threadId)).length, 2);
+  await second.deleteForThreads([input.threadId]);
+  assert.deepEqual(await first.listForThread(input.threadId), []);
+});
+
+test("concurrent native artifact persistence deduplicates one call and preserves independent calls", async () => {
+  const store = new GeneratedImageStore(await mkdtemp(join(tmpdir(), "commerce-image-concurrency-")));
+  const input = { base64: Buffer.from("image").toString("base64"), threadId: "thread-concurrent", turnId: "turn-concurrent", callId: "call-concurrent", model: "gpt-image-2", mimeType: "image/png" as const, quality: null, size: null };
+  const same = await Promise.all(Array.from({ length: 30 }, () => store.saveOnceForCall(input)));
+  assert.equal(new Set(same.map((image) => image.filename)).size, 1);
+  await Promise.all(Array.from({ length: 10 }, (_, i) => store.saveOnceForCall({ ...input, callId: `call-independent-${i}` })));
+  assert.equal((await store.listForThread(input.threadId)).length, 11);
+});
+
+test("an in-flight copy id cannot be reused for a different source", async () => {
+  const store = new GeneratedImageStore(await mkdtemp(join(tmpdir(), "commerce-copy-conflict-")));
+  const input = { base64: "AA==", threadId: "thread-copy123", turnId: "turn-copy123", callId: null, model: "image", mimeType: "image/png" as const, quality: null, size: null };
+  const a = await store.save(input), b = await store.save(input);
+  const first = store.copyImage(a.filename, input.threadId, "request-copy123");
+  await assert.rejects(store.copyImage(b.filename, input.threadId, "request-copy123"), /conflicts/);
+  assert.equal((await first).copyOf, a.filename);
+  assert.equal((await store.copyImage(a.filename, input.threadId, "request-copy123")).copyOf, a.filename);
+});

@@ -1,0 +1,16 @@
+import {readFileSync,writeFileSync} from 'node:fs';import {randomUUID} from 'node:crypto';
+const base=process.env.LOADTEST_BASE_URL ?? 'http://127.0.0.1:3100';
+if (!['127.0.0.1','localhost','[::1]'].includes(new URL(base).hostname)) throw new Error('Local load tests only.');
+if (!process.env.LOADTEST_USERS_FILE || !process.env.LOADTEST_OUTPUT_DIR) throw new Error('Set private fixture and output paths.');
+const users=JSON.parse(readFileSync(process.env.LOADTEST_USERS_FILE));
+if (users.length !== 10 || users.some(u => !u.threadId || !u.cookie)) throw new Error('Provide exactly 10 pre-provisioned authenticated native threads.');
+const results=[],save=()=>writeFileSync(process.env.LOADTEST_OUTPUT_DIR+'/native-results.json',JSON.stringify(results,null,2));
+async function json(u,path,body){const r=await fetch(base+path,{method:body?'POST':'GET',headers:{cookie:u.cookie,'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(40000)});return {status:r.status,body:await r.json()}}
+await Promise.all(users.slice(0,10).map(async(u,index)=>{
+ const start=Date.now(),out={user:index,events:{},images:0};results.push(out);const stop=new AbortController();let turnId;
+ const stream=(async()=>{try{const r=await fetch(base+'/api/agent/events?threadId='+u.threadId,{headers:{cookie:u.cookie},signal:stop.signal});out.sseStatus=r.status;let buffer='';for await(const part of r.body){buffer+=new TextDecoder().decode(part);let split;while((split=buffer.indexOf('\n\n'))>=0){const frame=buffer.slice(0,split);buffer=buffer.slice(split+2);const data=frame.split('\n').find(x=>x.startsWith('data: '));if(!data)continue;let e;try{e=JSON.parse(data.slice(6))}catch{continue}if(e.method){out.events[e.method]=(out.events[e.method]??0)+1;out.firstEventMs??=Date.now()-start;if(e.method==='commerce/imageGeneration/completed'){out.images++;out.firstImageMs??=Date.now()-start;}if(e.method==='turn/completed'){out.nativeTerminalMs=Date.now()-start;out.nativeStatus=e.params?.turn?.status;}if(e.method==='error'){out.errorCode=e.params?.error?.codexErrorInfo??'native_error';}}}}}catch(e){if(!stop.signal.aborted)out.streamError=e.name;}})();
+ try{const r=await json(u,'/api/agent/threads/'+u.threadId+'/turns',{model:process.env.LOADTEST_MODEL ?? 'gpt-5.6-luna',effort:'low',workflow:'commerce-creative-project',clientRequestId:randomUUID(),...(u.image?{imageEditSourceFilenames:[u.image.filename]}:{}),message:u.message ?? `请使用原生图片生成工具生成一张简洁的白底蓝色陶瓷杯商品图，编号 ${index+1}。这是本地并发测试，只生成一张图片，完成后结束，不需要总结，不需要联网或其他工具。`});out.submitStatus=r.status;out.acceptMs=Date.now()-start;turnId=r.body.result?.turn?.id;if(r.status!==200){out.submitErrorCode=r.body.code??"request_rejected";return;}
+ while(Date.now()-start<660000){await new Promise(r=>setTimeout(r,3000));const s=await json(u,'/api/agent/threads/'+u.threadId+'/status');out.statusHttp=s.status;out.status=s.body.thread?.status;if(out.status&&out.status!=='running'&&out.status!=='idle')break;}
+ const h=await json(u,'/api/agent/threads/'+u.threadId);out.historyStatus=h.status;out.historyImages=h.body.images?.length??h.body.generatedImages?.length??0;out.historyKeys=Object.keys(h.body);out.totalMs=Date.now()-start;
+ }catch(e){out.failure=e.name;}finally{stop.abort();await stream;save();console.log(JSON.stringify(out));}
+}));save();

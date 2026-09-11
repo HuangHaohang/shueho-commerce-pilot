@@ -5,6 +5,15 @@ node_modules.*
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.migration.example
+**/node_modules
+**/.next*
+**/dist
+.git
+**/._*
 .DS_Store
 npm-debug.log*
 yarn-debug.log*

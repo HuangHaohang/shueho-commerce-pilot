@@ -1,8 +1,10 @@
+import { imageAssetRoot, imageAssetVersions } from "./image-assets";
 import type {
   ConversationMessage,
   GeneratedImageItem,
 } from "@/lib/agent/use-agent-thread";
 import {
+  isStructuredCopywritingEnvelope,
   tryParseStructuredCopywritingAnswer,
   tryParseStructuredCopywritingDraft,
   type CopywritingDraft,
@@ -279,9 +281,22 @@ export function listCreativeCanvasSourceNodes(
     }
   }
 
-  return applyDefaultCanvasLayouts(
-    sources.sort((left, right) => left.sourceSequence - right.sourceSequence),
-  );
+  const imageSources = new Map<string, Omit<CreativeCanvasSourceNode, "layout">>();
+  const grouped = sources.filter((source) => {
+    if (source.content.kind !== "image") return true;
+    const root = imageAssetRoot(source.content.image.filename, images);
+    const previous = imageSources.get(root);
+    if (!previous || source.content.image.filename === root) imageSources.set(root, source);
+    return false;
+  });
+  for (const [root, source] of imageSources) {
+    if (source.content.kind !== "image") continue;
+    const latest = imageAssetVersions(root, images).at(-1);
+    grouped.push(latest ? { ...source, content: { ...source.content, image: {
+      artifactId: latest.id, filename: latest.filename, url: latest.url, model: latest.model,
+    } } } : source);
+  }
+  return applyDefaultCanvasLayouts(grouped.sort((left, right) => left.sourceSequence - right.sourceSequence));
 }
 
 export function parseCreativeCanvasBlocks(content: string): CreativeCanvasBlock[] {
@@ -343,7 +358,7 @@ function toDocumentCandidate(message: ConversationMessage): CreativeCanvasDocume
   const content = message.content.trim();
   if (!content) return null;
   const draft = tryParseStructuredCopywritingDraft(content);
-  if (!draft && tryParseStructuredCopywritingAnswer(content)) {
+  if (!draft && (tryParseStructuredCopywritingAnswer(content) || isStructuredCopywritingEnvelope(content))) {
     // A conversational answer should not replace the current creative asset.
     return null;
   }

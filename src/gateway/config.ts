@@ -153,6 +153,11 @@ function readExternalDataServiceMcpConfig(): ExternalDataServiceMcpConfig {
   };
 }
 
+export const DEFAULT_AGENT_MODEL_SELECTORS = [
+  "gpt-5.6-luna", "gpt-6-astra",
+  "gemini-3.8-flash-high", "claude-opus-4-6-thinking",
+] as const;
+
 function readCommerceProviderConfig(): CommerceProviderConfig {
   const id = process.env.COMMERCE_PROVIDER_ID?.trim() || "luusmosh_cpa";
   if (!/^[A-Za-z0-9_-]+$/.test(id)) {
@@ -169,7 +174,7 @@ function readCommerceProviderConfig(): CommerceProviderConfig {
     webSearchModel: process.env.COMMERCE_WEB_SEARCH_MODEL?.trim() || "gpt-5.6-luna",
     agentModelSelectors: parseCsv(
       process.env.COMMERCE_AGENT_MODEL_SELECTORS ||
-        "gpt-5.5,gpt-5.6-luna,gpt-5.6-terra,gpt-5.6-sol,gemini-3.7-flash*,claude-sonnet-4-6,claude-opus-4-6-thinking",
+        DEFAULT_AGENT_MODEL_SELECTORS.join(","),
     ),
     modelCacheTtlMs: parsePositiveInteger(process.env.COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS || "60000", "COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS"),
     webSearchTimeoutMs: parsePositiveInteger(

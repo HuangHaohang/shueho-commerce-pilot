@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  resolveImageSources: vi.fn(),
   activateAgentTurnLease: vi.fn(),
   bindProductContextToTurn: vi.fn(),
   createProductContextSet: vi.fn(),
@@ -40,6 +41,8 @@ vi.mock("@/lib/product-catalog/repository", () => ({
   createProductContextSet: mocks.createProductContextSet,
 }));
 
+vi.mock("@/lib/creative/image-session-repository", () => ({ resolveImageSources: mocks.resolveImageSources }));
+
 import { POST } from "./route";
 
 const enterpriseContext = {
@@ -52,6 +55,7 @@ const enterpriseContext = {
 describe("agent turn workflow contract", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.resolveImageSources.mockImplementation(async (_scope, threadId, filenames) => filenames.map((filename: string) => ({ filename, threadId })));
     mocks.requireAgentThreadContext.mockResolvedValue({ ok: true, context: enterpriseContext });
     mocks.getAgentThreadForUser.mockResolvedValue({
       threadId: "thread-creative-1",

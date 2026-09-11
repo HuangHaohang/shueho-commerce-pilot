@@ -1,3 +1,4 @@
+import { listImageSessions } from "@/lib/creative/image-session-repository";
 import { NextResponse } from "next/server";
 
 import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext } from "@/lib/agent/http";
@@ -62,6 +63,24 @@ export async function GET(
         sourceHistoryComplete = true;
         break;
       }
+    }
+    const sessions = await listImageSessions(access.context, threadId);
+    for (const session of sessions) {
+      if (!await getAgentThreadForUser(session.threadId, access.context)) continue;
+      const response = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(session.threadId)}/images`), {
+        headers: gatewayHeaders(undefined, access.context), cache: "no-store", signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error("Editor image sources unavailable");
+      const payload = await response.json();
+      const artifacts = Array.isArray(payload.generatedImages) ? payload.generatedImages.filter(isRecord) : [];
+      // Artifact inventory covers all native turns, independently of history pagination.
+      const images: GeneratedImageItem[] = artifacts.filter((item: Record<string, unknown>) => item.threadId === session.threadId && typeof item.filename === "string" && /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i.test(item.filename)).map((item: Record<string, unknown>, sequence: number) => ({
+        id: item.filename as string, filename: item.filename as string, sequence,
+        turnId: typeof item.turnId === "string" ? item.turnId : null,
+        url: `/api/provider/generated-images/${encodeURIComponent(item.filename as string)}`,
+        model: typeof item.model === "string" ? item.model : "", sourceFilenames: readGeneratedImageSourceFilenames(item.sourceFilenames),
+      }));
+      pages.push({ messages: [], images });
     }
     const history = combineCanvasHistoryPages(pages);
     const sources = listCreativeCanvasSourceNodes(

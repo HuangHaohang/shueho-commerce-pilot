@@ -8,7 +8,7 @@ The background worker calls the Gateway, which invokes Codex App Server `thread/
 
 ## Background Job
 
-The browser never waits for filesystem deletion. It creates an RLS-scoped `commerce_thread_deletion_job` with one `commerce_thread_deletion_item` per selected task. The dedicated `jobs:thread-deletion` worker claims jobs through `commerce_claim_thread_deletion_job`, which uses `FOR UPDATE SKIP LOCKED` and an optional production tenant pin.
+The browser never waits for filesystem deletion. It creates an RLS-scoped `commerce_thread_deletion_job` with one `commerce_thread_deletion_item` per selected task. The dedicated `jobs:thread-deletion` worker claims jobs through `commerce_claim_thread_deletion_job`, which uses `FOR UPDATE SKIP LOCKED` and a required tenant pin (`COMMERCE_RUNTIME_TENANT_ID`).
 
 Job states are `queued`, `running`, `completed`, `partial`, or `failed`. Item states are `queued`, `running`, `deleted`, or `failed`. A failed worker-level operation requeues the job; stale running jobs can be reclaimed after 15 minutes. The browser polls job state and removes a task from the sidebar only after its item reaches `deleted`.
 
