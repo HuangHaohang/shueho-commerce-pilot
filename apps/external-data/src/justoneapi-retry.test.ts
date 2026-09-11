@@ -44,21 +44,21 @@ function fixture(responses: Array<ProviderCallResult | Error>, tokenCount = 1) {
 }
 
 describe("bounded provider retries", () => {
-  it.each([[100,401,'invalid'],[600,403,'endpoint_denied']] as const)('preserves explicit auth feedback for %s with HTTP %s without quota failover',async(code,status,feedback)=>{
+  it.each([[600,403,'endpoint_denied']] as const)('preserves explicit auth feedback for %s with HTTP %s without quota failover',async(code,status,feedback)=>{
     const f=fixture([response(code,status),response(0)],2);
     expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(code);
     expect(f.store.complete.mock.calls[0]![3]).toBe(feedback);
     expect(f.send).toHaveBeenCalledTimes(1);
   });
 
-  it.each([303, 601, 602])('switches to another token after confirmed quota code %s within the same call', async code => {
-    const f = fixture([response(code), response(0)], 2);
+  it.each([100, 303, 601, 602])('switches to another token after confirmed key rejection %s within the same call', async code => {
+    const f = fixture([response(code,code === 100 ? 401 : 200), response(0)], 2);
     expect((await f.client.call(endpoint, request, identity)).providerCode).toBe(0);
     expect(f.store.begin).toHaveBeenCalledTimes(1);
     expect(f.store.reserve.mock.calls.map(args => args[2])).toEqual([
       f.credentials.map(c => c.id), [f.credentials[1]!.id],
     ]);
-    expect(f.store.complete).toHaveBeenNthCalledWith(1, identity, expect.anything(), expect.anything(), 'endpoint_exhausted', false);
+    expect(f.store.complete).toHaveBeenNthCalledWith(1, identity, expect.anything(), expect.anything(), code === 100 ? 'invalid' : 'endpoint_exhausted', false);
     expect(f.store.complete.mock.invocationCallOrder[0]).toBeLessThan(f.store.reserve.mock.invocationCallOrder[1]!);
     expect(f.send).toHaveBeenCalledTimes(2);
     expect(f.store.finish).toHaveBeenCalledWith(identity, expect.any(String), 'completed');
@@ -72,13 +72,21 @@ describe("bounded provider retries", () => {
     expect(f.store.reserve.mock.calls[2]![2]).toEqual(f.credentials.slice(2).map(c=>c.id));
   });
 
+  it('marks every rejected credential and stops when all keys are invalid',async()=>{
+    const f=fixture([response(100,401),response(100,401),response(0)],2);
+    expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(100);
+    expect(f.send).toHaveBeenCalledTimes(2);
+    expect(f.store.complete.mock.calls.map(args=>args[3])).toEqual(['invalid','invalid']);
+    expect(f.store.finish).toHaveBeenCalledWith(identity,expect.any(String),'failed');
+  });
+
   it('honors an explicit Retry-After even for quota failover',async()=>{
     const f=fixture([{...response(303,429),retryAfterMs:20_000},response(0)],2);
     expect((await f.client.call(endpoint,request,identity)).providerCode).toBe(303);
     expect(f.send).toHaveBeenCalledTimes(1);
   });
 
-  it.each([100, 201, 400, 600, 999])('never turns code %s or message text into quota failover', async code => {
+  it.each([201, 400, 600, 999])('never turns code %s or message text into quota failover', async code => {
     const result = response(code);
     result.providerMessage = 'Insufficient quota / 额度不足';
     result.payload = {...result.payload, message:result.providerMessage};
@@ -92,6 +100,8 @@ describe("bounded provider retries", () => {
     {...response(601), payload:{code:0,message:'quota exhausted'}},
     {...response(601), payload:{code:'601',message:'额度不足'}},
     {...response(601), httpStatus:403},
+    {...response(100,401),payload:{code:999,message:'TOKEN INVALID/UNACTIVATE'}},
+    {...response(100,401),payload:{code:'100'}},
     {...response(0), payload:{code:0,data:{message:'额度不足'}}},
   ])('does not alter quota for inconsistent, successful or non-provider envelopes', async result => {
     const f=fixture([result,response(0)],2);await f.client.call(endpoint,request,identity);

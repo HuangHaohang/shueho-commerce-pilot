@@ -53,3 +53,8 @@ a new client. Check all-exhausted/attempt-limit termination, failed transaction
 non-replay, Retry-After, 600 permission refusal without quota zeroing, successful
 data mentioning quota, inconsistent/unknown error envelopes and network/5xx
 uncertainty. These tests use fabricated provider responses and a disposable database.
+
+Invalid-key acceptance additionally covers HTTP 401/code 100 with same-call
+failover, durable global invalidation and timestamp, untouched sibling-interface
+counters, random eligible selection, mismatched authentication envelopes, and
+exclusion on another interface in a fresh client.

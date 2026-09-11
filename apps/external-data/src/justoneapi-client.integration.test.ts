@@ -86,14 +86,17 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
   });
   afterAll(async () => { await runtime.end(); await owner.end(); });
 
-  it("rotates tokens by endpoint, debits once, survives a new client, and retains complete raw responses", async () => {
+  it("selects eligible tokens randomly by endpoint, debits once, survives a new client, and retains complete raw responses", async () => {
     const f = await fixture();
     for (let index = 0; index < 4; index += 1) {
       const call = await ownedRequest();
       await f.make().call(call.ep,call.request,call.identity);
     }
-    expect(f.sent).toEqual([f.credentials[0]!.id,f.credentials[1]!.id,f.credentials[0]!.id,f.credentials[1]!.id]);
-    expect((await f.counters()).map((row) => [row.remaining_calls,row.used_calls,row.reserved_calls,row.inflight_calls])).toEqual([[1,2,0,0],[1,2,0,0]]);
+    expect(f.sent.every(id=>f.credentials.some(c=>c.id===id))).toBe(true);
+    for(const row of await f.counters()) {
+      const uses=f.sent.filter(id=>id===row.token_id).length;
+      expect(row).toMatchObject({remaining_calls:3-uses,used_calls:uses,reserved_calls:0,inflight_calls:0});
+    }
     expect((await f.counters(pathB)).map((row) => row.remaining_calls)).toEqual([2,2]);
     const saved = await owner.query("SELECT response_raw_bytes,response_payload,response_sha256 FROM justoneapi_token_attempt WHERE token_id=ANY($1)", [f.credentials.map((token) => token.id)]);
     expect(saved.rowCount).toBe(4);
@@ -131,11 +134,11 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
 
   it.each([303,601,602])("archives quota code %s and succeeds with a different key in the same governed call", async code => {
     const f = await fixture(); const call = await ownedRequest();
-    const result = await f.make(async credential => response(credential.id === f.credentials[0]!.id ? code : 0),undefined,f.store,3)
+    const result = await f.make(async () => response(f.sent.length === 1 ? code : 0),undefined,f.store,3)
       .call(call.ep,call.request,call.identity);
     expect(result.providerCode).toBe(0);
-    expect(f.sent).toEqual(f.credentials.map(c=>c.id));
-    expect(await f.counters()).toMatchObject([
+    expect(new Set(f.sent).size).toBe(2);
+    expect((await f.counters()).sort((a,b)=>f.sent.indexOf(a.token_id)-f.sent.indexOf(b.token_id))).toMatchObject([
       {remaining_calls:0,state:'exhausted',used_calls:1,reserved_calls:0,inflight_calls:0},
       {remaining_calls:2,state:'active',used_calls:1,reserved_calls:0,inflight_calls:0},
     ]);
@@ -145,37 +148,54 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     expect(archive.rows[0]!.response_payload.code).toBe(code);
     expect(JSON.parse(archive.rows[0]!.response_raw_bytes.toString()).code).toBe(code);
     const next=await ownedRequest();await f.make().call(next.ep,next.request,next.identity);
-    expect(f.sent[2]).toBe(f.credentials[1]!.id);
+    expect(f.sent[2]).toBe(f.sent[1]);
   });
 
   it("archives an endpoint quota rejection once and rotates the next governed call when attempt budget is one", async () => {
     const f = await fixture(); const call = await ownedRequest();
-    await f.make(async (credential) => response(credential.id === f.credentials[0]!.id ? 601 : 0)).call(call.ep,call.request,call.identity);
+    await f.make(async () => response(601)).call(call.ep,call.request,call.identity);
     expect(f.sent).toHaveLength(1);
     const next = await ownedRequest();
     await f.make().call(next.ep,next.request,next.identity);
-    const rows = await f.counters();
+    const rows = (await f.counters()).sort((a,b)=>f.sent.indexOf(a.token_id)-f.sent.indexOf(b.token_id));
     expect(rows[0]).toMatchObject({ state: "exhausted", remaining_calls: 0, used_calls: 1 });
     expect(rows[1]).toMatchObject({ remaining_calls: 2, used_calls: 1 });
     const another = await ownedRequest(pathB);
-    await f.make().call(another.ep,another.request,another.identity);
-    expect(f.sent[2]).toBe(f.credentials[0]!.id);
+    const onlyExhaustedOnA=new JustOneApiClient({credentials:async()=>f.credentials.filter(c=>c.id===f.sent[0]),store:f.store,transport:{prepare:async()=>({proxyNodeId:null,close(){},send:async credential=>{f.sent.push(credential.id);return response();}})},configured:true,timeoutMs:()=>5000,admission:{acquire:async()=>({acquired:true,waitMs:0,reason:null}),feedback:async()=>0,release:async()=>{}}});
+    await onlyExhaustedOnA.call(another.ep,another.request,another.identity);
+    expect(f.sent[2]).toBe(f.sent[0]);
     const raw = await owner.query("SELECT provider_code,response_raw_bytes FROM justoneapi_token_attempt WHERE raw_call_id=ANY($1::uuid[]) ORDER BY created_at",[[call.identity.rawCallId,next.identity.rawCallId]]);
     expect(raw.rows.map((row) => row.provider_code)).toEqual([601,0]);
     expect(raw.rows.every((row) => row.response_raw_bytes.length > 0)).toBe(true);
   });
 
   it("invalidates a truly invalid token globally but scopes permission and rate failures to the endpoint", async () => {
-    const f = await fixture(3); const call = await ownedRequest();
-    await f.make(async (credential) => response(credential.id === f.credentials[0]!.id ? 100 : credential.id === f.credentials[1]!.id ? 600 : 0)).call(call.ep,call.request,call.identity);
+    const f = await fixture(2); const call = await ownedRequest();
+    await f.make(async () => ({...response(100),httpStatus:401})).call(call.ep,call.request,call.identity);
     const denied = await ownedRequest();
     await f.make(async () => response(600)).call(denied.ep,denied.request,denied.identity);
-    expect((await f.counters())[1]).toMatchObject({ state: "permission_denied", remaining_calls: 2, used_calls: 1 });
+    expect((await f.counters()).find(r=>r.token_id===f.sent[1])).toMatchObject({ state: "permission_denied", remaining_calls: 2, used_calls: 1 });
     const another = await ownedRequest(pathB);
     await f.make(async () => response(302)).call(another.ep,another.request,another.identity);
-    expect(f.sent.at(-1)).toBe(f.credentials[1]!.id);
-    const state = await owner.query("SELECT state FROM justoneapi_token WHERE token_id=$1",[f.credentials[0]!.id]);
+    expect(f.sent.at(-1)).toBe(f.sent[1]);
+    const state = await owner.query("SELECT state FROM justoneapi_token WHERE token_id=$1",[f.sent[0]]);
     expect(state.rows[0].state).toBe("invalid");
+  });
+
+  it("archives HTTP 401/code 100, marks the key invalid and fails over without zeroing interface counters", async () => {
+    const f=await fixture();const call=await ownedRequest();
+    const result=await f.make(async()=>f.sent.length===1?{...response(100),httpStatus:401}:response(),undefined,f.store,3)
+      .call(call.ep,call.request,call.identity);
+    expect(result.providerCode).toBe(0);expect(new Set(f.sent).size).toBe(2);
+    const invalid=f.sent[0];
+    const marked=await owner.query('SELECT state,updated_at FROM justoneapi_token WHERE token_id=$1',[invalid]);
+    expect(marked.rows[0].state).toBe('invalid');expect(marked.rows[0].updated_at).toBeInstanceOf(Date);
+    expect((await f.counters()).find(r=>r.token_id===invalid)).toMatchObject({remaining_calls:2,used_calls:1,state:'active'});
+    expect((await f.counters(pathB)).find(r=>r.token_id===invalid)).toMatchObject({remaining_calls:2,used_calls:0,state:'active'});
+    const next=await ownedRequest(pathB);await f.make().call(next.ep,next.request,next.identity);
+    expect(f.sent[2]).not.toBe(invalid);
+    const archive=await owner.query('SELECT provider_code,http_status FROM justoneapi_token_attempt WHERE raw_call_id=$1 ORDER BY ordinal',[call.identity.rawCallId]);
+    expect(archive.rows).toEqual([{provider_code:100,http_status:401},{provider_code:0,http_status:200}]);
   });
 
   it("releases an unsent reservation on proxy failure and never increments used calls", async () => {
@@ -191,7 +211,7 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     await expect(f.make(async () => { throw new JustOneApiError("uncertain","RESULT_UNKNOWN",true); })
       .call(call.ep,call.request,call.identity)).rejects.toMatchObject({ uncertain: true });
     expect(f.sent).toHaveLength(1);
-    expect((await f.counters())[0]).toMatchObject({ remaining_calls: 2,used_calls: 1,inflight_calls: 0 });
+    expect((await f.counters()).find(r=>r.token_id===f.sent[0])).toMatchObject({ remaining_calls: 2,used_calls: 1,inflight_calls: 0 });
     await expect(f.make().call(call.ep,call.request,call.identity)).rejects.toMatchObject({ code: "CALL_ALREADY_CLAIMED" });
     expect(f.sent).toHaveLength(1);
   });
@@ -211,7 +231,7 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     class FailingStore extends PostgresJustOneApiTokenStore { override async complete(): Promise<void> { throw new Error("fixture database interruption"); } }
     await expect(f.make(undefined,undefined,new FailingStore(runtime)).call(call.ep,call.request,call.identity)).rejects.toMatchObject({ uncertain: true });
     expect(f.sent).toHaveLength(1);
-    expect((await f.counters())[0]).toMatchObject({ remaining_calls: 2,used_calls: 1 });
+    expect((await f.counters()).find(r=>r.token_id===f.sent[0])).toMatchObject({ remaining_calls: 2,used_calls: 1 });
   });
 
   it("rejects foreign ownership and enforces RLS and immutable receipt permissions", async () => {
@@ -229,9 +249,9 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     const f = await fixture(); const call = await ownedRequest();
     await f.make().call(call.ep,call.request,call.identity);
     expect((await importJustOneApiQuotaSnapshot(owner,f.credentials,f.snapshot)).replayed).toBe(true);
-    expect((await f.counters())[0].remaining_calls).toBe(2);
+    expect((await f.counters()).find(r=>r.token_id===f.sent[0]).remaining_calls).toBe(2);
     await expect(importJustOneApiQuotaSnapshot(owner,f.credentials,{ ...f.snapshot,observedAt:new Date().toISOString() })).rejects.toThrow("already initialized");
-    await expect(importJustOneApiQuotaSnapshot(owner,f.credentials.slice(0,1),{ ...f.snapshot,mode:"observed",observedAt:new Date(Date.now()-60_000).toISOString() })).rejects.toThrow("stale");
+    await expect(importJustOneApiQuotaSnapshot(owner,f.credentials.filter(c=>c.id===f.sent[0]),{ ...f.snapshot,mode:"observed",observedAt:new Date(Date.now()-60_000).toISOString() })).rejects.toThrow("stale");
     await expect(importJustOneApiQuotaSnapshot(owner,f.credentials,{ ...f.snapshot,mode:"observed" })).rejects.toThrow("exactly one");
   });
 
@@ -264,7 +284,7 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     class FailingFinishStore extends PostgresJustOneApiTokenStore { override async finish(): Promise<void> { throw new Error("fixture commit response lost"); } }
     await expect(f.make(undefined,undefined,new FailingFinishStore(runtime)).call(call.ep,call.request,call.identity)).rejects.toMatchObject({uncertain:true,code:"RESULT_UNKNOWN"});
     expect(f.sent).toHaveLength(1);
-    expect((await f.counters())[0]).toMatchObject({remaining_calls:2,used_calls:1,inflight_calls:0});
+    expect((await f.counters()).find(r=>r.token_id===f.sent[0])).toMatchObject({remaining_calls:2,used_calls:1,inflight_calls:0});
     const raw = await owner.query("SELECT state,response_raw_bytes FROM justoneapi_token_attempt WHERE raw_call_id=$1",[call.identity.rawCallId]);
     expect(raw.rows[0].state).toBe("succeeded");
     expect(raw.rows[0].response_raw_bytes.toString()).toBe(response().rawBody);

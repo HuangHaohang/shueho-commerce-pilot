@@ -1,5 +1,5 @@
 import type { ProviderCallResult } from "./types.js";
-import { isQuotaExhaustionResponse } from './justoneapi-errors.js';
+import { isQuotaExhaustionResponse, providerTokenFeedback } from './justoneapi-errors.js';
 
 export type JustOneApiResilienceOptions = {
   maxAttempts: number;
@@ -22,7 +22,7 @@ export const defaultJustOneApiResilience: JustOneApiResilienceOptions = {
 
 /** Only explicit documented non-billable rejections authorize another attempt. */
 export function isRetryableProviderRejection(result: ProviderCallResult): boolean {
-  if (isQuotaExhaustionResponse(result)) return true;
+  if (isQuotaExhaustionResponse(result) || providerTokenFeedback(result) === 'invalid') return true;
   return result.state === "business_failed" && (result.httpStatus >= 200 && result.httpStatus < 300 || result.httpStatus === 429) &&
     (result.providerCode === 301 || result.providerCode === 302) && result.payload?.code === result.providerCode;
 }

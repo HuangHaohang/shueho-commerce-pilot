@@ -20,16 +20,16 @@ Provision this file outside Git with mode 0600, readable only by the warehouse s
 
 ## Counter and request lifecycle
 
-Quotas are keyed by token and exact canonical API path, including version. Parameters or concrete ids do not create new quota buckets. PostgreSQL serializes selection by endpoint across processes; least recently selected eligible tokens implement persistent round-robin order. A known zero or unknown allowance is never selected.
+Quotas are keyed by token and exact canonical API path, including version. Parameters or concrete ids do not create new quota buckets. PostgreSQL serializes selection by endpoint across processes and randomly selects among eligible tokens. A known zero or unknown allowance is never selected.
 
 1. Existing Commerce governance performs live authorization, approval and budget admission, then the warehouse persists the Token-free request identity.
 2. The unified client claims the raw call once. Duplicate processes, repeated requests and restarts cannot claim it again.
 3. Token selection atomically reserves one unit: available decreases and reserved increases. A verified proxy tunnel is prepared before any provider HTTP request exists.
-4. Before sending, a compare-and-set moves each attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Only documented, confirmed non-billable `301`/`302` rejections, `303`/`601`/`602` quota failover, or a proxy failure before any provider bytes may lead to another bounded attempt under the same immutable governed call. A success, resource/configuration failure, unrecognized quota-like message or uncertain result cannot be replayed.
+4. Before sending, a compare-and-set moves each attempt from reserved to dispatched: reserved decreases, used and in-flight increase. Only documented, confirmed non-billable `301`/`302` rejections, `100` invalid-token and `303`/`601`/`602` quota failover, or a proxy failure before any provider bytes may lead to another bounded attempt under the same immutable governed call. A success, resource/configuration failure, unrecognized quota-like message or uncertain result cannot be replayed.
 5. The complete response is persisted in the scoped attempt archive before returning to the existing raw/normalization pipeline; in-flight decreases. A second settlement does not change counters.
 6. Proxy/setup failure before dispatch returns the reservation. A timeout, disconnect, 5xx response or uncertain persistence keeps the consumed unit, becomes unknown and is never replayed automatically. The small commit-before-network crash window is conservatively held for operator reconciliation, not silently refunded.
 
-Provider code 100 invalidates the credential globally. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies cooldown to both that combination and the shared endpoint admission bucket. Other interfaces remain eligible. `301`/`302` permit bounded retries, while confirmed `303`/`601`/`602` responses permit another eligible key within the same admitted call; the prior full rejection is archived before reserving/debiting another attempt. Every network attempt consumes one conservative token unit, including a rejected attempt, and no unit is refunded without authoritative quota reconciliation. Permission refusal blocks selection without overwriting the remaining-call counter with zero. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
+Provider code 100 invalidates the credential globally and permits another eligible key within the original call. Codes 303/601/602 stop only the current token/interface combination; code 600 records an interface permission failure. Code 302 applies cooldown to both that combination and the shared endpoint admission bucket. Other interfaces remain eligible. `301`/`302` permit bounded retries, while confirmed `100`/`303`/`601`/`602` responses permit another eligible key within the same admitted call; the prior full rejection is archived before reserving/debiting another attempt. Every network attempt consumes one conservative token unit, including a rejected attempt, and no unit is refunded without authoritative quota reconciliation. Permission refusal blocks selection without overwriting the remaining-call counter with zero. Generic errors and transport failures are not fuzzy-matched as quota exhaustion. Provider monetary limits and account-shared balances remain distinct from these local call budgets.
 
 Token rotation and proxy-node rotation are independent. Only the JustOneAPI client opts into the proxy pool. Document/catalog imports without provider credentials, database/model/MCP traffic and other services keep their existing network paths.
 
@@ -142,3 +142,26 @@ no schema migration or quota import is required. Verify the real PostgreSQL suit
 with fabricated supplier responses, both endpoint counters, archived attempts,
 concurrent selection, permanent errors and timeout non-replay. Production acceptance
 uses health and stored counter/receipt reads, never deliberate paid exhaustion.
+
+## Invalid-key failover and cleanup labels
+
+A matching numeric business code 100 in a business-failed HTTP 401, 2xx or 429
+response is a documented non-billable token rejection. Archive the full response
+and mark the token globally `invalid` in the same transaction before selecting
+another key in the original call. Do not zero its interface counters: this is a
+credential failure, not authoritative evidence that every allowance is exhausted.
+A bare 401, mismatched body, unknown code, or 5xx/network uncertainty cannot
+activate this retry. The existing three-total-attempt limit and deadline still apply.
+
+Selection now uses PostgreSQL `random()` over eligible rows under the existing
+endpoint lock. It is independent of file order, import time and selection history;
+an individual key can be selected again on a later call, while keys rejected in
+the current call are excluded. Eligibility and dispatch fencing still reject
+invalid/disabled tokens and exhausted/denied/cooling-down interface pairs.
+
+`external-data:tokens:status` includes an operator-only `tokens` list with opaque
+id, four-character suffix, state, cleanup-candidate flag, reason label and marking
+time. Globally invalid/disabled keys are cleanup candidates; interface exhaustion
+alone is not. The response archive retains the exact provider code and message.
+Markers survive restarts and imports, and no automatic deletion or reactivation
+is performed. This status command never prints full keys and is not a public API.

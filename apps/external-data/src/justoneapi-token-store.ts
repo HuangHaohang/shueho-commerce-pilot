@@ -90,11 +90,12 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
           AND (quota.cooldown_until IS NULL OR quota.cooldown_until<=CURRENT_TIMESTAMP)
           AND NOT EXISTS (SELECT 1 FROM justoneapi_token_attempt previous
             WHERE previous.raw_call_id=$3 AND NOT (previous.state='cancelled' OR
-              COALESCE(previous.state='business_failed' AND previous.provider_code IN (301,302,303,601,602)
+              COALESCE(previous.state='business_failed' AND previous.provider_code IN (100,301,302,303,601,602)
                 AND previous.response_payload->'code'=to_jsonb(previous.provider_code)
                 AND (previous.provider_code IN (301,302) OR previous.token_id<>quota.token_id)
-                AND (previous.http_status BETWEEN 200 AND 299 OR previous.http_status=429),false)))
-        ORDER BY quota.last_selected_seq,array_position($2::text[],quota.token_id) LIMIT 1 FOR UPDATE OF quota,token`,
+                AND (previous.http_status BETWEEN 200 AND 299 OR previous.http_status=429
+                  OR (previous.provider_code=100 AND previous.http_status=401)),false)))
+        ORDER BY random() LIMIT 1 FOR UPDATE OF quota,token`,
       [identity.apiPath,tokenIds,identity.rawCallId]);
       const tokenId = selected.rows[0]?.token_id;
       if (!tokenId) return null;

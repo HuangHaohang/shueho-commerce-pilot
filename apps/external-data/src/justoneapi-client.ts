@@ -72,7 +72,7 @@ export class JustOneApiClient {
     let admissionExpired = false;
     let lastResult: ProviderCallResult | null = null;
     const tokenIds = this.credentials.map((item) => item.id);
-    const exhaustedTokenIds = new Set<string>();
+    const rejectedTokenIds = new Set<string>();
     const delay = async (ms: number, reason: string): Promise<boolean> => {
       await store.progress(identity, executionId, attempts, reason, now() + ms);
       if (now() + ms + options.minimumAttemptWindowMs > deadline) { admissionExpired = true; return false; }
@@ -86,7 +86,7 @@ export class JustOneApiClient {
     };
     try {
       while (attempts < options.maxAttempts && now() + options.minimumAttemptWindowMs <= deadline) {
-        const eligibleTokenIds = tokenIds.filter(id => !exhaustedTokenIds.has(id));
+        const eligibleTokenIds = tokenIds.filter(id => !rejectedTokenIds.has(id));
         if (!eligibleTokenIds.length) break;
         const candidateLease = randomUUID();
         const permit = await admission.acquire(identity.apiPath, candidateLease, deadline + 5_000);
@@ -132,7 +132,8 @@ export class JustOneApiClient {
         await store.complete(identity, reservation, result, feedback, uncertainResponse);
         // Only confirmed non-billable refusals permit a fresh pre-dispatch state.
         mayHaveDispatched = uncertainResponse || !isRetryableProviderRejection(result);
-        if (feedback === 'endpoint_exhausted') exhaustedTokenIds.add(reservation.tokenId);
+        const switchKey = feedback === 'endpoint_exhausted' || feedback === 'invalid';
+        if (switchKey) rejectedTokenIds.add(reservation.tokenId);
         reservation = null;
         // Even an unparseable 429 closes admission, but that request remains unknown.
         const throttled = feedback === "rate_limited" || result.httpStatus === 429 && result.providerCode === null;
@@ -142,9 +143,9 @@ export class JustOneApiClient {
         lastResult = result;
         await release();
         if (!isRetryableProviderRejection(result) || attempts >= options.maxAttempts) break;
-        // Endpoint admission still enforces spacing; quota failover needs no transient-error backoff.
-        if (feedback === 'endpoint_exhausted') {
-          if (result.retryAfterMs && !await delay(result.retryAfterMs, 'quota_exhausted')) break;
+        // Endpoint admission still enforces spacing; key failover needs no transient-error backoff.
+        if (switchKey) {
+          if (result.retryAfterMs && !await delay(result.retryAfterMs, 'key_rejected')) break;
           continue;
         }
         const backoff = Math.max(cooldown, result.retryAfterMs ?? 0, retryDelayMs(attempts, options));
