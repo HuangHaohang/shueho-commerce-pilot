@@ -51,7 +51,7 @@ export function readEnvironmentPlan(state, parentEnvironment = process.env) {
     COMMERCE_PROVIDER_ID: 'scale_catalog_fixture', COMMERCE_PROVIDER_NAME: 'Read-only local catalog fixture',
     COMMERCE_PROVIDER_BASE_URL: 'http://127.0.0.1:8888/v1', COMMERCE_PROVIDER_API_KEY: READ_FIXTURE_PROVIDER_KEY,
     CODEX_DEFAULT_MODEL: 'gpt-5.6-luna', COMMERCE_WEB_SEARCH_MODEL: 'gpt-5.6-luna',
-    COMMERCE_IMAGE_MODEL: 'gpt-image-2', COMMERCE_AGENT_MODEL_SELECTORS: 'gpt-5.6-luna,gpt-6-astra',
+    COMMERCE_IMAGE_MODEL: 'gpt-image-2', COMMERCE_IMAGE_QUALITY: 'auto', COMMERCE_AGENT_MODEL_SELECTORS: 'gpt-5.6-luna,gpt-6-astra',
     COMMERCE_AGENT_EVENT_SINK_URL: 'http://127.0.0.1:3100/api/internal/agent-events',
     COMMERCE_AGENT_AUTHORIZATION_URL: 'http://127.0.0.1:3100/api/internal/agent-authorization',
     COMMERCE_AGENT_ADMISSION_URL: 'http://127.0.0.1:3100/api/internal/agent-admission',
@@ -133,7 +133,7 @@ export async function stageApplications(plan, sourceRoot = root) {
   // The managed MCP intentionally does not receive DOTENV_CONFIG_PATH. Its
   // fallback .env contains only provider fixture settings, never callback keys.
   const mcpValues = Object.entries(plan.gatewayEnvironment).filter(([key]) =>
-    key.startsWith('COMMERCE_PROVIDER_') || ['CODEX_HOME', 'NODE_ENV', 'COMMERCE_WEB_SEARCH_MODEL', 'COMMERCE_IMAGE_MODEL', 'COMMERCE_AGENT_MODEL_SELECTORS'].includes(key));
+    key.startsWith('COMMERCE_PROVIDER_') || ['CODEX_HOME', 'NODE_ENV', 'COMMERCE_WEB_SEARCH_MODEL', 'COMMERCE_IMAGE_MODEL', 'COMMERCE_IMAGE_QUALITY', 'COMMERCE_AGENT_MODEL_SELECTORS'].includes(key));
   await writeFile(join(gateway, '.env'), mcpValues.map(([key, value]) => `${key}='${value.replaceAll("'", '')}'`).join('\n') + '\n', { mode: 0o600 });
   return { stage, gateway, web };
 }

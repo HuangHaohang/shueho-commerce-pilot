@@ -54,7 +54,7 @@ The current Next.js BFF has one static `COMMERCE_GATEWAY_URL`; a general tenant-
 
 ## Container Deployment
 
-Build (the Dockerfile first compiles and tests the exact `rust-v0.150.1` + `shueho.1` Harness patch in a pinned Rust stage, then verifies the artifact again in Node build and runtime stages):
+Build (the Dockerfile first compiles and tests the exact `rust-v0.150.1` + `shueho.2` Harness patch in a pinned Rust stage, then verifies the artifact again in Node build and runtime stages):
 
 ```bash
 docker build -t shueho-commerce-pilot .
@@ -70,6 +70,7 @@ docker run --rm \
   -e COMMERCE_PROVIDER_API_KEY="..." \
   -e COMMERCE_PROVIDER_BASE_URL="https://cpa.luusmosh.com/v1" \
   -e COMMERCE_IMAGE_MODEL="gpt-image-2" \
+  -e COMMERCE_IMAGE_QUALITY="auto" \
   -e COMMERCE_GATEWAY_INTERNAL_TOKEN="a-random-secret-of-at-least-32-characters" \
   -e COMMERCE_AGENT_EVENT_SINK_URL="http://commerce-web:3000/api/internal/agent-events" \
   -e COMMERCE_AGENT_AUTHORIZATION_URL="http://commerce-web:3000/api/internal/agent-authorization" \
@@ -248,6 +249,12 @@ The browser still receives the intersection of this server-owned selection and t
 `runtime/models/hosted-models.json` preserves the pinned Codex model metadata with `tool_mode=direct`, installed into application-owned `CODEX_HOME` and loaded through native `model_catalog_json`. Both code-mode feature switches and the unused standalone host are disabled. The model catalog's `code_mode_only` otherwise takes precedence over `features.code_mode.enabled=false`, causing Luna/Astra to invoke an unbundled `codex-code-mode-host`. The pinned macOS ARM sandbox V8 prebuilt archive also returns 404, so the hosted application uses its intended native direct-tool configuration rather than installing a second execution surface or relaxing sandboxing.
 
 Native image generation still uses the Harness `image_gen` extension / supported Provider-hosted path and native `imageGeneration` Items. Provider routing, tenant authorization and the hosted tool allowlist remain unchanged. Restart Gateway/App Server after changing this metadata; do not replay image requests automatically. Gateway's live upstream catalog remains the model-availability authority.
+
+`COMMERCE_IMAGE_MODEL` and `COMMERCE_IMAGE_QUALITY` are fixed per tenant-dedicated Gateway.
+The application-owned `shueho.2` Harness patch supports Provider image models such as GPT Image
+2.5 Flare and Sunburst and the qualities `low`, `medium`, `high`, `xhigh`, `max`, and `auto` for
+both generation and editing. Roll out one drained setting at a time; never change it inside an
+active Turn or retry an uncertain paid image request after a restart.
 
 The managed `PreToolUse` allowlist includes the exact native direct image-tool identity `image_genimagegen` (namespace `image_gen` plus method `imagegen`). The Hook receives this concatenated identity, not just the method name; allowing only `image_gen` or `imagegen` blocks the legitimate native tool. Matching remains exact, with unknown tools and host permission requests denied.
 

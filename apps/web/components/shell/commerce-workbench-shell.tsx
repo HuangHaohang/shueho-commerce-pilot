@@ -233,6 +233,7 @@ type ProviderModelsResponse = {
   agentModels: ProviderModelSummary[];
   imageModels: ProviderModelSummary[];
   configuredImageModel: string;
+  configuredImageQuality: string;
 };
 
 type AgentThreadsResponse = {

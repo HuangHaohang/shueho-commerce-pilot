@@ -1,0 +1,142 @@
+diff --git a/codex-rs/codex-api/src/images.rs b/codex-rs/codex-api/src/images.rs
+index 457d43336..851f6a5e1 100644
+--- a/codex-rs/codex-api/src/images.rs
++++ b/codex-rs/codex-api/src/images.rs
+@@ -49,6 +49,9 @@ pub enum ImageQuality {
+     Low,
+     Medium,
+     High,
++    #[serde(rename = "xhigh")]
++    XHigh,
++    Max,
+     Auto,
+ }
+ 
+diff --git a/codex-rs/ext/image-generation/src/tests.rs b/codex-rs/ext/image-generation/src/tests.rs
+index d160d658a..11bf0eced 100644
+--- a/codex-rs/ext/image-generation/src/tests.rs
++++ b/codex-rs/ext/image-generation/src/tests.rs
+@@ -28,6 +28,8 @@ use pretty_assertions::assert_eq;
+ use super::GeneratedImageOutput;
+ use super::ImageRequest;
+ use super::ImagegenArgs;
++use super::image_model_from_value;
++use super::image_quality_from_value;
+ use super::imagegen_tool_spec;
+ use super::request_for_call_args;
+ use crate::IMAGE_GEN_NAMESPACE;
+@@ -57,6 +59,30 @@ fn uses_reserved_image_gen_namespace() {
+     assert_eq!(function.name, IMAGEGEN_TOOL_NAME);
+ }
+ 
++#[test]
++fn configured_image_settings_support_provider_variants() {
++    for model in [
++        "gpt-image-2",
++        "gpt-image-2.5-flare",
++        "gpt-image-2.5-sunburst",
++    ] {
++        assert_eq!(image_model_from_value(Some(model)), Ok(model.to_string()));
++    }
++    assert!(image_model_from_value(Some("../invalid model")).is_err());
++
++    for (quality, expected) in [
++        ("low", ImageQuality::Low),
++        ("medium", ImageQuality::Medium),
++        ("high", ImageQuality::High),
++        ("xhigh", ImageQuality::XHigh),
++        ("max", ImageQuality::Max),
++        ("auto", ImageQuality::Auto),
++    ] {
++        assert_eq!(image_quality_from_value(Some(quality)), Ok(expected));
++    }
++    assert!(image_quality_from_value(Some("ultra")).is_err());
++}
++
+ #[tokio::test]
+ async fn omitted_references_generate_with_fixed_defaults() {
+     assert_eq!(
+diff --git a/codex-rs/ext/image-generation/src/tool.rs b/codex-rs/ext/image-generation/src/tool.rs
+index 35d33ca09..4103c2c1b 100644
+--- a/codex-rs/ext/image-generation/src/tool.rs
++++ b/codex-rs/ext/image-generation/src/tool.rs
+@@ -38,7 +38,10 @@ use crate::tool::ImageGenerationTool;
+ use crate::artifact::image_generation_output_hint;
+ use crate::backend::CodexImagesBackend;
+ 
+-const IMAGE_MODEL: &str = "gpt-image-2";
++const DEFAULT_IMAGE_MODEL: &str = "gpt-image-2";
++const DEFAULT_IMAGE_QUALITY: &str = "auto";
++const IMAGE_MODEL_ENV: &str = "COMMERCE_IMAGE_MODEL";
++const IMAGE_QUALITY_ENV: &str = "COMMERCE_IMAGE_QUALITY";
+ const MAX_EDIT_IMAGES: usize = 5;
+ const MAX_EXECUTOR_GENERATED_IMAGE_BYTES: usize = 32 * 1024 * 1024;
+ const MAX_EXECUTOR_GENERATED_IMAGE_BASE64_BYTES: usize =
+@@ -278,6 +281,10 @@ async fn request_for_call_args(
+     history: &[ResponseItem],
+     environments: &[ToolEnvironment],
+ ) -> Result<ImageRequest, FunctionCallError> {
++    let model = image_model_from_value(std::env::var(IMAGE_MODEL_ENV).ok().as_deref())
++        .map_err(FunctionCallError::RespondToModel)?;
++    let quality = image_quality_from_value(std::env::var(IMAGE_QUALITY_ENV).ok().as_deref())
++        .map_err(FunctionCallError::RespondToModel)?;
+     let paths = args.referenced_image_paths.as_deref().unwrap_or_default();
+     if paths.len() > MAX_EDIT_IMAGES {
+         return Err(FunctionCallError::RespondToModel(format!(
+@@ -291,9 +297,9 @@ async fn request_for_call_args(
+             return Ok(ImageRequest::Generate(ImageGenerationRequest {
+                 prompt: args.prompt.clone(),
+                 background: Some(ImageBackground::Auto),
+-                model: IMAGE_MODEL.to_string(),
++                model,
+                 n: None,
+-                quality: Some(ImageQuality::Auto),
++                quality: Some(quality),
+                 size: Some("auto".to_string()),
+             }));
+         }
+@@ -338,12 +344,40 @@ async fn request_for_call_args(
+     Ok(ImageRequest::Edit(ImageEditRequest {
+         images,
+         prompt: args.prompt.clone(),
+         background: Some(ImageBackground::Auto),
+-        model: IMAGE_MODEL.to_string(),
++        model,
+         n: None,
+-        quality: Some(ImageQuality::Auto),
++        quality: Some(quality),
+         size: Some("auto".to_string()),
+     }))
+ }
+ 
++fn image_model_from_value(value: Option<&str>) -> Result<String, String> {
++    let model = value.unwrap_or(DEFAULT_IMAGE_MODEL).trim();
++    if model.is_empty()
++        || model.len() > 128
++        || !model
++            .bytes()
++            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
++    {
++        return Err(format!("{IMAGE_MODEL_ENV} is not a valid provider model id"));
++    }
++    Ok(model.to_string())
++}
++
++fn image_quality_from_value(value: Option<&str>) -> Result<ImageQuality, String> {
++    let quality = value.unwrap_or(DEFAULT_IMAGE_QUALITY).trim();
++    match quality {
++        "low" => Ok(ImageQuality::Low),
++        "medium" => Ok(ImageQuality::Medium),
++        "high" => Ok(ImageQuality::High),
++        "xhigh" => Ok(ImageQuality::XHigh),
++        "max" => Ok(ImageQuality::Max),
++        "auto" => Ok(ImageQuality::Auto),
++        _ => Err(format!(
++            "{IMAGE_QUALITY_ENV} must be low, medium, high, xhigh, max, or auto"
++        )),
++    }
++}
++
+ fn recent_images(history: &[ResponseItem], count: usize) -> Vec<ImageUrl> {
+     let mut images = Vec::with_capacity(count);
+     'history: for item in history.iter().rev() {

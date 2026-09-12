@@ -22,6 +22,7 @@ export type ProviderModelCatalog = {
   imageModels: ProviderModel[];
   otherModels: ProviderModel[];
   configuredImageModel: string;
+  configuredImageQuality: CommerceProviderConfig["imageQuality"];
 };
 
 export type WebSearchResult = {
@@ -130,6 +131,7 @@ export class CommerceProviderClient {
       imageModels: models.filter((model) => model.kind === "image"),
       otherModels: models.filter((model) => model.kind === "other"),
       configuredImageModel: this.config.imageModel,
+      configuredImageQuality: this.config.imageQuality,
     };
 
     if (!catalog.imageModels.some((model) => model.id === this.config.imageModel)) {

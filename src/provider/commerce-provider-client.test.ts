@@ -44,6 +44,7 @@ test("generates structured outcome titles with the configured Spark model", asyn
       apiKeyEnvName: "TEST_API_KEY",
       apiKey: "secret",
       imageModel: "gpt-image-2",
+      imageQuality: "auto",
       webSearchModel: "gpt-5.6-luna",
       agentModelSelectors: ["gpt-5.6-sol"],
       modelCacheTtlMs: 60_000,
@@ -77,7 +78,7 @@ test("agent selection exposes only Luna from 5.6 and verifies new models against
   try {
     const client = new CommerceProviderClient({
       id: "fixture", name: "Fixture", baseUrl: "https://provider.example/v1", apiKeyEnvName: "TEST_API_KEY", apiKey: "fixture",
-      imageModel: "gpt-image-2", webSearchModel: "gpt-5.6-luna", agentModelSelectors: [...DEFAULT_AGENT_MODEL_SELECTORS],
+      imageModel: "gpt-image-2", imageQuality: "auto", webSearchModel: "gpt-5.6-luna", agentModelSelectors: [...DEFAULT_AGENT_MODEL_SELECTORS],
       modelCacheTtlMs: 60_000, webSearchTimeoutMs: 30_000, webSearchMaxAttempts: 1,
     });
     assert.deepEqual((await client.listModels()).agentModels.map((model) => model.id), ["gpt-5.6-luna", "gpt-6-astra", "gemini-3.8-flash-high"]);
@@ -94,7 +95,7 @@ test("agent selection exposes only Luna from 5.6 and verifies new models against
 const discoveryConfig: CommerceProviderConfig = {
   id: "fixture", name: "Fixture", baseUrl: "https://provider.example/v1",
   apiKeyEnvName: "TEST_API_KEY", apiKey: "fixture",
-  imageModel: "gpt-image-2", webSearchModel: "gpt-5.6-luna",
+  imageModel: "gpt-image-2", imageQuality: "auto", webSearchModel: "gpt-5.6-luna",
   agentModelSelectors: ["gpt-5.6-luna"], modelCacheTtlMs: 60_000,
   webSearchTimeoutMs: 30_000, webSearchMaxAttempts: 1,
 };

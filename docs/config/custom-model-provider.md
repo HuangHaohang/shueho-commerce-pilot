@@ -121,11 +121,22 @@ Provider-hosted /responses image_generation_call -> patched Harness imageGenerat
 Harness imageGeneration Item -> tenant artifact storage
 ```
 
-The relay accepts only model listing, Responses, Responses compaction, image generation, and image edit routes. It validates the runtime actor, strips that header, injects the upstream CPA key, and streams the one upstream response. The application-owned `shueho.1` Harness patch projects completed hosted `image_generation_call` output in real time and during history replay; it never dispatches a second image call. The relay and Gateway do not create an application-owned image tool or synthesize an Item.
+The relay accepts only model listing, Responses, Responses compaction, image generation, and image edit routes. It validates the runtime actor, strips that header, injects the upstream CPA key, and streams the one upstream response. The application-owned `shueho.2` Harness patch projects completed hosted `image_generation_call` output in real time and during history replay; it never dispatches a second image call. The relay and Gateway do not create an application-owned image tool or synthesize an Item.
 
 Codex owns image intent detection, Skill instructions, provider execution, item lifecycle, usage and Turn continuation. Gateway consumes the completed native Item, saves the base64 result under `$CODEX_HOME/generated_images`, and stores non-PII metadata under `$CODEX_HOME/generated_image_metadata`. Before SSE or history reaches the BFF, Gateway removes image bytes and `savedPath`; the browser receives only an ownership-checked artifact URL. A Provider request or stream failure is treated as uncertain: retries are disabled and 120 seconds without SSE progress terminates the attempt for explicit reconciliation/retry.
 
-The image model is fixed by `COMMERCE_IMAGE_MODEL=gpt-image-2`. Other image models returned from `/models` are not silently selected.
+The image model and quality are application-owned deployment settings. `COMMERCE_IMAGE_MODEL`
+must identify an image model in the live Provider catalog; supported deployed examples include
+`gpt-image-2`, `gpt-image-2.5-flare`, and `gpt-image-2.5-sunburst`.
+`COMMERCE_IMAGE_QUALITY` accepts `low`, `medium`, `high`, `xhigh`, `max`, or `auto`.
+The reviewed `shueho.2` Harness patch passes both settings through the native `image_gen`
+extension for generation and editing. Browser requests and model tool arguments cannot override
+them, and other image models returned from `/models` are not silently selected.
+
+Changing either value requires a drained Gateway/App Server restart. Validate the exact model and
+quality against the active Provider before customer traffic. The Gateway records the selected model
+and quality in tenant-owned artifact metadata and health output; a completed native
+`imageGeneration` Item remains the sole success authority.
 
 The browser cannot bypass the Agent boundary because no direct BFF or Gateway image-generation route exists and browser input cannot inject tools. Native image generation runs only inside an admitted Harness Turn. Its usage is captured by the normal `codex_harness` response event rather than a second `commerce_image_tool` request.
 

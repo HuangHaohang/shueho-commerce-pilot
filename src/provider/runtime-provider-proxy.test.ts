@@ -142,6 +142,7 @@ function createConfig(providerBaseUrl: string): GatewayConfig {
       apiKeyEnvName: "COMMERCE_PROVIDER_API_KEY",
       apiKey: "upstream-provider-key",
       imageModel: "gpt-image-2",
+      imageQuality: "auto",
       webSearchModel: "gpt-5.6-luna",
       agentModelSelectors: ["gpt-5.6-sol"],
       modelCacheTtlMs: 60_000,

@@ -17,6 +17,7 @@ type GatewayHealth = {
     id?: string;
     configured?: boolean;
     imageModel?: string;
+    imageQuality?: string;
     webSearchModel?: string;
     titleModel?: string;
     wireApi?: string;

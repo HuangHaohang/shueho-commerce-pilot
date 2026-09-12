@@ -91,6 +91,7 @@ try {
     ["codex-core", "generated_image_is_replayed_for_image_capable_models"],
     ["codex-app-server-protocol", "rebuilds_hosted_image_generation_from_raw_response_item"],
     ["codex-app-server-protocol", "raw_hosted_image_does_not_replace_an_existing_materialized_item"],
+    ["codex-image-generation-extension", "configured_image_settings_support_provider_variants"],
   ]) {
     const listedTests = run("cargo", ["test", "--locked", "-p", packageName, testName, "--", "--list"], {
       capture: true,

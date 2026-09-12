@@ -9,5 +9,5 @@
   "noticeSha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915",
   "cargoPackage": "codex-cli",
   "cargoBinary": "codex",
-  "patchRevision": "shueho.1"
+  "patchRevision": "shueho.2"
 }

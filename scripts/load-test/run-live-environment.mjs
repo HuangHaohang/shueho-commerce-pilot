@@ -9,7 +9,7 @@ const root = fileURLToPath(new URL('../..', import.meta.url));
 const fixtureRoot = resolve(root, '.runtime/scale-validation');
 export const LIVE_PROVIDER_FIELDS = Object.freeze([
   'COMMERCE_PROVIDER_ID', 'COMMERCE_PROVIDER_NAME', 'COMMERCE_PROVIDER_BASE_URL', 'COMMERCE_PROVIDER_API_KEY',
-  'COMMERCE_IMAGE_MODEL', 'COMMERCE_WEB_SEARCH_MODEL', 'COMMERCE_TITLE_MODEL', 'COMMERCE_AGENT_MODEL_SELECTORS',
+  'COMMERCE_IMAGE_MODEL', 'COMMERCE_IMAGE_QUALITY', 'COMMERCE_WEB_SEARCH_MODEL', 'COMMERCE_TITLE_MODEL', 'COMMERCE_AGENT_MODEL_SELECTORS',
   'COMMERCE_PROVIDER_MODEL_CACHE_TTL_MS', 'COMMERCE_WEB_SEARCH_TIMEOUT_MS', 'COMMERCE_WEB_SEARCH_MAX_ATTEMPTS',
   'CODEX_DEFAULT_MODEL',
 ]);
@@ -38,6 +38,7 @@ export function parseLiveProviderFile(contents) {
   provider.COMMERCE_WEB_SEARCH_MODEL ??= provider.CODEX_DEFAULT_MODEL;
   provider.COMMERCE_TITLE_MODEL ??= provider.CODEX_DEFAULT_MODEL;
   provider.COMMERCE_IMAGE_MODEL ??= 'gpt-image-2';
+  provider.COMMERCE_IMAGE_QUALITY ??= 'auto';
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(provider.COMMERCE_PROVIDER_ID) ||
       !/^[A-Za-z0-9._:/-]{1,128}$/.test(provider.CODEX_DEFAULT_MODEL)) {
     throw new LiveValidationError('PROVIDER_CONFIGURATION_INVALID');

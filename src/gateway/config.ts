@@ -35,12 +35,16 @@ export type CommerceProviderConfig = {
   apiKeyEnvName: string;
   apiKey?: string;
   imageModel: string;
+  imageQuality: CommerceImageQuality;
   webSearchModel: string;
   agentModelSelectors: string[];
   modelCacheTtlMs: number;
   webSearchTimeoutMs: number;
   webSearchMaxAttempts: number;
 };
+
+export const COMMERCE_IMAGE_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
+export type CommerceImageQuality = (typeof COMMERCE_IMAGE_QUALITIES)[number];
 
 export type ExternalDataServiceMcpConfig = {
   url: string;
@@ -170,7 +174,8 @@ export function readCommerceProviderConfig(): CommerceProviderConfig {
     baseUrl: parseProviderBaseUrl(process.env.COMMERCE_PROVIDER_BASE_URL || "https://cpa.luusmosh.com/v1"),
     apiKeyEnvName: "COMMERCE_PROVIDER_API_KEY",
     apiKey: emptyToUndefined(process.env.COMMERCE_PROVIDER_API_KEY),
-    imageModel: process.env.COMMERCE_IMAGE_MODEL?.trim() || "gpt-image-2",
+    imageModel: parseImageModel(process.env.COMMERCE_IMAGE_MODEL),
+    imageQuality: parseImageQuality(process.env.COMMERCE_IMAGE_QUALITY),
     webSearchModel: process.env.COMMERCE_WEB_SEARCH_MODEL?.trim() || "gpt-5.6-luna",
     agentModelSelectors: parseCsv(
       process.env.COMMERCE_AGENT_MODEL_SELECTORS ||
@@ -188,6 +193,22 @@ export function readCommerceProviderConfig(): CommerceProviderConfig {
       3,
     ),
   };
+}
+
+export function parseImageModel(value: string | undefined): string {
+  const model = value?.trim() || "gpt-image-2";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) {
+    throw new Error("COMMERCE_IMAGE_MODEL must be a valid provider model id.");
+  }
+  return model;
+}
+
+export function parseImageQuality(value: string | undefined): CommerceImageQuality {
+  const quality = value?.trim() || "auto";
+  if (!(COMMERCE_IMAGE_QUALITIES as readonly string[]).includes(quality)) {
+    throw new Error("COMMERCE_IMAGE_QUALITY must be low, medium, high, xhigh, max, or auto.");
+  }
+  return quality as CommerceImageQuality;
 }
 
 function parsePort(value: string): number {
