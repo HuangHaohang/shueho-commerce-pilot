@@ -6,6 +6,7 @@ import { config } from "./config.js";
 import { database } from "./database.js";
 import { providerCatalogHealth } from "./endpoint-registry.js";
 import { LocalModelClient } from "./local-model-client.js";
+import { LocalModelWarmupRecovery } from "./local-model-warmup-recovery.js";
 import { createExternalDataMcpServer } from "./mcp-server.js";
 import { ExternalDataPipeline } from "./pipeline.js";
 import { closeJustOneApiProxyPool, getJustOneApiProxyPool, justOneApiProxyStatus } from "./justoneapi-proxy-runtime.js";
@@ -14,12 +15,14 @@ import { drainIndexOutbox, ensureSearchIndex, searchIndexHealth } from "./search
 
 const pipeline = new ExternalDataPipeline();
 const models = new LocalModelClient();
+const modelWarmup = new LocalModelWarmupRecovery(models, (event) => console.error(JSON.stringify(event)));
 if (config.internalToken.length < 32) {
   throw new Error("EXTERNAL_DATA_INTERNAL_TOKEN must contain at least 32 characters.");
 }
 await database.query("SELECT 1");
 await ensureSearchIndex();
-await models.warmup();
+await modelWarmup.attempt();
+modelWarmup.start();
 await getJustOneApiProxyPool();
 await getJustOneApiClient().initialize();
 
@@ -31,7 +34,9 @@ const server = createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${host}`);
     if (request.method === "GET" && url.pathname === "/health") {
       const [modelHealth, searchHealth, catalogHealth, tokenHealth] = await Promise.all([
-        models.health().catch((error) => ({ ok: false, error: safeMessage(error) })),
+        models.health()
+          .then((health) => modelWarmup.isReady() ? health : { ...health, ok: false, error: "Local model warmup is incomplete." })
+          .catch((error) => ({ ok: false, error: safeMessage(error) })),
         searchIndexHealth().catch((error) => ({ status: "unavailable", error: safeMessage(error) })),
         providerCatalogHealth().catch((error) => ({ totalEndpoints: 0, callableEndpoints: 0, error: safeMessage(error) })),
         getJustOneApiClient().status().catch(() => ({ tokens: 0, activeTokens: 0, endpoints: 0, availablePairs: 0 })),
@@ -96,6 +101,7 @@ process.on("SIGTERM", shutdown);
 async function shutdown(): Promise<void> {
   clearInterval(indexTimer);
   clearInterval(claimCleanupTimer);
+  modelWarmup.stop();
   server.close();
   await closeJustOneApiProxyPool();
   await database.end().catch(() => undefined);

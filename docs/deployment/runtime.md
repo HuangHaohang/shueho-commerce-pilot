@@ -140,6 +140,7 @@ External-data service production requirements:
 - `JUSTONEAPI_API_TOKEN` only in the external-data service secret set;
 - private `EXTERNAL_DATA_INTERNAL_TOKEN` and `LOCAL_MODEL_INTERNAL_TOKEN` values of at least 32 characters;
 - local Qwen3 Embedding/Reranker inference on a dedicated GPU/Metal worker; fake mode and CPU fallback are forbidden;
+- the warehouse starts in an explicit degraded state and retries warmup every 30 seconds when the pinned local models are unavailable; `/health` remains `503` and model-dependent operations fail closed until the full health/embed/rerank warmup succeeds, while stored-evidence RPC remains reachable;
 - no browser, public MCP or Commerce Pilot Gateway access to `external_api_call_raw`.
 - `BETTER_AUTH_URL`, a random `BETTER_AUTH_SECRET` of at least 32 characters, and exact `AUTH_TRUSTED_ORIGINS`;
 - `COMMERCE_GATEWAY_URL` pointing to the correct tenant-dedicated internal Gateway;
