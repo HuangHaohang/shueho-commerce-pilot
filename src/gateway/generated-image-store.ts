@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 
 const IMAGE_FILENAME_PATTERN = /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i;
@@ -263,6 +263,7 @@ export class GeneratedImageStore {
       if (await removeIfPresent(this.imagePath(filename))) files += 1;
       if (await removeIfPresent(this.metadataPath(filename))) metadata += 1;
     }
+    for (const threadId of targets) await this.deleteNativeThreadImageDirectory(threadId);
     return { files, metadata };
   }
 
@@ -299,6 +300,21 @@ export class GeneratedImageStore {
 
   private metadataPath(filename: string): string {
     return join(this.metadataDirectory, `${filename}.json`);
+  }
+
+  private async deleteNativeThreadImageDirectory(threadId: string): Promise<void> {
+    const directory = join(this.imageDirectory, threadId);
+    let details;
+    try {
+      details = await lstat(directory);
+    } catch (error) {
+      if (isNotFoundError(error)) return;
+      throw error;
+    }
+    if (!details.isDirectory() || details.isSymbolicLink()) {
+      throw new Error("Native generated image thread path is not a safe directory.");
+    }
+    await rm(directory, { recursive: true, force: false });
   }
 }
 

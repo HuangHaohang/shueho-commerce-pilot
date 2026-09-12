@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -44,9 +44,13 @@ test("deletes generated image files and metadata for one thread without touching
     quality: "auto",
     size: "1024x1024",
   });
+  const nativeDirectory = join(codexHome, "generated_images", "thread-12345678");
+  await mkdir(nativeDirectory, { recursive: true });
+  await writeFile(join(nativeDirectory, "native-image.png"), "native");
 
   assert.deepEqual(await store.deleteForThreads(["thread-12345678"]), { files: 1, metadata: 1 });
   await assert.rejects(store.readImage(first.filename), /ENOENT/);
+  await assert.rejects(stat(nativeDirectory), /ENOENT/);
   assert.equal((await store.listForThread("thread-87654321")).length, 1);
 });
 
