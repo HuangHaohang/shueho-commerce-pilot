@@ -2,8 +2,10 @@ import "dotenv/config";
 
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve } from "node:path";
+import { execPath } from "node:process";
 
-import { ensureAppOwnedCodexConfig } from "../src/codex/runtime-config.js";
+import { ensureAppOwnedCodexConfig, renderWindowsHookWrapper } from "../src/codex/runtime-config.js";
+import { assertManagedWindowsHook } from "./runtime-security/managed-windows-hook.js";
 import { readThreadContextUsage, shouldAutoCompact } from "../src/gateway/compaction-policy.js";
 import { readGatewayConfig } from "../src/gateway/config.js";
 import {
@@ -76,9 +78,6 @@ if (
   /^stream_max_retries = [1-9][0-9]*$/m.test(generatedConfig)
 ) {
   throw new Error("Generated Codex config must not replay an uncertain paid image-generation request.");
-}
-if (process.platform === "win32" && !generatedConfig.includes("commerce-runtime-hook.cmd")) {
-  throw new Error("Generated Windows Codex config is missing the managed Hook command wrapper.");
 }
 if (/broadcastEvent\(\{\s*type:\s*"server_request"/.test(gatewaySource)) {
   throw new Error("Gateway source must not synthesize Codex App Server requests.");
@@ -228,6 +227,19 @@ for (const eventName of [
 ]) {
   if (!generatedConfig.includes(`[[hooks.${eventName}]]`)) {
     throw new Error(`Generated Codex config is missing managed hook ${eventName}.`);
+  }
+  if (process.platform === "win32") {
+    const commandPath = managedWindowsHookPath.replace(/\.cmd$/, `.${eventName}.cmd`);
+    assertManagedWindowsHook({
+      generatedConfig,
+      eventName,
+      commandPath,
+      wrapperSource: await readFile(commandPath, "utf8"),
+      expectedWrapperSource: renderWindowsHookWrapper(
+        [execPath, managedHookPath, join(config.codexHome, "hook-audit/events.jsonl"), eventName],
+        process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+      ),
+    });
   }
 }
 if (!managedHookSource.includes("Commerce Pilot runtime allowlist")) {

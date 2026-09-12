@@ -1,5 +1,35 @@
 # Commerce Product Insight Skills
 
+## Output consistency and review
+
+Native Harness output schemas describe each free-text field's receiver limit and
+bound collection sizes with `maxItems`. Text descriptions guide the model; they
+do not guarantee hard truncation. The Web receiver retains its Zod hard limits
+and rejects a research
+envelope over two million characters before JSON/Zod traversal. Recognized
+incomplete envelopes show a progress or incomplete-format notice instead of raw
+JSON; the authoritative Harness message is retained.
+
+`assessReportOutputQuality` checks deterministic consistency: duplicate ids,
+missing/duplicate evidence basis, unsupported high confidence or direct-launch
+decisions, unavailable dimensions with nonzero scores, and weighted totals.
+Unavailable dimensions are excluded from the weighted denominator. Limited
+low-confidence evidence and proposed validation experiments remain valid outputs.
+
+An inconsistent report is marked **报告待复核**. Its body and evidence remain
+visible, while unreliable score/decision cards are withheld. This is a quality
+state, not a replacement for native Turn completion. It neither verifies natural
+language factual truth nor retries a model, changes raw warehouse data or
+upgrades unverified receipts into confirmed evidence. Thirteen offline quality
+fixtures cover valid limited evidence and common unsupported claims; live domain
+and image-quality evaluation remains a release gate.
+
+The [official Structured Outputs guide](https://developers.openai.com/api/docs/guides/structured-outputs)
+documents array size constraints and different support for fine-tuned models.
+We do not assume unlisted string-length keywords or custom-provider compatibility;
+each enabled provider/model still requires a real schema acceptance check before
+rollout. A provider incompatibility must not cause an automatic paid retry.
+
 Commerce Pilot models product intelligence as native Codex Skills rather than separate Agent implementations. One application-managed orchestrator workflow, `commerce-product-insight`, selects exactly one closed business method for a Turn:
 
 | Recipe id | Insight method | Specialist Skill | Business result |

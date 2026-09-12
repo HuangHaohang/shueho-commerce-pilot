@@ -1,5 +1,20 @@
 # SHUEHO External Data Service
 
+## Connection and immutable-import recovery
+
+The warehouse keeps a maximum of ten PostgreSQL connections and bounds connection
+acquisition to five seconds. Idle-connection errors are handled without logging
+raw errors or terminating the process. A failed rollback discards that client and
+preserves the original business error; no SQL, supplier call or uncertain dispatch
+is automatically replayed by the pool.
+
+On Windows an immutable proxy-import directory rename can report `EPERM` when the
+target revision already exists. This is only a replay candidate: the target must
+be a real directory, contain exactly the expected regular files, and match every
+expected byte before it can be reused. Missing, linked, extra or modified content
+fails closed. Other permission errors remain errors. Source requests, responses,
+import receipts and paid-dispatch governance are not changed by this behavior.
+
 ## Boundary
 
 SHUEHO External Data Service is an independent, internal data product. Commerce Pilot is its MCP client through Codex Harness. The service is the only component that owns the JustOneAPI REST credential, provider HTTP contracts, complete raw responses, endpoint normalizers, local retrieval models, curated business data, pgvector, and Elasticsearch synchronization.

@@ -48,7 +48,7 @@ test("bundled installer refuses a linked runtime skill directory", async () => {
   const root = await mkdtemp(join(tmpdir(), "commerce-studio-link-"));
   const other = await mkdtemp(join(tmpdir(), "commerce-studio-target-"));
   try {
-    await symlink(other, join(root, ".agents"));
+    await symlink(other, join(root, ".agents"), process.platform === "win32" ? "junction" : "dir");
     await assert.rejects(installStudioSkills(root), /symbolic link/);
   } finally {
     await rm(root, { recursive: true, force: true });

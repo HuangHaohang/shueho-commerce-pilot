@@ -29,20 +29,32 @@ async function withEnterpriseDatabaseAccess<T>(
 ): Promise<T> {
   await assertApplicationDatabaseRoleSecurity();
   const client = await getAuthDatabase().connect();
+  let discardClient = false;
   try {
     await client.query("BEGIN");
-    await client.query("SELECT set_config('commerce.tenant_id', $1, true)", [scope.tenantId]);
-    await client.query("SELECT set_config('commerce.workspace_id', $1, true)", [scope.workspaceId]);
-    await client.query("SELECT set_config('commerce.user_id', $1, true)", [scope.userId]);
-    await client.query("SELECT set_config('commerce.tenant_wide', $1, true)", [tenantWide ? "on" : "off"]);
+    // Set every RLS scope value transaction-locally before invoking product code,
+    // using one round trip rather than four while retaining the same boundary.
+    await client.query(
+      `SELECT set_config('commerce.tenant_id', $1, true),
+              set_config('commerce.workspace_id', $2, true),
+              set_config('commerce.user_id', $3, true),
+              set_config('commerce.tenant_wide', $4, true)`,
+      [scope.tenantId, scope.workspaceId, scope.userId, tenantWide ? "on" : "off"],
+    );
     const result = await task(client);
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Do not let another tenant borrow a connection whose transaction state
+      // could not be reset, or replace the original operation's error.
+      discardClient = true;
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(discardClient);
   }
 }
 

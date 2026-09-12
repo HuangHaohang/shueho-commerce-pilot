@@ -8,6 +8,7 @@ node_modules.*/
 apps/web/.next/
 apps/web/.next-build/
 apps/web/.next-loadtest*/
+apps/web/.next-scale-validation/
 apps/web/out/
 coverage/
 playwright-report/

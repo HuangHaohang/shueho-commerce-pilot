@@ -1,5 +1,24 @@
 # Codex App Server Gateway
 
+## Concurrent transport and recovery
+
+Commerce Pilot remains built on the open-source Codex Harness. Concurrent cold
+RPC callers share a single initialization handshake and wait for `initialized`
+before sending business requests. A child-process generation owns its pending
+requests; late output or exit from an old process cannot clear a replacement.
+Pipe/start failures release waiters without replaying a request or fabricating a
+Turn result. Native Harness lifecycle and persisted history remain authoritative.
+
+Each Gateway SSE subscription has a 1 MiB writable-buffer ceiling and a 30-second
+continuous-backpressure deadline. A slow subscription is disconnected and its
+listeners/timers released independently; its Turn, event ledger and other clients
+continue. Browser reconnection coalesces a bounded, authenticated history readback
+with the status watchdog to restore messages, activities, artifacts, native
+questions and terminal state. Reconnection never resubmits a Turn or tool call.
+
+The company rollout validation and capacity limits are documented in
+[Company Readiness](../deployment/company-readiness.md).
+
 This repository is a web application. It integrates Codex through a server-side gateway that runs `codex app-server --listen stdio://`.
 
 The product UI is browser-based. Do not convert this architecture into Electron, Tauri, a native desktop shell, or an IDE-extension-first product. The web backend owns the Codex App Server process and exposes product-safe HTTP/SSE APIs to the browser.

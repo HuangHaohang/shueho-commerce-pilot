@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MarketResearchResponse } from "@/lib/research/market-report";
 import type { AgentActivity } from "@/lib/agent/use-agent-thread";
+import { limitedEvidenceReport } from "@/lib/research/fixtures/report-quality-cases";
 
 import { MarketResearchReportView } from "./market-research-report";
 
@@ -125,7 +126,7 @@ describe("MarketResearchReportView", () => {
       activities={activities}
       response={report({
         scorecard: {
-          weightedScore: 68,
+          weightedScore: 72,
           confidence: "medium",
           dimensions: [{
             dimensionId: "demand",
@@ -217,5 +218,26 @@ describe("MarketResearchReportView", () => {
     const html = renderToStaticMarkup(<MarketResearchReportView response={answer} />);
     expect(html).toContain("请先选择一个市场");
     expect(html).not.toContain("市场调研报告");
+  });
+
+  it("retains the readable report but withholds inconsistent score and decision cards", () => {
+    const response = limitedEvidenceReport();
+    response.scorecard!.weightedScore = 97;
+    response.decisionGate!.status = "proceed";
+    const html = renderToStaticMarkup(<MarketResearchReportView response={response} />);
+    expect(html).toContain("报告待复核");
+    expect(html).toContain("总分与所列维度的加权计算不一致");
+    expect(html).toContain("部分样本具备可叠放设计");
+    expect(html).toContain("research-1:evidence-1");
+    expect(html).not.toContain("决策 Gate ·");
+    expect(html).not.toContain("可解释机会 Scorecard");
+  });
+
+  it("preserves limited low-confidence evidence without marking it invalid", () => {
+    const html = renderToStaticMarkup(<MarketResearchReportView response={limitedEvidenceReport()} />);
+    expect(html).not.toContain("报告待复核");
+    expect(html).toContain("低置信");
+    expect(html).toContain("决策 Gate · 小规模验证");
+    expect(html).toContain("可解释机会 Scorecard");
   });
 });

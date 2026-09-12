@@ -7,6 +7,15 @@ import {
 } from "./message-reconciliation";
 
 describe("conversation message reconciliation", () => {
+  it("keeps an SSE-completed message when an older reconnect snapshot is still streaming", () => {
+    const completed: ConversationMessage = {
+      id: "assistant-1", sequence: 2, turnId: "turn-1", role: "assistant",
+      content: "完整的权威回复", phase: "final_answer", status: "completed",
+    };
+    const partial = { ...completed, content: "完整的", status: "streaming" as const };
+    expect(mergeAuthoritativeMessages([completed], [partial])).toEqual([completed]);
+  });
+
   it("replaces an optimistic user bubble with the authoritative Harness message", () => {
     const optimistic: ConversationMessage = {
       id: "user-local",

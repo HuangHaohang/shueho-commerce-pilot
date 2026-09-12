@@ -49,6 +49,7 @@ jobs:
       - run: npm run web:check
       - run: npm run test:gateway
       - run: npm run web:test
+      - run: npm run test:load-validation
       - run: npm run security:runtime
       - run: npm run web:build
 

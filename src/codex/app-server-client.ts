@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithStdioTuple } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 
@@ -15,6 +15,7 @@ import type { ClientRequest as GeneratedClientRequest } from "./generated/Client
 type ClientMethod = GeneratedClientRequest["method"];
 type GeneratedRequestFor<Method extends ClientMethod> = Extract<GeneratedClientRequest, { method: Method }>;
 type ClientParams<Method extends ClientMethod> = GeneratedRequestFor<Method>["params"];
+type AppServerSpawner = (command: string, args: string[], options: SpawnOptionsWithStdioTuple<"pipe", "pipe", "pipe">) => ChildProcessWithoutNullStreams;
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -44,10 +45,12 @@ export class CodexAppServerClient extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
   private nextId = 1;
   private initialized = false;
+  private startPromise?: Promise<void>;
+  private generation = 0;
   private pending = new Map<JsonRpcId, PendingRequest>();
   private pendingServerRequests = new Map<string, PendingServerRequest>();
 
-  constructor(private readonly options: AppServerClientOptions) {
+  constructor(private readonly options: AppServerClientOptions, private readonly spawnProcess: AppServerSpawner = spawn) {
     super();
   }
 
@@ -64,36 +67,57 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   async start(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
     if (this.isRunning && this.initialized) {
       return;
     }
 
+    let resolveStarted!: () => void;
+    let rejectStarted!: (error: unknown) => void;
+    const starting = new Promise<void>((resolve, reject) => {
+      resolveStarted = resolve;
+      rejectStarted = reject;
+    });
+    this.startPromise = starting;
+    void this.startProcess().then(resolveStarted, rejectStarted);
+    try {
+      await starting;
+    } finally {
+      if (this.startPromise === starting) this.startPromise = undefined;
+    }
+  }
+
+  private async startProcess(): Promise<void> {
     if (this.child) {
       throw new Error("Codex app-server process exists but is not ready.");
     }
 
     const args = [...(this.options.modelCatalogPath ? ["-c", `model_catalog_json=${JSON.stringify(this.options.modelCatalogPath)}`] : []), "app-server", "--listen", "stdio://"];
-    this.child = spawn(this.options.codexBin, args, {
+    const child = this.spawnProcess(this.options.codexBin, args, {
       cwd: this.options.cwd,
       env: this.options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     });
+    this.child = child;
+    const generation = ++this.generation;
 
     this.emitEvent({
       type: "process",
       event: "started",
       data: {
-        pid: this.child.pid,
+        pid: child.pid,
         command: `${this.options.codexBin} ${args.join(" ")}`,
       },
       at: new Date().toISOString(),
     });
 
-    createInterface({ input: this.child.stdout }).on("line", (line) => {
-      this.handleStdoutLine(line);
+    const stdout = createInterface({ input: child.stdout }).on("line", (line) => {
+      if (generation === this.generation && this.child === child) this.handleStdoutLine(line);
     });
 
-    createInterface({ input: this.child.stderr }).on("line", (line) => {
+    const stderr = createInterface({ input: child.stderr }).on("line", (line) => {
+      if (generation !== this.generation || this.child !== child) return;
       this.emitEvent({
         type: "process",
         event: "stderr",
@@ -102,20 +126,47 @@ export class CodexAppServerClient extends EventEmitter {
       });
     });
 
-    this.child.once("exit", (code, signal) => {
+    const onTransportError = (): void => {
+      if (generation !== this.generation) return;
+      this.initialized = false;
+      this.rejectAllPending(new Error("Codex app-server transport failed."));
+      child.kill("SIGTERM");
+    };
+    child.once("error", onTransportError);
+    child.stdin.on("error", onTransportError);
+    child.once("close", () => {
+      stdout.close();
+      stderr.close();
+      child.stdin.removeListener("error", onTransportError);
+      child.removeListener("error", onTransportError);
+    });
+
+    child.once("exit", (code, signal) => {
+      if (generation !== this.generation) return;
       this.initialized = false;
       this.pendingServerRequests.clear();
+      this.rejectAllPending(new Error(`Codex app-server exited: code=${code}, signal=${signal}`));
+      this.child = undefined;
       this.emitEvent({
         type: "process",
         event: "exit",
         data: { code, signal },
         at: new Date().toISOString(),
       });
-      this.rejectAllPending(new Error(`Codex app-server exited: code=${code}, signal=${signal}`));
-      this.child = undefined;
     });
 
-    await this.initialize();
+    try {
+      await this.initialize();
+    } catch (error) {
+      if (generation === this.generation) {
+        this.initialized = false;
+        this.pendingServerRequests.clear();
+        this.rejectAllPending(new Error("Codex app-server initialization failed."));
+        if (this.child === child) this.child = undefined;
+      }
+      child.kill("SIGTERM");
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
@@ -126,7 +177,10 @@ export class CodexAppServerClient extends EventEmitter {
     const child = this.child;
     this.child = undefined;
     this.initialized = false;
+    this.pendingServerRequests.clear();
+    this.rejectAllPending(new Error("Codex app-server stopped."));
     child.kill("SIGTERM");
+    await this.startPromise?.catch(() => undefined);
   }
 
   async request<Method extends ClientMethod>(
@@ -134,10 +188,11 @@ export class CodexAppServerClient extends EventEmitter {
     params: ClientParams<NoInfer<Method>>,
     timeoutMs = this.options.requestTimeoutMs ?? 60_000,
   ): Promise<unknown> {
-    if (!this.isRunning) {
-      await this.start();
-    }
+    await this.start();
+    return this.sendRequest(method, params, timeoutMs);
+  }
 
+  private sendRequest<Method extends ClientMethod>(method: Method, params: ClientParams<NoInfer<Method>>, timeoutMs: number): Promise<unknown> {
     const id = this.nextId++;
     const message = { id, method, params };
 
@@ -148,7 +203,13 @@ export class CodexAppServerClient extends EventEmitter {
       }, timeoutMs);
 
       this.pending.set(id, { resolve, reject, timeout });
-      this.writeJson(message);
+      try {
+        this.writeJson(message);
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error("Codex app-server request write failed."));
+      }
     });
   }
 
@@ -177,7 +238,7 @@ export class CodexAppServerClient extends EventEmitter {
   }
 
   private async initialize(): Promise<void> {
-    const result = await this.request("initialize", {
+    const result = await this.sendRequest("initialize", {
       clientInfo: {
         name: "shueho-commerce-pilot",
         title: "SHUEHO Commerce Agent Gateway",
@@ -187,7 +248,7 @@ export class CodexAppServerClient extends EventEmitter {
         experimentalApi: true,
         requestAttestation: false,
       },
-    });
+    }, this.options.requestTimeoutMs ?? 60_000);
 
     this.writeJson({ method: "initialized" });
     this.initialized = true;
@@ -198,12 +259,6 @@ export class CodexAppServerClient extends EventEmitter {
       params: result,
       at: new Date().toISOString(),
     });
-  }
-
-  private async ensureStarted(): Promise<void> {
-    if (!this.isRunning) {
-      await this.start();
-    }
   }
 
   private ensureProcess(): ChildProcessWithoutNullStreams {

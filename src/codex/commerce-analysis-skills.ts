@@ -201,10 +201,18 @@ export function buildCommerceProductInsightOutputSchema(
   method: CommerceInsightMethod,
   subjectConstraint?: CommerceProductInsightSubjectConstraint | null,
 ): JsonValue {
-  const stringArray = {
+  // Guide text toward the read-side limits without relying on custom-provider
+  // support for string maxLength. Zod remains the hard acceptance boundary.
+  const text = (maximumCharacters: number) => ({
+    type: "string",
+    description: `Keep this field within ${maximumCharacters} characters; use fewer when sufficient.`,
+  });
+  const stringArray = (maxItems = 50, maxLength = 1_000) => ({
     type: "array",
-    items: { type: "string" },
-  };
+    items: text(maxLength),
+    maxItems,
+  });
+  const references = stringArray(100, 500);
 
   const confidence = {
     type: "string",
@@ -222,22 +230,23 @@ export function buildCommerceProductInsightOutputSchema(
       confidence,
       dimensions: {
         type: "array",
+        maxItems: 20,
         items: {
           type: "object",
           properties: {
-            dimensionId: { type: "string" },
-            label: { type: "string" },
+            dimensionId: text(160),
+            label: text(240),
             score: { type: "number", minimum: 0, maximum: 100 },
             weight: { type: "number", minimum: 0, maximum: 1 },
             evidenceState: {
               type: "string",
               enum: ["supported", "mixed", "hypothesis", "unavailable"],
             },
-            rationale: { type: "string" },
-            evidenceIds: stringArray,
-            productFactRefs: stringArray,
+            rationale: text(4_000),
+            evidenceIds: references,
+            productFactRefs: references,
             companyEvidenceRefs: emptyCompanyEvidenceRefs,
-            limitations: stringArray,
+            limitations: stringArray(),
           },
           required: [
             "dimensionId",
@@ -265,27 +274,28 @@ export function buildCommerceProductInsightOutputSchema(
         type: "string",
         enum: ["proceed", "validate", "hold", "insufficient_evidence"],
       },
-      summary: { type: "string" },
-      blockingGaps: stringArray,
-      requiredEvidence: stringArray,
+      summary: text(4_000),
+      blockingGaps: stringArray(),
+      requiredEvidence: stringArray(),
     },
     required: ["status", "summary", "blockingGaps", "requiredEvidence"],
     additionalProperties: false,
   };
   const experiments = {
     type: "array",
+    maxItems: 50,
     items: {
       type: "object",
       properties: {
-        experimentId: { type: "string" },
-        title: { type: "string" },
-        hypothesis: { type: "string" },
-        method: { type: "string" },
-        successSignal: { type: "string" },
-        stopCondition: { type: "string" },
-        evidenceNeeded: stringArray,
-        evidenceIds: stringArray,
-        productFactRefs: stringArray,
+        experimentId: text(160),
+        title: text(500),
+        hypothesis: text(4_000),
+        method: text(4_000),
+        successSignal: text(2_000),
+        stopCondition: text(2_000),
+        evidenceNeeded: stringArray(),
+        evidenceIds: references,
+        productFactRefs: references,
         status: { type: "string", enum: ["proposed"] },
       },
       required: [
@@ -318,17 +328,17 @@ export function buildCommerceProductInsightOutputSchema(
           mode: subjectConstraint
             ? { type: "string", enum: [subjectConstraint.mode] }
             : { type: "string", enum: ["selected", "auto", "none"] },
-          title: { type: "string" },
+          title: text(500),
           subjectRef: selectedSubject
             ? { type: "string", enum: [selectedSubject.subjectRef] }
-            : { type: "string" },
+            : text(500),
           snapshotSha256: selectedSubject
             ? { type: "string", enum: [selectedSubject.snapshotSha256] }
-            : { type: "string" },
+            : text(128),
           productCount: selectedSubject
             ? { type: "integer", enum: [selectedSubject.productCount] }
             : { type: "integer", minimum: 0, maximum: 20 },
-          factLimitations: stringArray,
+          factLimitations: stringArray(),
         },
         required: [
           "mode",
@@ -343,11 +353,11 @@ export function buildCommerceProductInsightOutputSchema(
       scope: {
         type: "object",
         properties: {
-          decisionObjective: { type: "string" },
-          platforms: stringArray,
-          markets: stringArray,
-          period: { type: "string" },
-          requestedEvidence: stringArray,
+          decisionObjective: text(2_000),
+          platforms: stringArray(20, 160),
+          markets: stringArray(20, 160),
+          period: text(500),
+          requestedEvidence: stringArray(50, 500),
         },
         required: [
           "decisionObjective",
@@ -361,14 +371,15 @@ export function buildCommerceProductInsightOutputSchema(
       scorecard,
       decisionGate,
       experiments,
-      executiveSummary: { type: "string" },
-      reportMarkdown: { type: "string" },
+      executiveSummary: text(8_000),
+      reportMarkdown: text(80_000),
       claims: {
         type: "array",
+        maxItems: 200,
         items: {
           type: "object",
           properties: {
-            claimId: { type: "string" },
+            claimId: text(160),
             type: {
               type: "string",
               enum: [
@@ -378,12 +389,12 @@ export function buildCommerceProductInsightOutputSchema(
                 "hypothesis",
               ],
             },
-            text: { type: "string" },
-            evidenceIds: stringArray,
-            productFactRefs: stringArray,
+            text: text(4_000),
+            evidenceIds: references,
+            productFactRefs: references,
             companyEvidenceRefs: emptyCompanyEvidenceRefs,
             confidence,
-            limitations: stringArray,
+            limitations: stringArray(),
           },
           required: [
             "claimId",
@@ -400,17 +411,18 @@ export function buildCommerceProductInsightOutputSchema(
       },
       receipts: {
         type: "array",
+        maxItems: 100,
         items: {
           type: "object",
           properties: {
-            researchRequestId: { type: "string" },
-            platform: { type: "string" },
-            observedAt: { type: "string" },
-            evidenceCount: { type: "integer", minimum: 0 },
-            reviewEvidenceCount: { type: "integer", minimum: 0 },
-            evidenceKinds: stringArray,
-            coverageSummary: { type: "string" },
-            limitations: stringArray,
+            researchRequestId: text(160),
+            platform: text(160),
+            observedAt: text(160),
+            evidenceCount: { type: "integer", minimum: 0, maximum: 1_000_000 },
+            reviewEvidenceCount: { type: "integer", minimum: 0, maximum: 1_000_000 },
+            evidenceKinds: stringArray(100, 160),
+            coverageSummary: text(2_000),
+            limitations: stringArray(),
           },
           required: [
             "researchRequestId",
@@ -427,18 +439,19 @@ export function buildCommerceProductInsightOutputSchema(
       },
       recommendations: {
         type: "array",
+        maxItems: 100,
         items: {
           type: "object",
           properties: {
-            recommendationId: { type: "string" },
+            recommendationId: text(160),
             priority: { type: "string", enum: ["high", "medium", "low"] },
-            title: { type: "string" },
-            rationale: { type: "string" },
-            evidenceIds: stringArray,
-            productFactRefs: stringArray,
+            title: text(500),
+            rationale: text(4_000),
+            evidenceIds: references,
+            productFactRefs: references,
             companyEvidenceRefs: emptyCompanyEvidenceRefs,
-            validationMetric: { type: "string" },
-            timeHorizon: { type: "string" },
+            validationMetric: text(1_000),
+            timeHorizon: text(500),
           },
           required: [
             "recommendationId",
@@ -454,7 +467,7 @@ export function buildCommerceProductInsightOutputSchema(
           additionalProperties: false,
         },
       },
-      message: { type: "string" },
+      message: text(20_000),
     },
     required: [
       "responseType",

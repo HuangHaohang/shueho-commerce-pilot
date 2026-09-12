@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createEventStreamRecovery } from "./event-stream-recovery";
+import { AGENT_READ_TIMEOUT_MS, readAgentJson } from "./agent-read";
 
 import {
   findMatchingConversationMessage,
@@ -264,7 +266,10 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [retryingMessageId, setRetryingMessageId] = useState<string | null>(null);
+  const [streamRecoveryEpoch, setStreamRecoveryEpoch] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const streamRecoveryRef = useRef<ReturnType<typeof createEventStreamRecovery> | null>(null);
+  const threadReconcileRef = useRef<((recoverHistory?: boolean) => Promise<boolean>) | null>(null);
   const threadIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ConversationMessage[]>([]);
   const pendingUserInputRef = useRef<PendingRequestUserInput | null>(null);
@@ -274,7 +279,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const runtimeInstanceIdRef = useRef<string | null>(null);
   const compactingRef = useRef(false);
   const queueRefreshSuppressionRef = useRef(0);
-  const threadReconcileInFlightRef = useRef(false);
+  const threadReconcileControllerRef = useRef<AbortController | null>(null);
   const titleGenerationAttemptRef = useRef(new Set<string>());
   const feedbackSubmittingIdsRef = useRef(new Set<string>());
   const retryingMessageIdRef = useRef<string | null>(null);
@@ -306,14 +311,14 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     messagesRef.current = messages;
   }, [messages]);
 
-  const refreshQueue = useCallback(async (id: string): Promise<void> => {
+  const refreshQueue = useCallback(async (id: string, signal?: AbortSignal): Promise<boolean> => {
     try {
-      const response = await fetch(`/api/agent/threads/${encodeURIComponent(id)}/queue`, {
-        cache: "no-store",
-      });
-      const payload = (await response.json().catch(() => null)) as { queue?: unknown } | null;
+      const response = await readAgentJson<{ queue?: unknown }>(
+        `/api/agent/threads/${encodeURIComponent(id)}/queue`, { signal },
+      );
+      const { payload } = response;
       if (!response.ok || !payload || !Array.isArray(payload.queue)) {
-        return;
+        return false;
       }
       const normalizeQueue = (items: unknown[]) =>
         items
@@ -325,26 +330,33 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
             content: typeof item.content === "string" ? item.content : "",
           }))
           .filter((item) => item.id && item.clientUserMessageId && item.content);
+      if (threadIdRef.current !== id || signal?.aborted) return false;
       setQueuedMessages(normalizeQueue(payload.queue));
+      return true;
     } catch {
       // Queue notifications are advisory; the active turn remains usable if a refresh fails.
+      return false;
     }
   }, []);
 
-  const refreshPendingUserInput = useCallback(async (id: string): Promise<void> => {
+  const refreshPendingUserInput = useCallback(async (id: string, signal?: AbortSignal): Promise<boolean> => {
+    const expectedTurnId = activeTurnIdRef.current;
     try {
-      const response = await fetch(`/api/agent/threads/${encodeURIComponent(id)}/user-input`, {
-        cache: "no-store",
-      });
-      const payload = (await response.json().catch(() => null)) as { requests?: unknown } | null;
-      if (!response.ok || !payload || !Array.isArray(payload.requests)) return;
+      const response = await readAgentJson<{ requests?: unknown }>(
+        `/api/agent/threads/${encodeURIComponent(id)}/user-input`, { signal },
+      );
+      const { payload } = response;
+      if (!response.ok || !payload || !Array.isArray(payload.requests) || threadIdRef.current !== id ||
+        activeTurnIdRef.current !== expectedTurnId || signal?.aborted) return false;
       const pending = payload.requests
         .map(readPendingRequestUserInputPayload)
         .find((request): request is PendingRequestUserInput => Boolean(request));
       pendingUserInputRef.current = pending ?? null;
       setPendingUserInput(pending ?? null);
+      return true;
     } catch {
       // The SSE server request remains authoritative; reconnect reconciliation retries this read.
+      return false;
     }
   }, []);
 
@@ -678,14 +690,31 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       await new Promise<void>((resolve, reject) => {
         const source = new EventSource(`/api/agent/events?threadId=${encodeURIComponent(id)}`);
         eventSourceRef.current = source;
+        const recovery = createEventStreamRecovery(async () => {
+          if (eventSourceRef.current !== source || threadIdRef.current !== id) return true;
+          return (await threadReconcileRef.current?.(true)) ?? false;
+        });
+        streamRecoveryRef.current = recovery;
         let opened = false;
         source.addEventListener("notification", handleGatewayEvent as EventListener);
         source.addEventListener("server_request", handleGatewayEvent as EventListener);
         source.onopen = () => {
+          if (eventSourceRef.current !== source) return;
+          const reopening = opened;
+          const recoveryTask = recovery.onOpen();
+          // A completion may arrive before the reconnect readback starts. Wake
+          // the watchdog even when the local UI already displays a terminal state.
+          if (reopening && !threadReconcileRef.current) setStreamRecoveryEpoch((value) => value + 1);
+          void recoveryTask.then(() => {
+            if (reopening && eventSourceRef.current === source && !recovery.pending && !activeTurnIdRef.current) {
+              setStreamRecoveryEpoch((value) => value + 1);
+            }
+          });
           opened = true;
           resolve();
         };
         source.onerror = () => {
+          if (eventSourceRef.current !== source) return;
           if (!opened) {
             source.close();
             eventSourceRef.current = null;
@@ -698,23 +727,29 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
 
   useEffect(() => {
-    if (!threadId || (status !== "connecting" && status !== "running")) {
+    if (!threadId || (status !== "connecting" && status !== "running" && !streamRecoveryRef.current?.pending)) {
       return;
     }
     let cancelled = false;
+    let activeController: AbortController | null = null;
 
-    const reconcile = async () => {
-      if (threadReconcileInFlightRef.current) {
-        return;
+    const reconcile = async (recoverHistory = false): Promise<boolean> => {
+      if (cancelled || threadReconcileControllerRef.current) {
+        return false;
       }
-      threadReconcileInFlightRef.current = true;
+      const controller = new AbortController();
+      activeController = controller;
+      threadReconcileControllerRef.current = controller;
+      const deadline = setTimeout(() => controller.abort(
+        new DOMException("Agent recovery deadline exceeded.", "TimeoutError"),
+      ), AGENT_READ_TIMEOUT_MS);
       try {
-        const statusResponse = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/status`, {
-          cache: "no-store",
-        });
-        const statusPayload = (await statusResponse.json().catch(() => null)) as StoredThreadStatusResponse | null;
+        const statusResponse = await readAgentJson<StoredThreadStatusResponse>(
+          `/api/agent/threads/${encodeURIComponent(threadId)}/status`, { signal: controller.signal },
+        );
+        const statusPayload = statusResponse.payload;
         if (!statusResponse.ok || !statusPayload || cancelled) {
-          return;
+          return false;
         }
 
         if (statusPayload.thread.status === "running") {
@@ -728,31 +763,35 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setDurationMs(statusPayload.thread.durationMs);
           setError(null);
           setStatus("running");
-          void refreshPendingUserInput(threadId);
-          // Reconcile persisted native images while the Turn is still running:
-          // the artifact notification can be missed during SSE reconnects.
-          const imageResponse = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}/images`, { cache: "no-store" });
-          const imagePayload = (await imageResponse.json().catch(() => null)) as StoredThreadResponse | null;
-          if (cancelled) return;
-          if (imageResponse.ok && imagePayload?.images) {
-            setImages((current) => {
-              const byFilename = new Map(current.map((image) => [image.filename, image]));
-              for (const image of imagePayload.images) byFilename.set(image.filename, image);
-              return [...byFilename.values()].sort((a, b) => a.sequence - b.sequence);
-            });
-            sequenceRef.current = Math.max(sequenceRef.current, ...imagePayload.images.map((image) => image.sequence));
+          if (!recoverHistory) {
+            // Reconcile persisted native images while the Turn is still running:
+            // the artifact notification can be missed during SSE reconnects.
+            const [imageResponse] = await Promise.all([
+              readAgentJson<StoredThreadResponse>(`/api/agent/threads/${encodeURIComponent(threadId)}/images`, { signal: controller.signal }),
+              refreshPendingUserInput(threadId, controller.signal),
+            ]);
+            const imagePayload = imageResponse.payload;
+            if (cancelled) return false;
+            if (imageResponse.ok && imagePayload?.images) {
+              setImages((current) => {
+                const byFilename = new Map(current.map((image) => [image.filename, image]));
+                for (const image of imagePayload.images) byFilename.set(image.filename, image);
+                return [...byFilename.values()].sort((a, b) => a.sequence - b.sequence);
+              });
+              sequenceRef.current = Math.max(sequenceRef.current, ...imagePayload.images.map((image) => image.sequence));
+            }
+            if (!eventSourceRef.current && runtimeHealth?.available !== false) {
+              void connectEventStream(threadId).catch(() => undefined);
+            }
+            return true;
           }
-          if (!eventSourceRef.current && runtimeHealth?.available !== false) {
-            void connectEventStream(threadId).catch(() => undefined);
-          }
-          return;
         }
 
-        const response = await fetch(`/api/agent/threads/${encodeURIComponent(threadId)}`, {
-          cache: "no-store",
-        });
-        const payload = (await response.json().catch(() => null)) as StoredThreadResponse | null;
-        if (!response.ok || !payload || cancelled) return;
+        const response = await readAgentJson<StoredThreadResponse>(
+          `/api/agent/threads/${encodeURIComponent(threadId)}`, { signal: controller.signal },
+        );
+        const { payload } = response;
+        if (!response.ok || !payload || cancelled) return false;
 
         const authoritativeByClientId = new Map(
           payload.messages
@@ -780,7 +819,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           !pendingSubmitAccepted &&
           Date.now() - (pendingSubmitStartedAtRef.current ?? Date.now()) < 12_000
         ) {
-          return;
+          return false;
         }
 
         if (status === "connecting" && pendingSubmitClientId && !pendingSubmitAccepted) {
@@ -792,7 +831,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           setMessages((current) => current.filter((message) => message.clientId !== pendingSubmitClientId));
           setStatus("failed");
           setError("Harness 未接收这次任务，请重新发送。");
-          return;
+          return false;
         }
 
         if (
@@ -800,7 +839,32 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
           payload.thread.lastTurnId &&
           activeTurnIdRef.current !== payload.thread.lastTurnId
         ) {
-          return;
+          return false;
+        }
+
+        if (payload.thread.status === "running") {
+          // Only reconnects read a bounded history page during an active Turn.
+          // Preserve older loaded pages and SSE items received during readback.
+          setActivities((current) => {
+            const byId = new Map(current.map((item) => [item.id, item]));
+            for (const item of payload.activities) {
+              const existing = byId.get(item.id);
+              if (existing && existing.status !== "running" && item.status === "running") continue;
+              byId.set(item.id, item);
+            }
+            return [...byId.values()].sort((a, b) => a.sequence - b.sequence);
+          });
+          setImages((current) => {
+            const byFilename = new Map(current.map((item) => [item.filename, item]));
+            for (const item of payload.images) byFilename.set(item.filename, item);
+            return [...byFilename.values()].sort((a, b) => a.sequence - b.sequence);
+          });
+          sequenceRef.current = Math.max(sequenceRef.current,
+            ...payload.activities.map((item) => item.sequence), ...payload.images.map((item) => item.sequence));
+          const recovered = await Promise.all([
+            refreshPendingUserInput(threadId, controller.signal), refreshQueue(threadId, controller.signal),
+          ]);
+          return !cancelled && !controller.signal.aborted && recovered.every(Boolean);
         }
 
         eventSourceRef.current?.close();
@@ -840,20 +904,38 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setError(terminalTurnMessage(payload.thread.status));
         setStatus(payload.thread.status);
         void refreshQueue(threadId);
+        return true;
       } catch {
         // SSE remains the primary stream; the next watchdog tick retries reconciliation.
+        return false;
       } finally {
-        threadReconcileInFlightRef.current = false;
+        clearTimeout(deadline);
+        controller.abort();
+        if (activeController === controller) activeController = null;
+        // A cancelled old thread may finish after a new thread acquired the slot.
+        if (threadReconcileControllerRef.current === controller) threadReconcileControllerRef.current = null;
       }
     };
 
-    void reconcile();
-    const interval = window.setInterval(() => void reconcile(), 3_000);
+    threadReconcileRef.current = reconcile;
+    const watchdog = async () => {
+      const recovery = streamRecoveryRef.current;
+      if (!recovery?.pending) return reconcile();
+      await recovery.reconcile();
+      if (!cancelled && !recovery.pending && !activeTurnIdRef.current) {
+        setStreamRecoveryEpoch((value) => value + 1);
+      }
+    };
+    void watchdog();
+    const interval = window.setInterval(() => void watchdog(), 3_000);
     return () => {
       cancelled = true;
+      activeController?.abort();
+      if (threadReconcileControllerRef.current === activeController) threadReconcileControllerRef.current = null;
+      if (threadReconcileRef.current === reconcile) threadReconcileRef.current = null;
       window.clearInterval(interval);
     };
-  }, [activateTurn, confirmPendingSubmit, connectEventStream, refreshPendingUserInput, refreshQueue, runtimeHealth?.available, runtimeHealth?.instanceId, status, threadId]);
+  }, [activateTurn, confirmPendingSubmit, connectEventStream, refreshPendingUserInput, refreshQueue, runtimeHealth?.available, runtimeHealth?.instanceId, status, streamRecoveryEpoch, threadId]);
 
   const setMessageFeedback = useCallback(
     async (
@@ -929,6 +1011,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
 
   const resetThread = useCallback(() => {
+    threadReconcileControllerRef.current?.abort();
+    threadReconcileControllerRef.current = null;
     historyCache.current.clear();
     historyLoadRequestRef.current += 1;
     historyLoadControllerRef.current?.abort();
@@ -1031,7 +1115,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       retryingMessageIdRef.current = null;
       setRetryingMessageId(null);
       queueRefreshSuppressionRef.current = 0;
-      threadReconcileInFlightRef.current = false;
+      threadReconcileControllerRef.current?.abort();
+      threadReconcileControllerRef.current = null;
       pendingSteerClientIdRef.current = null;
       confirmedSteerClientIdRef.current = null;
       unconfirmedSteerRef.current = null;

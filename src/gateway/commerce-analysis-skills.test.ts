@@ -295,3 +295,19 @@ test("shares one method-fixed insight report schema without inventing a second r
     assert.equal(schema.properties[prohibited], undefined);
   }
 });
+
+test("bounds report collections and supplies text-length guidance without unsupported hard string limits", () => {
+  type Schema = { type?: string; description?: string; maxLength?: number; maxItems?: number; enum?: unknown[]; properties?: Record<string, Schema>; items?: Schema };
+  const visit = (schema: Schema, path: string) => {
+    if (schema.type === "string" && !schema.enum) {
+      assert.match(schema.description ?? "", /within [1-9][0-9]* characters/, `missing text-length guidance: ${path}`);
+      assert.equal(schema.maxLength, undefined, `unverified hard string limit: ${path}`);
+    }
+    if (schema.type === "array") {
+      assert.ok(Number.isInteger(schema.maxItems) && schema.maxItems! >= 0, `unbounded collection: ${path}`);
+      if (schema.maxItems !== 0 && schema.items) visit(schema.items, `${path}[]`);
+    }
+    for (const [key, child] of Object.entries(schema.properties ?? {})) visit(child, `${path}.${key}`);
+  };
+  for (const method of COMMERCE_INSIGHT_METHODS) visit(buildCommerceProductInsightOutputSchema(method) as Schema, method);
+});

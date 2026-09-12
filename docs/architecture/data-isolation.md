@@ -77,6 +77,21 @@ Legacy `tenant_id IS NULL` compatibility branches are prohibited for persisted c
 
 ## Verification Contract
 
+Database scope initialization executes the same four transaction-local
+`set_config` values in one SQL statement before product code runs. This removes
+three round trips per scoped transaction without caching actor authorization or
+changing RLS. Failed rollback discards the connection; business SQL is never
+automatically retried. Idle connection failures are handled by the pool so a
+PostgreSQL restart does not terminate every Web/worker process. A failed role
+security probe fails that request closed and can be checked again by a later
+request.
+
+`COMMERCE_DATABASE_POOL_MAX` is a per-process budget (1–100; default production
+20, development 5). `COMMERCE_DATABASE_CONNECT_TIMEOUT_MS` bounds pool admission
+wait (100–60000 ms; default 5000). Account for all Web replicas, workers and other
+services before increasing it; it does not increase PostgreSQL capacity or the
+enterprise AI concurrency allowance.
+
 `enterprise:verify-isolation` is required after isolation, migration, or business-data changes. It verifies:
 
 - the application role is neither superuser nor `BYPASSRLS`;

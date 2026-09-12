@@ -96,6 +96,7 @@ Select all rows affected by the change. Shared contracts require checks on both 
 | Web / BFF | `npm run web:check`, `npm run web:test`, `npm run web:build`; real browser inspection when UI changes |
 | Runtime permissions / isolation / tenant ownership | `npm run security:runtime` plus affected tenant/RLS verifiers |
 | Database contracts | Apply owning-service migrations and run relevant isolation/catalog/service verifiers in an explicitly disposable database |
+| Load validation / browser edge | `npm run test:load-validation`; `nginx -t` for edge config changes; preserve actual failed and passed load results |
 
 Research changes also require the failure, lifecycle, recovery and relevance checks below when those contracts are affected. Every change requires `git diff --check`.
 

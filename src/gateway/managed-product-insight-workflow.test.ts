@@ -140,7 +140,10 @@ test("pins non-selected Product context mode without inventing a subject identit
     type: "string",
     enum: ["auto"],
   });
-  assert.deepEqual(schema.properties.subject.properties.subjectRef, { type: "string" });
+  assert.deepEqual(schema.properties.subject.properties.subjectRef, {
+    type: "string",
+    description: "Keep this field within 500 characters; use fewer when sufficient.",
+  });
 });
 
 test("upgrades future legacy market-research Turns to the shared Harness report contract", () => {

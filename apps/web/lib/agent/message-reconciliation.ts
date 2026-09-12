@@ -11,6 +11,10 @@ export function mergeAuthoritativeMessages(
       next = [...next, message];
       continue;
     }
+    // A reconnect read may have started before item/completed arrived over SSE.
+    // That older partial snapshot must not truncate or reopen the completed item.
+    if (existing.role === "assistant" && message.role === "assistant" &&
+      existing.status === "completed" && message.status === "streaming") continue;
     next = next.map((candidate) =>
       candidate.id === existing.id
         ? candidate.role === "assistant" &&

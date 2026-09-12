@@ -1,5 +1,11 @@
 # Runtime Deployment
 
+The [100-person company readiness plan](company-readiness.md) records concurrency
+assumptions, per-process database budgets, office-NAT edge limits, validation
+results and outstanding rollout gates. The application remains based on the
+Codex open-source Harness; connection pooling and transport backpressure do not
+replace Harness scheduling, persisted history, approvals or recovery.
+
 This is a web application. Deployment machines do not need a preinstalled global `codex` executable.
 
 ## Runtime Ownership

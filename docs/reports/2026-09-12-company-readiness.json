@@ -1,0 +1,52 @@
+{
+  "date": "2026-09-12",
+  "baseCommit": "0ae8642e2635884e61979ced6a74053ceb0e1ffe",
+  "status": "implemented-uncommitted-not-deployed",
+  "productionVerified": false,
+  "databaseBenchmark": {
+    "scope": "PostgreSQL RLS transactions only; excludes HTTP, SSE and AI",
+    "users": 100,
+    "poolMax": 20,
+    "totalTransactions": 12000,
+    "errors": 0,
+    "rounds": [
+      { "round": 1, "baselineP95Ms": 185.291, "candidateP95Ms": 120.7337 },
+      { "round": 2, "baselineP95Ms": 224.2474, "candidateP95Ms": 102.9598 },
+      { "round": 3, "baselineP95Ms": 353.7383, "candidateP95Ms": 188.184 }
+    ]
+  },
+  "validation": {
+    "web": { "passed": 400, "skipped": 0 },
+    "gateway": { "passed": 217, "skipped": 2 },
+    "runtimeArtifact": { "passed": 8 },
+    "externalData": { "passed": 183, "skipped": 41 },
+    "loadAndEdgeToolTests": { "passed": 53 },
+    "databaseIsolationChecks": 78,
+    "runtimeSecurityChecks": 32,
+    "managedWindowsHooksVerified": 11,
+    "reportBrowserCases": { "passed": 4, "viewportWidths": [1440, 390], "overflowElements": 0 },
+    "webProductionBuild": "passed",
+    "nginxConfiguration": "passed"
+  },
+  "fullHttpSse100Users": {
+    "status": "passed",
+    "requests": 3687,
+    "errors": 0,
+    "p95Ms": 1434.9298,
+    "sseConnected": 100
+  },
+  "databaseConnectionRecovery": {
+    "status": "passed",
+    "terminatedIdleConnections": 20,
+    "recoveryMsAfterConfirmedFault": 2539.6516
+  },
+  "webProcessRecovery": {
+    "recoveryStatus": "passed",
+    "killToPortReadyMs": 1761.528,
+    "killToAllUsersRecoveredMs": 4294.1459,
+    "observedFailedReads": 300,
+    "preRestartLoadStatus": "failed_latency_target",
+    "preRestartLoadP95Ms": 1531.8
+  },
+  "liveAiGeneration": "not-run: provider preflight returned 401 before any model Turn; user requested commit"
+}

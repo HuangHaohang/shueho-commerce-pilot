@@ -69,6 +69,9 @@ Commerce Pilot is currently an Enterprise-only B2B product. One customer company
 
 ## Requirements
 
+For the company rollout workload, acceptance thresholds and current limitations,
+see [100-person company readiness](docs/deployment/company-readiness.md).
+
 - Node.js 20.16+
 - npm
 - Docker with Compose for the provided local PostgreSQL environment, or an externally managed PostgreSQL database

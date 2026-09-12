@@ -1,10 +1,10 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { describe, expect, it } from "vitest";
 
-import { compileProxySubscription, writeProxyBundle } from "./justoneapi-proxy-subscription.js";
+import { compileProxySubscription, verifyExistingProxyRevision, writeProxyBundle } from "./justoneapi-proxy-subscription.js";
 
 const node = { name: "香港", type: "hysteria2", server: "proxy.example.com", port: 443, password: "subscription-private", sni: "proxy.example.com" };
 const options = { proxyHost: "127.0.0.1", listen: "127.0.0.1" as const, firstPort: 19000 };
@@ -60,6 +60,54 @@ describe("protected proxy subscription import", () => {
       expect(await readFile(join(directory, "nodes.json"), "utf8")).not.toContain("subscription-private");
       await writeFile(join(directory, "mihomo.yaml"), "tampered");
       await expect(writeProxyBundle(root, bundle)).rejects.toThrow("immutable content");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("accepts Windows EPERM only after exact existing-directory readback; other permission errors still fail", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proxy-replay-errors-"));
+    const files = { "mihomo.yaml": "fixture-yaml", "nodes.json": "fixture-nodes", "receipt.json": "fixture-receipt" };
+    const permission = Object.assign(new Error("rename permission denied"), { code: "EPERM" });
+    try {
+      for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
+      await expect(verifyExistingProxyRevision(root, files, permission, "win32")).resolves.toBeUndefined();
+      await expect(verifyExistingProxyRevision(root, files, permission, "linux")).rejects.toBe(permission);
+      const access = Object.assign(new Error("access denied"), { code: "EACCES" });
+      await expect(verifyExistingProxyRevision(root, files, access, "win32")).rejects.toBe(access);
+      await expect(verifyExistingProxyRevision(join(root, "missing"), files, permission, "win32")).rejects.toBe(permission);
+      await expect(verifyExistingProxyRevision(join(root, "receipt.json"), files, permission, "win32")).rejects.toBe(permission);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("rejects tampering of every immutable file as well as missing and extra files", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proxy-replay-content-"));
+    const files = { "mihomo.yaml": "fixture-yaml", "nodes.json": "fixture-nodes", "receipt.json": "fixture-receipt" };
+    const permission = Object.assign(new Error("rename permission denied"), { code: "EPERM" });
+    try {
+      for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
+      for (const [name, content] of Object.entries(files)) {
+        await writeFile(join(root, name), `${content}-changed`);
+        await expect(verifyExistingProxyRevision(root, files, permission, "win32")).rejects.toThrow("immutable content");
+        await writeFile(join(root, name), content);
+      }
+      await writeFile(join(root, "unmanaged.txt"), "extra");
+      await expect(verifyExistingProxyRevision(root, files, permission, "win32")).rejects.toThrow("immutable content");
+      await rm(join(root, "unmanaged.txt"));
+      await rm(join(root, "receipt.json"));
+      await expect(verifyExistingProxyRevision(root, files, permission, "win32")).rejects.toThrow("immutable content");
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it("does not reuse a linked revision directory even when its target content matches", async () => {
+    const root = await mkdtemp(join(tmpdir(), "proxy-replay-link-"));
+    const directory = join(root, "revision");
+    const target = join(root, "target");
+    const files = { "receipt.json": "fixture" };
+    const permission = Object.assign(new Error("rename permission denied"), { code: "EPERM" });
+    try {
+      await mkdir(target);
+      await writeFile(join(target, "receipt.json"), "fixture");
+      await symlink(target, directory, process.platform === "win32" ? "junction" : "dir");
+      await expect(verifyExistingProxyRevision(directory, files, permission, "win32")).rejects.toBe(permission);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

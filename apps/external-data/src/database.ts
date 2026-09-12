@@ -6,13 +6,21 @@ export const database = new Pool({
   connectionString: config.databaseUrl,
   max: 10,
   idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
   application_name: "shueho-external-data-service",
+});
+
+// pg already removes a broken idle client. Handle its error event so a brief
+// database outage does not terminate the warehouse or log raw SQL/credentials.
+database.on("error", () => {
+  console.error("External data PostgreSQL pool lost an idle connection; it will be replaced.");
 });
 
 export type DatabaseScope = { tenantId: string; workspaceId: string };
 
 export async function withScope<T>(scope: DatabaseScope, operation: (client: PoolClient) => Promise<T>): Promise<T> {
   const client = await database.connect();
+  let discardClient = false;
   try {
     await client.query("BEGIN");
     await client.query("SELECT set_config('external_data.tenant_id', $1, true)", [scope.tenantId]);
@@ -21,10 +29,16 @@ export async function withScope<T>(scope: DatabaseScope, operation: (client: Poo
     await client.query("COMMIT");
     return result;
   } catch (error) {
-    await client.query("ROLLBACK").catch(() => undefined);
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // An unknown transaction state cannot be loaned to another workspace.
+      // Preserve the original failure; neither SQL nor paid work is replayed.
+      discardClient = true;
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(discardClient);
   }
 }
 

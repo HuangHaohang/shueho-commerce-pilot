@@ -8,6 +8,7 @@ import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import { rm } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { basename, join } from "node:path";
+import { SseConnection } from "./sse-connection.js";
 
 import { CodexAppServerClient } from "../codex/app-server-client.js";
 import {
@@ -338,7 +339,7 @@ const codex = new CodexAppServerClient({
   env: codexEnvironment,
 });
 
-const sseClients = new Map<ServerResponse, { threadId?: string }>();
+const sseClients = new Map<SseConnection, { threadId?: string }>();
 const turnTimeouts = new Map<string, NodeJS.Timeout>();
 const loadedThreadIds = new Set<string>();
 const threadResumePromises = new Map<string, Promise<void>>();
@@ -1933,7 +1934,7 @@ async function shutdown(): Promise<void> {
   }
   compactionStates.clear();
   for (const client of sseClients.keys()) {
-    client.end();
+    client.close();
   }
   sseClients.clear();
   await Promise.allSettled([...pendingExternalDataExecutions]);
@@ -3816,15 +3817,9 @@ function openSse(res: ServerResponse, threadId?: string): void {
     "Cache-Control": "no-cache",
     Connection: "keep-alive",
   });
-  res.write(`event: gateway/connected\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
-  sseClients.set(res, { threadId });
-  const heartbeat = setInterval(() => {
-    res.write(`: keepalive ${Date.now()}\n\n`);
-  }, 20_000);
-  res.on("close", () => {
-    clearInterval(heartbeat);
-    sseClients.delete(res);
-  });
+  const client = new SseConnection(res, { onClose: () => sseClients.delete(client) });
+  sseClients.set(client, { threadId });
+  client.send(`event: gateway/connected\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`);
 }
 
 function broadcastEvent(event: AppServerEvent): void {
@@ -3842,7 +3837,7 @@ function broadcastEvent(event: AppServerEvent): void {
     if (filter.threadId && filter.threadId !== threadId) {
       continue;
     }
-    client.write(payload);
+    client.send(payload);
   }
 }
 

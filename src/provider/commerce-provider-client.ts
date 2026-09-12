@@ -58,8 +58,13 @@ export class CommerceProviderError extends Error {
   }
 }
 
+// Only a transport outage may reuse last-known discovery. Invalid configuration
+// or a definitive catalog rejection must not become stale success.
+class ModelCatalogTransportError extends CommerceProviderError {}
+
 export class CommerceProviderClient {
   private cache?: CachedCatalog;
+  private catalogRefresh?: Promise<ProviderModelCatalog>;
   private availableModelIds = new Set<string>();
 
   constructor(private readonly config: CommerceProviderConfig, private readonly runModel = runHarnessModel) {}
@@ -69,26 +74,48 @@ export class CommerceProviderClient {
       return this.cache.value;
     }
 
-    let response: Response | null = null;
+    // A cold cache or an expired catalog must not turn a burst of users into
+    // the same burst of upstream requests. Only the read is shared; callers
+    // retain their own force-refresh / stale-read contract.
+    if (!this.catalogRefresh) {
+      const refresh = this.refreshCatalog();
+      this.catalogRefresh = refresh;
+      void refresh.finally(() => {
+        if (this.catalogRefresh === refresh) this.catalogRefresh = undefined;
+      }).catch(() => undefined);
+    }
+    try {
+      return await this.catalogRefresh;
+    } catch (error) {
+      if (!forceRefresh && isRetryableModelCatalogError(error) && this.cache && this.cache.staleUntil > Date.now()) {
+        return this.cache.value;
+      }
+      throw error;
+    }
+  }
+
+  private async refreshCatalog(): Promise<ProviderModelCatalog> {
+    let payload: unknown;
+    let received = false;
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        response = await this.request("models", { method: "GET" }, 15_000);
+        payload = await this.readModelCatalog(15_000);
+        received = true;
         break;
       } catch (error) {
         lastError = error;
+        if (error instanceof CommerceProviderError && (error.upstreamStatus === 401 || error.upstreamStatus === 403)) {
+          this.cache = undefined;
+          this.availableModelIds.clear();
+        }
         if (!isRetryableModelCatalogError(error) || attempt === 1) break;
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
     }
-    if (!response) {
-      if (!forceRefresh && this.cache && this.cache.staleUntil > Date.now()) return this.cache.value;
-      throw lastError;
-    }
-    const payload = (await response.json().catch(() => null)) as unknown;
+    if (!received) throw lastError;
     const rows = readModelRows(payload);
     const models = rows.map((row) => normalizeModel(row, this.config.imageModel));
-    this.availableModelIds = new Set(models.map((model) => model.id));
     const catalog: ProviderModelCatalog = {
       provider: {
         id: this.config.id,
@@ -106,6 +133,8 @@ export class CommerceProviderClient {
     };
 
     if (!catalog.imageModels.some((model) => model.id === this.config.imageModel)) {
+      this.cache = undefined;
+      this.availableModelIds.clear();
       throw new CommerceProviderError(`Configured image model ${this.config.imageModel} is not available from the provider.`, 503);
     }
 
@@ -114,6 +143,7 @@ export class CommerceProviderClient {
       staleUntil: Date.now() + Math.max(10 * this.config.modelCacheTtlMs, 10 * 60_000),
       value: catalog,
     };
+    this.availableModelIds = new Set(models.map((model) => model.id));
     return catalog;
   }
 
@@ -157,8 +187,7 @@ export class CommerceProviderClient {
     return {responseId:result.turnId,model:input.model,answer:result.text,sources:result.sources,usage:result.usage};
   }
 
-  private async request(path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-    if(path!=="models" || init.method!=="GET")throw new CommerceProviderError("Model execution must use Codex Harness.");
+  private async readModelCatalog(timeoutMs: number): Promise<unknown> {
     if (!this.config.apiKey) {
       throw new CommerceProviderError(`${this.config.apiKeyEnvName} is not configured.`, 503);
     }
@@ -166,43 +195,66 @@ export class CommerceProviderClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetch(`${this.config.baseUrl}/${path.replace(/^\//, "")}`, {
-        ...init,
+      const response = await fetch(`${this.config.baseUrl}/models`, {
+        method: "GET",
         headers: {
-          ...init.headers,
           Authorization: `Bearer ${this.config.apiKey}`,
         },
         signal: controller.signal,
       });
       if (!response.ok) {
-        const errorPayload = (await response.json().catch(() => null)) as { error?: unknown } | null;
-        const message = typeof errorPayload?.error === "string" ? errorPayload.error : `Provider request failed with HTTP ${response.status}.`;
-        throw new CommerceProviderError(
-          message,
+        throw new ModelCatalogTransportError(
+          `Provider model catalog failed with HTTP ${response.status}.`,
           response.status === 401 || response.status === 403 ? 502 : response.status,
           response.status,
           response.headers.get("x-cpa-trace-id") ?? undefined,
         );
       }
-      return response;
+      // Keep the deadline active through the body, not just until headers.
+      // Discovery never needs an unbounded response or provider error payload.
+      const maximumBytes = 2 * 1024 * 1024;
+      const declaredLength = Number(response.headers.get("content-length"));
+      if (declaredLength > maximumBytes) throw new CommerceProviderError("Provider model catalog is too large.", 502);
+      if (!response.body) throw new CommerceProviderError("Provider model catalog has no body.", 502);
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let bytes = 0;
+      try {
+        while (true) {
+          const chunk = await reader.read();
+          if (chunk.done) break;
+          bytes += chunk.value.byteLength;
+          if (bytes > maximumBytes) throw new CommerceProviderError("Provider model catalog is too large.", 502);
+          chunks.push(chunk.value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+      try {
+        return JSON.parse(Buffer.concat(chunks, bytes).toString("utf8")) as unknown;
+      } catch {
+        throw new CommerceProviderError("Provider model catalog is not valid JSON.", 502);
+      }
     } catch (error) {
       if (error instanceof CommerceProviderError) {
         throw error;
       }
       if (controller.signal.aborted) {
-        throw new CommerceProviderError("Provider request timed out.", 504);
+        throw new ModelCatalogTransportError("Provider request timed out.", 504);
       }
-      throw new CommerceProviderError(error instanceof Error ? error.message : "Provider request failed.");
+      throw new ModelCatalogTransportError("Provider model catalog connection failed.");
     } finally {
       clearTimeout(timeout);
+      controller.abort();
     }
   }
 }
 
 function isRetryableModelCatalogError(error: unknown): boolean {
   return (
-    error instanceof CommerceProviderError &&
-    (error.statusCode === 429 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504)
+    error instanceof ModelCatalogTransportError &&
+    error.upstreamStatus !== 401 && error.upstreamStatus !== 403 &&
+    (error.statusCode === 429 || error.statusCode === 500 || error.statusCode === 502 || error.statusCode === 503 || error.statusCode === 504)
   );
 }
 

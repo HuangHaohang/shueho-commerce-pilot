@@ -197,10 +197,14 @@ async function loadEnterpriseContext(
   runtimeTenantId: string | null,
 ): Promise<{ row: ContextRow; roles: RoleRow[] } | null> {
   const client = await getAuthDatabase().connect();
+  let discardClient = false;
   try {
     await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-    await client.query("SELECT set_config('commerce.user_id', $1, true)", [userId]);
-    await client.query("SELECT set_config('commerce.tenant_wide', 'off', true)");
+    await client.query(
+      `SELECT set_config('commerce.user_id', $1, true),
+              set_config('commerce.tenant_wide', 'off', true)`,
+      [userId],
+    );
     const candidates = await client.query<ContextCandidate>(
       `
         SELECT tenant_member.tenant_id, workspace_member.workspace_id
@@ -224,8 +228,11 @@ async function loadEnterpriseContext(
       await client.query("COMMIT");
       return null;
     }
-    await client.query("SELECT set_config('commerce.tenant_id', $1, true)", [candidate.tenant_id]);
-    await client.query("SELECT set_config('commerce.workspace_id', $1, true)", [candidate.workspace_id]);
+    await client.query(
+      `SELECT set_config('commerce.tenant_id', $1, true),
+              set_config('commerce.workspace_id', $2, true)`,
+      [candidate.tenant_id, candidate.workspace_id],
+    );
     const tenantIdentity = await client.query<{ organization_id: string }>(
       `SELECT organization_id FROM commerce_tenant WHERE id = $1 LIMIT 1`,
       [candidate.tenant_id],
@@ -292,10 +299,16 @@ async function loadEnterpriseContext(
     await client.query("COMMIT");
     return { row, roles };
   } catch (error) {
-    await client.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch {
+      // Never reuse a connection whose transaction-local RLS state could not be
+      // cleared, and retain the original authorization/read failure for callers.
+      discardClient = true;
+    }
     throw error;
   } finally {
-    client.release();
+    client.release(discardClient);
   }
 }
 

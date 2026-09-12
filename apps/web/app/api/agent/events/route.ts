@@ -4,6 +4,7 @@ import { AGENT_ID_PATTERN, gatewayHeaders, gatewayUrl, requireAgentThreadContext
 import { isAgentThreadOwner } from "@/lib/agent/thread-ownership";
 import { requireEnterprisePermission, resolveEnterpriseContext } from "@/lib/enterprise/context";
 import { enforceEnterpriseRateLimit } from "@/lib/enterprise/rate-limit";
+import { scheduleSseAuthorizationChecks } from "@/lib/agent/sse-authorization-scheduler";
 
 export const dynamic = "force-dynamic";
 const activeUserStreams = new Map<string, number>();
@@ -57,39 +58,24 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "事件流不可用。" }, { status: 502 });
     }
     const reader = upstream.body.getReader();
-    let checking = false;
     let closed = false;
-    const interval = setInterval(() => {
-      if (checking || closed) return;
-      checking = true;
-      void (async () => {
-        try {
-          const refreshed = await resolveEnterpriseContext(request);
-          const denied = refreshed.ok
-            ? requireEnterprisePermission(refreshed.context, "thread.read.own")
-            : refreshed.response;
-          if (
-            !refreshed.ok ||
-            denied ||
-            !(await isAgentThreadOwner(threadId, refreshed.context))
-          ) {
-            revocation.abort();
-          }
-        } catch {
-          revocation.abort();
-        } finally {
-          checking = false;
-        }
-      })();
-    }, 15_000);
-    interval.unref();
+    const stopAuthorizationChecks = scheduleSseAuthorizationChecks({
+      check: async () => {
+        const refreshed = await resolveEnterpriseContext(request);
+        const denied = refreshed.ok
+          ? requireEnterprisePermission(refreshed.context, "thread.read.own")
+          : refreshed.response;
+        return Boolean(refreshed.ok && !denied && await isAgentThreadOwner(threadId, refreshed.context));
+      },
+      revoke: () => revocation.abort(),
+    });
     const lifetime = setTimeout(() => revocation.abort(), MAX_STREAM_LIFETIME_MS);
     lifetime.unref();
 
     const cleanup = () => {
       if (closed) return;
       closed = true;
-      clearInterval(interval);
+      stopAuthorizationChecks();
       clearTimeout(lifetime);
       revocation.abort();
       releaseConnection();

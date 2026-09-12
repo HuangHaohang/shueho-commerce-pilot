@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { parseDocument, stringify } from "yaml";
 import { z } from "zod";
@@ -177,17 +177,38 @@ export async function writeProxyBundle(root: string, bundle: ProxyBundle): Promi
     try {
       await rename(temp, directory);
     } catch (error) {
-      if (!(error && typeof error === "object" && "code" in error && ["EEXIST", "ENOTEMPTY"].includes(String(error.code)))) throw error;
-      for (const [name, content] of Object.entries(files)) {
-        if (await readFile(join(directory, name), "utf8") !== content) {
-          throw new Error("Existing proxy revision failed immutable content verification.");
-        }
-      }
+      await verifyExistingProxyRevision(directory, files, error);
     }
   } finally {
     await rm(temp, { recursive: true, force: true });
   }
   return directory;
+}
+
+/** @internal Windows reports an existing non-empty directory as EPERM. */
+export async function verifyExistingProxyRevision(
+  directory: string,
+  files: Readonly<Record<string, string>>,
+  renameError: unknown,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const code = renameError && typeof renameError === "object" && "code" in renameError
+    ? String(renameError.code) : "";
+  if (!["EEXIST", "ENOTEMPTY"].includes(code) && !(platform === "win32" && code === "EPERM")) throw renameError;
+  const destination = await lstat(directory).catch(() => null);
+  if (!destination?.isDirectory() || destination.isSymbolicLink()) throw renameError;
+  const names = (await readdir(directory)).sort();
+  if (JSON.stringify(names) !== JSON.stringify(Object.keys(files).sort())) {
+    throw new Error("Existing proxy revision failed immutable content verification.");
+  }
+  for (const [name, content] of Object.entries(files)) {
+    const path = join(directory, name);
+    const entry = await lstat(path);
+    if (!entry.isFile() || entry.isSymbolicLink() ||
+      !(await readFile(path)).equals(Buffer.from(content, "utf8"))) {
+      throw new Error("Existing proxy revision failed immutable content verification.");
+    }
+  }
 }
 
 function sha256(value: string): string {

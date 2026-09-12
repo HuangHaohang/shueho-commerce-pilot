@@ -180,11 +180,31 @@ export type MarketResearchResponse = z.infer<typeof marketResearchResponseSchema
 export type MarketResearchClaim = MarketResearchResponse["claims"][number];
 export type MarketResearchReceipt = MarketResearchResponse["receipts"][number];
 
+// Check before JSON parsing/Zod traversal; keep oversized or truncated envelopes
+// out of Markdown without modifying authoritative Harness history.
+export const MAX_MARKET_REPORT_ENVELOPE_LENGTH = 2_000_000;
+
+export function isMarketResearchEnvelope(content: string): boolean {
+  const prefix = content.trimStart().replace(/^```(?:json)?\s*/i, "").slice(0, 4_096);
+  if (!prefix.startsWith("{")) return false;
+  return /"responseType"\s*:\s*"report"/.test(prefix) ||
+    /"insightType"\s*:\s*"(?:market_research|new_product_development|product_retrospective)"/.test(prefix) ||
+    (/"responseType"\s*:\s*"answer"/.test(prefix) && /"(?:subject|scope|reportMarkdown)"\s*:/.test(prefix));
+}
+
+export function marketResearchEnvelopeNotice(status: "streaming" | string): string {
+  return status === "streaming"
+    ? "正在整理研究报告与证据…"
+    : "研究结果格式不完整，暂时无法展示。请在当前任务中说明需要补全的内容。";
+}
+
 export function parseMarketResearchResponse(content: string): MarketResearchResponse | null {
+  if (content.length > MAX_MARKET_REPORT_ENVELOPE_LENGTH) return null;
   const normalized = content
     .trim()
     .replace(/^```(?:json)?\s*/i, "")
     .replace(/\s*```$/, "");
+  if (!normalized.startsWith("{") || !normalized.endsWith("}")) return null;
   try {
     const parsed = marketResearchResponseSchema.safeParse(JSON.parse(normalized) as unknown);
     return parsed.success ? parsed.data : null;

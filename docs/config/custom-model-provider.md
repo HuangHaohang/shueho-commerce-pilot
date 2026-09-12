@@ -74,6 +74,15 @@ Even when an upstream also exposes `/v1/chat/completions`, Chat Completions is n
 
 ## Model Discovery
 
+Concurrent cold or expired-catalog requests share one upstream read, including
+forced-refresh callers. The 15-second attempt deadline covers headers and body;
+catalog bodies are bounded to 2 MiB. One read-only retry is allowed for temporary
+transport failures (429, 500, 502, 503, 504). Ordinary readers may use a bounded
+last-known catalog during such an outage; a forced refresh reports the failure.
+401/403 invalidate cached capabilities and are neither retried nor converted to
+stale success. Invalid catalogs never publish a partial model-id set. These
+policies apply only to `GET /models`, never model generation or commerce writes.
+
 The gateway fetches `GET https://cpa.luusmosh.com/v1/models` with the provider key and caches the result. It separates:
 
 - agent models that can be selected for Codex `thread/start`;

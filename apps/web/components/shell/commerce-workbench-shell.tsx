@@ -164,6 +164,8 @@ import {
 import type { CreativeCanvasMessageReference } from "@/lib/creative/creative-canvas-types";
 import type { ProductContextMode, ProductSummary } from "@/lib/products/catalog";
 import {
+  isMarketResearchEnvelope,
+  marketResearchEnvelopeNotice,
   parseMarketResearchResponse,
   type MarketResearchReceipt,
 } from "@/lib/research/market-report";
@@ -3233,6 +3235,9 @@ function ConversationMessageView({
   if (marketResearchResponse) {
     return <MarketResearchReportView response={marketResearchResponse} activities={activities} />;
   }
+  if (isMarketResearchEnvelope(message.content)) {
+    return <p role="status" className="m-0 text-[13px] leading-5 text-[var(--cp-text-muted)]">{marketResearchEnvelopeNotice(message.status)}</p>;
+  }
   const copywritingDraft = tryParseStructuredCopywritingDraft(message.content);
   if (copywritingDraft) return <CopywritingDraftResponse draft={copywritingDraft} />;
   const answer = tryParseStructuredCopywritingAnswer(message.content);
@@ -3332,6 +3337,7 @@ function readConversationMessagePreview(message: ConversationMessage): string {
       ? `${marketResearchResponse.subject.title} ${marketResearchResponse.executiveSummary}`
       : marketResearchResponse.message;
   }
+  if (isMarketResearchEnvelope(message.content)) return marketResearchEnvelopeNotice(message.status);
   const draft = tryParseStructuredCopywritingDraft(message.content);
   if (draft) return `${draft.title} ${draft.body}`;
   return tryParseStructuredCopywritingAnswer(message.content) ?? message.content;
@@ -3351,6 +3357,7 @@ function readAssistantResponseText(message: ConversationMessage): string {
       marketResearchResponse.message,
     ].filter(Boolean).join("\n\n");
   }
+  if (isMarketResearchEnvelope(message.content)) return marketResearchEnvelopeNotice(message.status);
   const draft = tryParseStructuredCopywritingDraft(message.content);
   if (draft) {
     return [

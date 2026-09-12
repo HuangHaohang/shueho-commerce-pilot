@@ -18,6 +18,7 @@ import type {
 } from "@/lib/research/market-report";
 import type { AgentActivity } from "@/lib/agent/use-agent-thread";
 import { reconcileReportEvidence } from "@/lib/research/report-evidence-verification";
+import { assessReportOutputQuality } from "@/lib/research/report-output-quality";
 import { cn } from "@/lib/utils";
 
 const confidenceLabels = {
@@ -55,6 +56,7 @@ export function MarketResearchReportView({
     response.scope.period,
   ].filter(Boolean);
   const evidenceVerification = reconcileReportEvidence(response.receipts, activities);
+  const quality = assessReportOutputQuality(response);
   const totalReviewEvidence = evidenceVerification.receipts.reduce(
     (total, receipt) => total + receipt.reviewEvidenceCount,
     0,
@@ -98,7 +100,15 @@ export function MarketResearchReportView({
         ) : null}
       </header>
 
-      {response.decisionGate ? <DecisionGateView gate={response.decisionGate} /> : null}
+      {quality.status === "needs_review" ? (
+        <section className="mt-5 rounded-[var(--cp-radius-item)] bg-[var(--cp-warning-bg)] px-4 py-3 text-sm text-[var(--cp-warning)]" role="note" aria-label="报告质量待复核">
+          <div className="flex items-center gap-2 font-medium"><CircleAlert className="size-4" aria-hidden="true" />报告待复核</div>
+          <p className="mb-0 mt-1 text-xs leading-5">正文和依据已保留；评分或决策存在不一致，暂不展示决策卡片。</p>
+          <ul className="mb-0 mt-2 list-disc pl-4 text-xs leading-5">
+            {quality.issues.map((issue) => <li key={issue.code}>{issue.message}</li>)}
+          </ul>
+        </section>
+      ) : response.decisionGate ? <DecisionGateView gate={response.decisionGate} /> : null}
 
       {response.executiveSummary ? (
         <section className="my-5 rounded-[var(--cp-radius-panel)] bg-[var(--cp-bg-subtle)] px-4 py-3.5" aria-labelledby="research-summary-title">
@@ -107,7 +117,7 @@ export function MarketResearchReportView({
         </section>
       ) : null}
 
-      {response.scorecard && response.scorecard.dimensions.length ? (
+      {quality.status === "consistent" && response.scorecard && response.scorecard.dimensions.length ? (
         <DecisionScorecardView scorecard={response.scorecard} marketEvidenceVerified={evidenceVerification.allVerified} />
       ) : null}
 
