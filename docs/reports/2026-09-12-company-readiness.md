@@ -2,7 +2,7 @@
 
 日期：2026-09-12。基础提交 `0ae8642e2635884e61979ced6a74053ceb0e1ffe`。
 工作分支：`codex/company-scale-reliability`。
-**已实现，未提交、未推送、未部署、未生产验证。**
+**已实现并合并到本地 `main`，尚未部署、未生产验证。**
 
 本轮修复有明确代码证据的并发、故障恢复、同办公网络限流和生成报告质量问题。
 Commerce Pilot仍基于OpenAI开源Codex Harness；没有自制Agent循环，没有自动

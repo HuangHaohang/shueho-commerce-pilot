@@ -1,7 +1,7 @@
 {
   "date": "2026-09-12",
   "baseCommit": "0ae8642e2635884e61979ced6a74053ceb0e1ffe",
-  "status": "implemented-uncommitted-not-deployed",
+  "status": "merged-to-main-not-deployed",
   "productionVerified": false,
   "databaseBenchmark": {
     "scope": "PostgreSQL RLS transactions only; excludes HTTP, SSE and AI",
