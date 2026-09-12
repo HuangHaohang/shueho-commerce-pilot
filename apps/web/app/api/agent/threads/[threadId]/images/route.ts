@@ -15,7 +15,7 @@ export async function GET(request: Request, route: { params: Promise<{ threadId:
     const images = payload.generatedImages.filter((item: Record<string, unknown>) => item.threadId === threadId && typeof item.filename === "string" && /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i.test(item.filename)).map((item: Record<string, unknown>, sequence: number) => ({
       id: item.filename, filename: item.filename, sequence, turnId: item.turnId,
       url: `/api/provider/generated-images/${encodeURIComponent(String(item.filename))}`,
-      model: item.model, sourceFilenames: item.sourceFilenames ?? [],
+      model: item.model, quality: item.quality, sourceFilenames: item.sourceFilenames ?? [],
     }));
     return NextResponse.json({ images }, { headers: { "Cache-Control": "no-store" } });
   } catch { return NextResponse.json({ error: "图片暂时不可用。" }, { status: 503 }); }
