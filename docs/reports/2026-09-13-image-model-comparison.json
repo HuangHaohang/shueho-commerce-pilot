@@ -1,0 +1,508 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-12T19:01:53.668561+00:00",
+  "production": {
+    "host": "server244",
+    "appImageCommit": "f7b66c726d927f86aa412106dd9b6b88eebb91a9",
+    "runtimeUpstreamCommit": "90854393966b21e9ebfd21b122334eb09a20c93d",
+    "runtimePatchRevision": "shueho.2",
+    "quality": "high",
+    "transport": "server244_internal_bff",
+    "publicDns": "commerce.shueho.com and mcp-commerce.shueho.com returned NXDOMAIN during validation"
+  },
+  "readLoad": [
+    {
+      "users": 20,
+      "elapsedMs": 60037.729241,
+      "requests": 1148,
+      "errors": 568,
+      "errorRate": 0.49477351916376305,
+      "rps": 19.12130945845344,
+      "maxInFlight": 17,
+      "p50": 44.57472599999892,
+      "p95": 73.88209199999983,
+      "p99": 141.07959200000005,
+      "statuses": {
+        "200": 580,
+        "500": 568
+      },
+      "streamCount": 20,
+      "streamReadyCount": 20,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 300,
+          "errors": 0,
+          "p95": 63.25249299999996
+        },
+        {
+          "kind": 1,
+          "count": 288,
+          "errors": 288,
+          "p95": 77.59020200000305
+        },
+        {
+          "kind": 2,
+          "count": 280,
+          "errors": 280,
+          "p95": 74.37807700000121
+        },
+        {
+          "kind": 3,
+          "count": 280,
+          "errors": 0,
+          "p95": 68.42433600000004
+        }
+      ],
+      "targets": {
+        "maxP95Ms": 1500,
+        "maxErrorRate": 0
+      },
+      "checks": {
+        "requestsObserved": true,
+        "errorRate": false,
+        "p95": true,
+        "streams": true,
+        "coverage": true
+      },
+      "passed": false,
+      "scope": "Authenticated HTTP reads and SSE connections; not AI execution capacity.",
+      "label": "production-server244"
+    },
+    {
+      "users": 30,
+      "elapsedMs": 60066.87570999999,
+      "requests": 1759,
+      "errors": 887,
+      "errorRate": 0.504263786242183,
+      "rps": 29.2840268318993,
+      "maxInFlight": 21,
+      "p50": 34.087807999996585,
+      "p95": 59.96658799999568,
+      "p99": 74.98378599999705,
+      "statuses": {
+        "200": 872,
+        "500": 887
+      },
+      "streamCount": 30,
+      "streamReadyCount": 30,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 450,
+          "errors": 0,
+          "p95": 50.40639599999122
+        },
+        {
+          "kind": 1,
+          "count": 450,
+          "errors": 450,
+          "p95": 69.7213999999949
+        },
+        {
+          "kind": 2,
+          "count": 437,
+          "errors": 437,
+          "p95": 62.016459999998915
+        },
+        {
+          "kind": 3,
+          "count": 422,
+          "errors": 0,
+          "p95": 51.06700000001001
+        }
+      ],
+      "targets": {
+        "maxP95Ms": 1500,
+        "maxErrorRate": 0
+      },
+      "checks": {
+        "requestsObserved": true,
+        "errorRate": false,
+        "p95": true,
+        "streams": true,
+        "coverage": true
+      },
+      "passed": false,
+      "scope": "Authenticated HTTP reads and SSE connections; not AI execution capacity.",
+      "label": "production-server244"
+    },
+    {
+      "users": 100,
+      "elapsedMs": 60117.665525000004,
+      "requests": 5734,
+      "errors": 2409,
+      "errorRate": 0.42012556679455876,
+      "rps": 95.37961845200907,
+      "maxInFlight": 75,
+      "p50": 42.5195459999959,
+      "p95": 116.52974499997799,
+      "p99": 377.66860999999335,
+      "statuses": {
+        "200": 3325,
+        "500": 2409
+      },
+      "streamCount": 100,
+      "streamReadyCount": 100,
+      "streamErrors": 0,
+      "byEndpoint": [
+        {
+          "kind": 0,
+          "count": 1500,
+          "errors": 0,
+          "p95": 297.2431510000024
+        },
+        {
+          "kind": 1,
+          "count": 1432,
+          "errors": 1217,
+          "p95": 109.02973599999677
+        },
+        {
+          "kind": 2,
+          "count": 1402,
+          "errors": 1192,
+          "p95": 129.07106000000203
+        },
+        {
+          "kind": 3,
+          "count": 1400,
+          "errors": 0,
+          "p95": 74.6343470000138
+        }
+      ],
+      "targets": {
+        "maxP95Ms": 1500,
+        "maxErrorRate": 0
+      },
+      "checks": {
+        "requestsObserved": true,
+        "errorRate": false,
+        "p95": true,
+        "streams": true,
+        "coverage": true
+      },
+      "passed": false,
+      "scope": "Authenticated HTTP reads and SSE connections; not AI execution capacity.",
+      "label": "production-server244"
+    }
+  ],
+  "models": {
+    "gpt-image-2": {
+      "quality": "high",
+      "transport": "server244_internal_bff",
+      "status": "failed",
+      "summary": {
+        "logicalTurns": 20,
+        "generationCompleted": 10,
+        "editsCompleted": 9,
+        "generationAcceptP95Ms": 5125,
+        "generationFirstImageP95Ms": 40992,
+        "generationTotalP95Ms": 54316,
+        "editAcceptP95Ms": 914,
+        "editFirstImageP95Ms": 56066,
+        "editTotalP95Ms": 216063,
+        "streamErrors": 0
+      },
+      "generation": {
+        "outcomes": {
+          "completed_verified": 10
+        },
+        "nativeStatuses": {
+          "completed": 10
+        },
+        "submitStatuses": {
+          "200": 10
+        },
+        "artifacts": 10,
+        "artifactBytesP50": 1761688,
+        "artifactBytesP95": 2295776,
+        "dimensions": {
+          "1370x1148": 6,
+          "1402x1122": 1,
+          "1536x1024": 1,
+          "1374x1145": 1,
+          "1254x1254": 1
+        }
+      },
+      "edit": {
+        "outcomes": {
+          "completed_verified": 9,
+          "quality_or_readback_failed": 1
+        },
+        "nativeStatuses": {
+          "completed": 9,
+          "failed": 1
+        },
+        "submitStatuses": {
+          "200": 10
+        },
+        "artifacts": 9,
+        "artifactBytesP50": 2039164,
+        "artifactBytesP95": 2426154,
+        "dimensions": {
+          "1370x1148": 4,
+          "1371x1148": 1,
+          "1402x1122": 1,
+          "1369x1149": 1,
+          "1536x1024": 1,
+          "1254x1254": 1
+        }
+      }
+    },
+    "gpt-image-2.5-flare": {
+      "quality": "high",
+      "transport": "server244_internal_bff",
+      "status": "failed",
+      "summary": {
+        "logicalTurns": 20,
+        "generationCompleted": 10,
+        "editsCompleted": 5,
+        "generationAcceptP95Ms": 4269,
+        "generationFirstImageP95Ms": 38289,
+        "generationTotalP95Ms": 217808,
+        "editAcceptP95Ms": 1721,
+        "editFirstImageP95Ms": 42987,
+        "editTotalP95Ms": 224483,
+        "streamErrors": 0
+      },
+      "generation": {
+        "outcomes": {
+          "completed_verified": 10
+        },
+        "nativeStatuses": {
+          "completed": 10
+        },
+        "submitStatuses": {
+          "200": 10
+        },
+        "artifacts": 10,
+        "artifactBytesP50": 1867415,
+        "artifactBytesP95": 2192966,
+        "dimensions": {
+          "1370x1148": 4,
+          "1536x1024": 2,
+          "1374x1145": 4
+        }
+      },
+      "edit": {
+        "outcomes": {
+          "completed_verified": 5,
+          "quality_or_readback_failed": 5
+        },
+        "nativeStatuses": {
+          "completed": 8,
+          "failed": 2
+        },
+        "submitStatuses": {
+          "200": 10
+        },
+        "artifacts": 5,
+        "artifactBytesP50": 2196682,
+        "artifactBytesP95": 2379373,
+        "dimensions": {
+          "1370x1148": 1,
+          "1536x1024": 2,
+          "1374x1145": 1,
+          "1371x1148": 1
+        }
+      }
+    },
+    "gpt-image-2.5-sunburst": {
+      "quality": "high",
+      "transport": "server244_internal_bff",
+      "status": "failed",
+      "summary": {
+        "logicalTurns": 20,
+        "generationCompleted": 10,
+        "editsCompleted": 8,
+        "generationAcceptP95Ms": 4239,
+        "generationFirstImageP95Ms": 35124,
+        "generationTotalP95Ms": 42784,
+        "editAcceptP95Ms": 1699,
+        "editFirstImageP95Ms": 63840,
+        "editTotalP95Ms": 70236,
+        "streamErrors": 0
+      },
+      "generation": {
+        "outcomes": {
+          "completed_verified": 10
+        },
+        "nativeStatuses": {
+          "completed": 10
+        },
+        "submitStatuses": {
+          "200": 10
+        },
+        "artifacts": 10,
+        "artifactBytesP50": 1855882,
+        "artifactBytesP95": 2320707,
+        "dimensions": {
+          "1370x1148": 5,
+          "1536x1024": 3,
+          "1402x1122": 2
+        }
+      },
+      "edit": {
+        "outcomes": {
+          "completed_verified": 8,
+          "quality_or_readback_failed": 2
+        },
+        "nativeStatuses": {
+          "completed": 10
+        },
+        "submitStatuses": {
+          "200": 10
+        },
+        "artifacts": 8,
+        "artifactBytesP50": 2134478,
+        "artifactBytesP95": 2450867,
+        "dimensions": {
+          "1370x1148": 4,
+          "1402x1122": 2,
+          "1536x1024": 2
+        }
+      }
+    }
+  },
+  "usage": {
+    "schemaVersion": 1,
+    "source": "commerce_agent_usage_event",
+    "capturedAt": "2026-09-12T18:58:01.554Z",
+    "models": {
+      "gpt-image-2": {
+        "roots": 10,
+        "rootsWithUsage": 10,
+        "rootsWithoutUsage": 0,
+        "events": 39,
+        "reportedEvents": 39,
+        "missingEvents": 0,
+        "knownTotalTokens": "753819",
+        "byAgentModel": {
+          "gpt-5.6-luna": 39
+        }
+      },
+      "gpt-image-2.5-flare": {
+        "roots": 10,
+        "rootsWithUsage": 10,
+        "rootsWithoutUsage": 0,
+        "events": 36,
+        "reportedEvents": 36,
+        "missingEvents": 0,
+        "knownTotalTokens": "684337",
+        "byAgentModel": {
+          "gpt-5.6-luna": 36
+        }
+      },
+      "gpt-image-2.5-sunburst": {
+        "roots": 10,
+        "rootsWithUsage": 10,
+        "rootsWithoutUsage": 0,
+        "events": 41,
+        "reportedEvents": 41,
+        "missingEvents": 0,
+        "knownTotalTokens": "794133",
+        "byAgentModel": {
+          "gpt-5.6-luna": 41
+        }
+      }
+    }
+  },
+  "recovery": {
+    "restart": {
+      "gatewayRecoveryMs": 3838,
+      "imageModel": "gpt-image-2.5-sunburst",
+      "imageQuality": "high"
+    },
+    "readback": {
+      "schemaVersion": 1,
+      "transport": "server244_internal_bff",
+      "verifiedAt": "2026-09-12T18:59:51.520Z",
+      "roots": 30,
+      "generations": 30,
+      "edits": 30,
+      "generatedArtifacts": 30,
+      "editedArtifacts": 22,
+      "models": {
+        "gpt-image-2": {
+          "roots": 10,
+          "generations": 10,
+          "edits": 10,
+          "generatedArtifacts": 10,
+          "editedArtifacts": 9
+        },
+        "gpt-image-2.5-flare": {
+          "roots": 10,
+          "generations": 10,
+          "edits": 10,
+          "generatedArtifacts": 10,
+          "editedArtifacts": 5
+        },
+        "gpt-image-2.5-sunburst": {
+          "roots": 10,
+          "generations": 10,
+          "edits": 10,
+          "generatedArtifacts": 10,
+          "editedArtifacts": 8
+        }
+      }
+    }
+  },
+  "excludedPrefixedFailure": {
+    "model": "gpt-image-2",
+    "status": "failed",
+    "reason": "reference image sandbox helper unavailable before in-memory image fix",
+    "generation": {
+      "outcomes": {
+        "completed_verified": 10
+      },
+      "nativeStatuses": {
+        "completed": 10
+      },
+      "submitStatuses": {
+        "200": 10
+      },
+      "artifacts": 10,
+      "artifactBytesP50": 1990335,
+      "artifactBytesP95": 2436041,
+      "dimensions": {
+        "1374x1145": 2,
+        "1370x1148": 1,
+        "1402x1122": 1,
+        "1536x1024": 5,
+        "1448x1086": 1
+      }
+    },
+    "edit": {
+      "outcomes": {
+        "quality_or_readback_failed": 8,
+        "completed_verified": 2
+      },
+      "nativeStatuses": {
+        "completed": 9,
+        "failed": 1
+      },
+      "submitStatuses": {
+        "200": 10
+      },
+      "artifacts": 2,
+      "artifactBytesP50": 1966614,
+      "artifactBytesP95": 2014619,
+      "dimensions": {
+        "1402x1122": 1,
+        "1374x1145": 1
+      }
+    }
+  },
+  "visualReview": {
+    "samplePairsPerModel": 3,
+    "contactSheet": "comparison-contact-sheet.jpg",
+    "findings": {
+      "gpt-image-2": "richest fabric and control detail; strong successful edit fidelity",
+      "gpt-image-2.5-flare": "acceptable successful images but weakest completion rate and worst long tail",
+      "gpt-image-2.5-sunburst": "clean consistent product shape, fastest generation and edit, best overall balance"
+    }
+  }
+}

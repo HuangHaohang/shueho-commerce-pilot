@@ -30,6 +30,7 @@ Use this map to find the documents relevant to the affected feature. The task ro
 ## Development And Operations
 
 - [`deployment/company-readiness.md`](deployment/company-readiness.md) - 100-person rollout assumptions, availability gates, database budgets and reproducible validation.
+- [`reports/2026-09-13-production-image-model-comparison.md`](reports/2026-09-13-production-image-model-comparison.md) - server244 load, GPT Image 2/Flare/Sunburst comparison, recovery evidence and rollout blockers.
 
 - [`development/ai-collaboration.md`](development/ai-collaboration.md) - shared vibe-coding workflow for humans and coding agents.
 - [`development/agent-bootstrap-prompt.md`](development/agent-bootstrap-prompt.md) - copyable prompt that tells a coding agent how to clone, read rules, branch, implement, verify, and hand off.
