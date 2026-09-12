@@ -297,9 +297,10 @@ export class ThreadArtifactStore {
     const inputs: UserInput[] = [];
     for (const artifact of artifacts) {
       if (artifact.kind === "image") {
+        const bytes = await readFile(join(this.artifactDirectory(artifact.threadId, artifact.id), artifact.storedFilename));
         inputs.push({
-          type: "localImage",
-          path: join(this.artifactDirectory(artifact.threadId, artifact.id), artifact.storedFilename),
+          type: "image",
+          url: `data:${artifact.mimeType};base64,${bytes.toString("base64")}`,
         });
         continue;
       }

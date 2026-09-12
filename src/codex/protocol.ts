@@ -79,7 +79,7 @@ export type TurnStartInput = {
   insightMethod?: CommerceInsightMethod;
   skillName?: string;
   attachmentIds?: string[];
-  /** Thread-owned generated images selected as native localImage inputs for a creative edit Turn. */
+  /** Thread-owned generated images selected as bounded in-memory native image inputs for a creative edit Turn. */
   imageEditSourceFilenames?: string[];
   externalDataApprovalMode?: "always_ask" | "task" | "policy";
   productIds?: string[];

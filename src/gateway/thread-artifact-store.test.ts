@@ -47,8 +47,8 @@ test("stores tenant-bound text and image attachments and creates native turn inp
     assert.equal(inputs[0]?.type, "text");
     assert.match(String(inputs[0]?.text), /轻量通勤双肩包/);
     assert.match(String(inputs[0]?.text), new RegExp(`artifact_id="${document.id}"`));
-    assert.equal(inputs[1]?.type, "localImage");
-    assert.match(String(inputs[1]?.path), /thread_artifacts/);
+    assert.equal(inputs[1]?.type, "image");
+    assert.match(String(inputs[1]?.url), /^data:image\/png;base64,/);
     await store.bindToTurn(threadId, [document.id, image.id], "turn-attachment-1234");
     assert.equal((await store.get(threadId, image.id))?.turnId, "turn-attachment-1234");
     const retryInputs = await store.buildRetryTurnInputs(
@@ -58,7 +58,7 @@ test("stores tenant-bound text and image attachments and creates native turn inp
     );
     assert.deepEqual(retryInputs.artifactIds, [document.id, image.id]);
     assert.equal(retryInputs.inputs[0]?.type, "text");
-    assert.equal(retryInputs.inputs[1]?.type, "localImage");
+    assert.equal(retryInputs.inputs[1]?.type, "image");
     await assert.rejects(
       store.buildRetryTurnInputs(
         threadId,

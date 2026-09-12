@@ -2502,10 +2502,10 @@ async function readHarnessRetrySource(
   }
   const message = readVisibleHarnessUserText(sourceUserContent);
   const contract = readHarnessRetryContract(sourceUserContent);
-  const imageEditSourceFilenames = await readGeneratedImageSourcesFromHarnessContent(
-    threadId,
-    sourceUserContent,
-  );
+  const recordedImageEditSources = await generatedImages.readEditSources(threadId, targetTurnId);
+  const imageEditSourceFilenames = recordedImageEditSources.length
+    ? await generatedImages.buildTurnInputs(threadId, recordedImageEditSources).then(() => recordedImageEditSources)
+    : await readGeneratedImageSourcesFromHarnessContent(threadId, sourceUserContent);
   if (!message) {
     throw new GatewayRequestError("The source Turn has no visible user text to resend.", 409);
   }
@@ -6776,7 +6776,7 @@ function readImageEditSourceFilenames(value: unknown): string[] {
 async function buildGeneratedImageEditInputs(
   threadId: string,
   filenames: string[],
-): Promise<Array<{ type: "localImage"; path: string }>> {
+): Promise<Array<{ type: "image"; url: string }>> {
   try {
     return await generatedImages.buildTurnInputs(threadId, filenames);
   } catch {

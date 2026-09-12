@@ -35,7 +35,7 @@ Development resolution order:
 
 Production requires an absolute `CODEX_BIN` pointing at the root-owned image artifact plus its adjacent manifest. A missing, symlinked, untrusted, wrong-platform, wrong-version or hash-mismatched artifact fails fast; production never falls back to npm/global Codex. Protocol generation uses the same resolver, preventing build/runtime schema drift.
 
-The production Gateway image installs `bubblewrap` from the pinned Debian snapshot and verifies the executable during the image build. Native image editing reads only the project-authorized generated-image path through the Harness filesystem sandbox; the container remains non-root, read-only, capability-free and protected by `no-new-privileges`.
+The Gateway resolves image inputs only after tenant, thread, request and artifact ownership checks. It reads the bounded tenant artifact inside the application container and passes an in-memory native `image` input to App Server; local paths and image bytes are removed from browser events. This keeps image understanding and editing on tenant-scoped artifacts without exposing a general local-path reader or weakening the non-root, read-only, capability-free container boundary.
 
 Windows runtime builds deterministically normalize upstream state-store SQL migrations to CRLF before Rust compilation. This matches the official Windows Codex migration-byte contract used by SQLx checksums and lets the patched runtime open state previously created by `@openai/codex` without mutating the database migration ledger. Linux and macOS builds retain LF migrations.
 

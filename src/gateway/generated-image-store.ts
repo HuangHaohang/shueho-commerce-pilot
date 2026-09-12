@@ -5,6 +5,7 @@ import { basename, extname, join } from "node:path";
 const IMAGE_FILENAME_PATTERN = /^[0-9]+-[0-9a-f-]+\.(png|jpg|webp)$/i;
 const AGENT_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 const MAX_IMAGE_EDIT_SOURCES = 4;
+const MAX_IMAGE_EDIT_SOURCE_BYTES = 25 * 1024 * 1024;
 
 export type GeneratedImageArtifact = {
   version: 1;
@@ -204,10 +205,10 @@ export class GeneratedImageStore {
   async buildTurnInputs(
     threadId: string,
     filenames: string[],
-  ): Promise<Array<{ type: "localImage"; path: string }>> {
+  ): Promise<Array<{ type: "image"; url: string }>> {
     assertAgentId(threadId, "thread id");
     const normalized = normalizeSourceFilenames(filenames);
-    const inputs: Array<{ type: "localImage"; path: string }> = [];
+    const inputs: Array<{ type: "image"; url: string }> = [];
     for (const filename of normalized) {
       const artifact = await this.get(filename);
       if (!artifact) throw new Error("Generated image source is unavailable.");
@@ -217,8 +218,11 @@ export class GeneratedImageStore {
           .catch(() => { throw new Error("Generated image source does not belong to this thread."); });
         if (grant.threadId !== threadId || grant.sourceThreadId !== artifact.threadId || grant.filename !== filename) throw new Error("Generated image source does not belong to this thread.");
       }
-      await stat(this.imagePath(filename));
-      inputs.push({ type: "localImage", path: this.imagePath(filename) });
+      const bytes = await this.readImage(filename);
+      if (!bytes.length || bytes.length > MAX_IMAGE_EDIT_SOURCE_BYTES) {
+        throw new Error("Generated image source exceeds the native image input bound.");
+      }
+      inputs.push({ type: "image", url: `data:${artifact.mimeType};base64,${bytes.toString("base64")}` });
     }
     return inputs;
   }

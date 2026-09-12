@@ -16,6 +16,7 @@ test("removes tenant artifact paths and extracted attachment context from browse
         content: [
           { type: "text", text: "[附件：photo.png、notes.txt]\n请总结附件" },
           { type: "localImage", path: "/srv/codex/thread_artifacts/thread-123/photo.png" },
+          { type: "image", url: "data:image/png;base64,private-image-bytes" },
           { type: "text", text: "<commerce_attachment_context name=\"notes.txt\">secret extracted text</commerce_attachment_context>" },
         ],
       },
@@ -25,9 +26,10 @@ test("removes tenant artifact paths and extracted attachment context from browse
 
   const sanitized = sanitizeBrowserAppServerEvent(event);
   const serialized = JSON.stringify(sanitized);
-  assert.doesNotMatch(serialized, /\/srv\/codex|secret extracted text/);
+  assert.doesNotMatch(serialized, /\/srv\/codex|secret extracted text|private-image-bytes|data:image/);
   assert.match(serialized, /请总结附件/);
   assert.match(serialized, /"type":"localImage"/);
+  assert.match(serialized, /"type":"image"/);
 });
 
 test("removes host-only selected product context from browser events", () => {

@@ -21,7 +21,7 @@ export function sanitizeBrowserThreadItem(item: Record<string, unknown>): Record
   const content = item.content
     .filter(isRecord)
     .flatMap((entry): Record<string, unknown>[] => {
-      if (entry.type === "localImage") return [{ type: "localImage" }];
+      if (entry.type === "localImage" || entry.type === "image") return [{ type: entry.type }];
       if ((entry.type === "skill" || entry.type === "mention") && typeof entry.name === "string") {
         return [{ type: entry.type, name: entry.name }];
       }

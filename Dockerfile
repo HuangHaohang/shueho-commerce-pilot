@@ -57,7 +57,7 @@ COPY --from=codex-runtime /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-c
 RUN rm -f /etc/apt/sources.list.d/debian.sources && \
     echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20260825T000000Z bookworm main' > /etc/apt/sources.list && \
     apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends bubblewrap ca-certificates libssl3 liblzma5 && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates libssl3 liblzma5 && \
     rm -rf /var/lib/apt/lists/*
 
 FROM gateway-base AS build
@@ -102,7 +102,7 @@ COPY runtime/skills ./runtime/skills
 COPY runtime/models ./runtime/models
 COPY runtime/commerce-requirements.toml /etc/codex/requirements.toml
 
-RUN bwrap --version && node scripts/codex-runtime/verify.mjs --bin=/opt/shueho-codex/bin/codex
+RUN node scripts/codex-runtime/verify.mjs --bin=/opt/shueho-codex/bin/codex
 
 RUN mkdir -p /var/lib/shueho-commerce-pilot/codex && \
     chown -R node:node /var/lib/shueho-commerce-pilot
