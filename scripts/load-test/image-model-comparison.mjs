@@ -25,8 +25,10 @@ export function readImageComparisonConfig(environment) {
   if (!MODELS.has(environment.IMAGE_COMPARISON_MODEL)) throw new Error("Compare only GPT Image 2, Flare, or Sunburst.");
   if (!QUALITIES.has(environment.IMAGE_COMPARISON_QUALITY)) throw new Error("Invalid image comparison quality.");
   const base = new URL(environment.IMAGE_COMPARISON_BASE_URL ?? `https://${PUBLIC_HOST}`);
-  if (base.protocol !== "https:" || base.hostname !== PUBLIC_HOST || base.pathname !== "/" || base.search || base.hash) {
-    throw new Error(`Image comparison must use https://${PUBLIC_HOST}.`);
+  const publicHttps = base.protocol === "https:" && base.hostname === PUBLIC_HOST && !base.port;
+  const serverInternal = base.protocol === "http:" && base.hostname === "web-edge" && base.port === "8080";
+  if ((!publicHttps && !serverInternal) || base.pathname !== "/" || base.search || base.hash || base.username || base.password) {
+    throw new Error(`Image comparison must use https://${PUBLIC_HOST} or the server244-internal web-edge:8080 service.`);
   }
   const userOffset = Number(environment.IMAGE_COMPARISON_USER_OFFSET);
   if (!Number.isInteger(userOffset) || userOffset < 0 || userOffset + USERS_PER_ROUND > 100) throw new Error("Image comparison user offset must select ten fixture users.");
@@ -38,6 +40,8 @@ export function readImageComparisonConfig(environment) {
   }
   return {
     baseUrl: base.origin,
+    originUrl: `https://${PUBLIC_HOST}`,
+    transport: publicHttps ? "public_https" : "server244_internal_bff",
     model: environment.IMAGE_COMPARISON_MODEL,
     quality: environment.IMAGE_COMPARISON_QUALITY,
     agentModel: environment.IMAGE_COMPARISON_AGENT_MODEL?.trim() || "gpt-5.6-luna",
@@ -72,7 +76,7 @@ async function boundedBytes(response, maximumBytes) {
 async function json(config, user, path, body) {
   const response = await fetch(config.baseUrl + path, {
     method: body === undefined ? "GET" : "POST",
-    headers: { cookie: user.cookie, origin: config.baseUrl, ...(body === undefined ? {} : { "content-type": "application/json" }) },
+    headers: { cookie: user.cookie, origin: config.originUrl, ...(body === undefined ? {} : { "content-type": "application/json" }) },
     redirect: "error",
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(config.requestTimeoutMs),
@@ -269,6 +273,7 @@ export async function main(mode = process.argv[2], environment = process.env) {
     model: config.model,
     quality: config.quality,
     agentModel: config.agentModel,
+    transport: config.transport,
     userOffset: config.userOffset,
     createdAt: new Date().toISOString(),
     status: "started",

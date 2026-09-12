@@ -19,6 +19,7 @@ test("accepts exactly the three requested comparison models and six provider qua
       assert.equal(readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_MODEL: model, IMAGE_COMPARISON_QUALITY: quality }).model, model);
     }
   }
+  assert.equal(readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_BASE_URL: "http://web-edge:8080" }).transport, "server244_internal_bff");
   assert.throws(() => readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_MODEL: "gpt-image-2.5" }), /Compare only/);
 });
 
@@ -26,6 +27,7 @@ test("rejects non-production targets, missing authorization and invalid fixture 
   for (const changed of [
     { IMAGE_COMPARISON_AUTHORIZATION: "wrong" },
     { IMAGE_COMPARISON_BASE_URL: "http://commerce.shueho.com" },
+    { IMAGE_COMPARISON_BASE_URL: "http://web-edge:8081" },
     { IMAGE_COMPARISON_BASE_URL: "https://example.com" },
     { IMAGE_COMPARISON_USER_OFFSET: "95" },
     { IMAGE_COMPARISON_OUTPUT_DIR: "/tmp/results" },

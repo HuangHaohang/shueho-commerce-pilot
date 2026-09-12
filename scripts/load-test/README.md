@@ -60,4 +60,12 @@ node scripts/load-test/native-images.mjs
 
 分别记录提交确认、首个有效事件、图片产物、原生Turn终态和历史读回。没有中间像素帧时不能假装实现了图片流式预览。恢复测试只重启独立Gateway，并读回同一thread；不得以新建任务或重复付费调用冒充恢复。
 
+## server244 生产验收
+
+`production-load-fixtures.mjs` 只接受生产库 `commerce_pilot`、固定生产租户、100 个隔离合成身份和显式授权字符串。`prepare` 创建身份与独立工作区，`bind` 通过真实 BFF 创建原生 Harness thread，`cleanup` 先逐一等待 BFF 删除任务完成，再删除合成身份。收据和 cookie 只能放在服务器受保护的 `production-load` 目录。
+
+生产域名可解析时使用 `https://commerce.shueho.com`。若外部 DNS 正在故障，允许在 server244 的 Compose backend 内使用唯一的 `http://web-edge:8080` 目标；驱动仍固定发送生产 Origin，且收据把传输标为 `server244_internal_bff`。这个模式验证生产 BFF、数据库、Gateway、Harness 和 Provider，不证明 Cloudflare/DNS/TLS 链路健康。
+
+`image-model-comparison.mjs` 仅接受 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`。每轮选择 10 个不同用户，以相同质量和提示词并发生成 10 张，再用每张真实产物并发完成 10 次改图；逐 Turn 核对原生终态、模型、质量、产物下载、完整解码和 SHA-256。提交结果不确定时只保留收据并读取协调，禁止自动重提。
+
 参见[公司开放门槛](../../docs/deployment/company-readiness.md)、[本轮验证](../../docs/reports/2026-09-12-company-readiness.md)及[早期30用户/10图片报告](../../docs/reports/2026-09-11-local-launch-load-test.md)。

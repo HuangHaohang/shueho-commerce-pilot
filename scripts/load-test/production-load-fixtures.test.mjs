@@ -16,11 +16,15 @@ test("requires the exact authorized production tenant, database and public BFF",
   const config = readProductionFixtureConfig(valid);
   assert.equal(config.tenantId, valid.COMMERCE_RUNTIME_TENANT_ID);
   assert.equal(config.baseUrl, "https://commerce.shueho.com");
+  assert.equal(config.originUrl, "https://commerce.shueho.com");
+  assert.equal(config.transport, "public_https");
+  assert.equal(readProductionFixtureConfig({ ...valid, PRODUCTION_LOAD_BASE_URL: "http://web-edge:8080" }).transport, "server244_internal_bff");
   for (const changed of [
     { PRODUCTION_LOAD_AUTHORIZATION: "wrong" },
     { COMMERCE_RUNTIME_TENANT_ID: "not-a-uuid" },
     { MIGRATION_DATABASE_URL: "postgresql://owner:secret@database/other" },
     { PRODUCTION_LOAD_BASE_URL: "http://commerce.shueho.com" },
+    { PRODUCTION_LOAD_BASE_URL: "http://web-edge:8081" },
     { PRODUCTION_LOAD_BASE_URL: "https://example.com" },
     { PRODUCTION_LOAD_OUTPUT_DIR: "/tmp/general" },
   ]) assert.throws(() => readProductionFixtureConfig({ ...valid, ...changed }));

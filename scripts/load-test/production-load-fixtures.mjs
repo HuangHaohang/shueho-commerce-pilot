@@ -25,8 +25,10 @@ export function readProductionFixtureConfig(environment) {
     throw new Error("Production load fixtures require the explicit Commerce Pilot owner database.");
   }
   const base = new URL(environment.PRODUCTION_LOAD_BASE_URL ?? `https://${PUBLIC_HOST}`);
-  if (base.protocol !== "https:" || base.hostname !== PUBLIC_HOST || base.pathname !== "/" || base.search || base.hash || base.username || base.password) {
-    throw new Error(`Production fixture BFF must be https://${PUBLIC_HOST}.`);
+  const publicHttps = base.protocol === "https:" && base.hostname === PUBLIC_HOST && !base.port;
+  const serverInternal = base.protocol === "http:" && base.hostname === "web-edge" && base.port === "8080";
+  if ((!publicHttps && !serverInternal) || base.pathname !== "/" || base.search || base.hash || base.username || base.password) {
+    throw new Error(`Production fixture BFF must be https://${PUBLIC_HOST} or the server244-internal web-edge:8080 service.`);
   }
   const outputDirectory = resolve(environment.PRODUCTION_LOAD_OUTPUT_DIR ?? "");
   if (!environment.PRODUCTION_LOAD_OUTPUT_DIR || !outputDirectory.includes("production-load")) {
@@ -34,6 +36,8 @@ export function readProductionFixtureConfig(environment) {
   }
   return {
     baseUrl: base.origin,
+    originUrl: `https://${PUBLIC_HOST}`,
+    transport: publicHttps ? "public_https" : "server244_internal_bff",
     databaseUrl: database.toString(),
     outputDirectory,
     statePath: resolve(outputDirectory, "fixture-state.json"),
@@ -166,7 +170,7 @@ export async function bindProductionFixtures(config, state, request = fetch) {
   let created = 0;
   for (const user of state.users) {
     if (user.bindUncertain) throw new Error("A prior thread creation is uncertain; preserve the receipt and stop.");
-    const headers = { cookie: user.cookie, origin: config.baseUrl, "content-type": "application/json" };
+    const headers = { cookie: user.cookie, origin: config.originUrl, "content-type": "application/json" };
     const session = await request(`${config.baseUrl}/api/account/session`, { headers, redirect: "error", signal: AbortSignal.timeout(30_000) });
     const identity = await session.json().catch(() => null);
     if (session.status !== 200 || identity?.user?.id !== user.id) throw new Error("Synthetic production session authentication failed.");
@@ -197,7 +201,7 @@ export async function bindProductionFixtures(config, state, request = fetch) {
 export async function cleanupProductionFixtures(config, state, request = fetch) {
   validateState(config, state);
   for (const user of state.users.filter((candidate) => candidate.threadId)) {
-    const headers = { cookie: user.cookie, origin: config.baseUrl, "content-type": "application/json" };
+    const headers = { cookie: user.cookie, origin: config.originUrl, "content-type": "application/json" };
     const status = await request(`${config.baseUrl}/api/agent/threads/${encodeURIComponent(user.threadId)}/status`, {
       headers,
       redirect: "error",
