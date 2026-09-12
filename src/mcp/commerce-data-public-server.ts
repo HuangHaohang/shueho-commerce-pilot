@@ -75,8 +75,10 @@ const httpServer = createServer(async (request, response) => {
     }
     const url = new URL(request.url || "/", `http://${request.headers.host || "localhost"}`);
     if (request.method === "GET" && url.pathname === "/health") {
-      const queue=await taskStore.taskOperation('research_queue_health',{}).then(r=>r.payload).catch(()=>null);
-      const upstreamStatus = upstream.readStatus();
+      const [queue, upstreamStatus] = await Promise.all([
+        taskStore.taskOperation('research_queue_health',{}).then(r=>r.payload).catch(()=>null),
+        taskStore.verify(),
+      ]);
       const workerReady=!!queue && (Number(queue.queued??0)+Number(queue.settlementPending??0)===0 || queue.secondsSinceWorkerPoll!==null && Number(queue.secondsSinceWorkerPoll)<90);
       sendJson(response, upstreamStatus.connected && control.configured && workerReady ? 200 : 503, {
         ok: upstreamStatus.connected && control.configured && workerReady,
