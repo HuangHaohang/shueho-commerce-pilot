@@ -68,4 +68,6 @@ node scripts/load-test/native-images.mjs
 
 `image-model-comparison.mjs` 仅接受 `gpt-image-2`、`gpt-image-2.5-flare`、`gpt-image-2.5-sunburst`。每轮选择 10 个不同用户，以相同质量和提示词并发生成 10 张，再用每张真实产物并发完成 10 次改图；逐 Turn 核对原生终态、模型、质量、产物下载、完整解码和 SHA-256。提交结果不确定时只保留收据并读取协调，禁止自动重提。
 
+若生成已经由 Harness 确认完成，但驱动在产物字段或下载门禁处停止，`resume` 只接受原收据中 10 个已提交 generation、零个已提交 edit 的精确状态。它先逐项重查原生用户消息、Turn、终态、模型、质量和产物，再下载原图并启动尚未提交的改图；任何已提交 edit 都会拒绝续跑。
+
 参见[公司开放门槛](../../docs/deployment/company-readiness.md)、[本轮验证](../../docs/reports/2026-09-12-company-readiness.md)及[早期30用户/10图片报告](../../docs/reports/2026-09-11-local-launch-load-test.md)。

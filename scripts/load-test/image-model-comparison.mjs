@@ -190,6 +190,72 @@ async function downloadImage(config, user, image, outputPath) {
     mimeType: response.headers.get("content-type")?.split(";")[0] ?? null, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
+export function validateResumeReceipt(config, users, receipt) {
+  if (receipt?.schemaVersion !== 1 || receipt.authorization !== AUTHORIZATION || receipt.model !== config.model ||
+      receipt.quality !== config.quality || receipt.agentModel !== config.agentModel || receipt.userOffset !== config.userOffset ||
+      !Array.isArray(receipt.entries) || receipt.entries.length !== USERS_PER_ROUND || receipt.entries.some((entry, index) =>
+        entry.threadId !== users[index]?.threadId || entry.generate?.dispatchAttempted !== true ||
+        typeof entry.generate?.clientRequestId !== "string" || typeof entry.generate?.turnId !== "string" ||
+        entry.edit?.dispatchAttempted !== false || typeof entry.edit?.clientRequestId !== "string")) {
+    throw new Error("Resume requires the exact completed-generation receipt and refuses any previously dispatched edit.");
+  }
+}
+
+function createSaver(receiptPath, receipt) {
+  let writes = Promise.resolve();
+  return () => {
+    const snapshot = JSON.stringify(receipt, null, 2);
+    writes = writes.then(async () => {
+      const temporary = `${receiptPath}.${randomUUID()}.tmp`;
+      await writeFile(temporary, snapshot, { flag: "wx", mode: 0o600 });
+      await rename(temporary, receiptPath);
+    });
+    return writes;
+  };
+}
+
+async function reconcileCompletedGeneration(config, user, entry, save) {
+  if (entry.generate.outcome === "completed_verified" && entry.generate.artifact?.sourceFilename) return;
+  const history = await readHistory(config, user);
+  const matching = history.messages.filter((message) => message.role === "user" && message.clientId === entry.generate.clientRequestId);
+  const turnIds = [...new Set(matching.map((message) => message.turnId).filter(Boolean))];
+  const status = await json(config, user, `/api/agent/threads/${encodeURIComponent(user.threadId)}/status`);
+  const inventory = await json(config, user, `/api/agent/threads/${encodeURIComponent(user.threadId)}/images`);
+  const images = inventory.payload.images?.filter((image) => image.turnId === entry.generate.turnId) ?? [];
+  if (matching.length !== 1 || turnIds.length !== 1 || turnIds[0] !== entry.generate.turnId || status.status !== 200 ||
+      status.payload.thread?.lastTurnId !== entry.generate.turnId || status.payload.thread?.status !== "completed" ||
+      inventory.status !== 200 || images.length !== 1 || images[0].model !== config.model || images[0].quality !== config.quality) {
+    throw new Error("Existing generation did not pass exact native history, terminal and artifact reconciliation.");
+  }
+  const outputPath = join(config.outputDirectory, `${config.model}-${config.quality}-${entry.user}-generate.${images[0].filename.split(".").at(-1)}`);
+  entry.generate.artifact = await downloadImage(config, user, images[0], outputPath);
+  entry.generate.firstImageMs = entry.firstImageByTurn?.[entry.generate.turnId] ?? null;
+  entry.generate.firstImageSource = entry.firstImageByTurn?.[entry.generate.turnId] ? "sse" : "post_restart_inventory_readback";
+  entry.generate.terminalMs = entry.terminalByTurn?.[entry.generate.turnId]?.ms ?? entry.generate.elapsedMs;
+  entry.generate.outcome = "completed_verified";
+  await save();
+}
+
+async function finishComparison(receipt, save) {
+  const turns = receipt.entries.flatMap((entry) => [entry.generate, entry.edit]);
+  const metric = (kind, key) => percentile(receipt.entries.map((entry) => entry[kind][key]).filter(Number.isFinite), 0.95);
+  receipt.summary = {
+    logicalTurns: turns.length,
+    generationCompleted: receipt.entries.filter((entry) => entry.generate.outcome === "completed_verified").length,
+    editsCompleted: receipt.entries.filter((entry) => entry.edit.outcome === "completed_verified").length,
+    generationAcceptP95Ms: metric("generate", "acceptMs"),
+    generationFirstImageP95Ms: metric("generate", "firstImageMs"),
+    generationTotalP95Ms: metric("generate", "elapsedMs"),
+    editAcceptP95Ms: metric("edit", "acceptMs"),
+    editFirstImageP95Ms: metric("edit", "firstImageMs"),
+    editTotalP95Ms: metric("edit", "elapsedMs"),
+    streamErrors: receipt.entries.filter((entry) => entry.streamError).length,
+  };
+  receipt.status = turns.every((turn) => turn.outcome === "completed_verified") && receipt.summary.streamErrors === 0 ? "passed" : "failed";
+  receipt.completedAt = new Date().toISOString();
+  await save();
+}
+
 async function runTurn(config, user, entry, turn, save) {
   const startedAt = Date.now();
   const subscription = subscribe(config, user, entry, startedAt);
@@ -249,7 +315,7 @@ async function runTurn(config, user, entry, turn, save) {
 }
 
 export async function main(mode = process.argv[2], environment = process.env) {
-  if (!['run', 'reconcile'].includes(mode)) throw new Error("Use image-model-comparison.mjs run|reconcile.");
+  if (!['run', 'reconcile', 'resume'].includes(mode)) throw new Error("Use image-model-comparison.mjs run|reconcile|resume.");
   const config = readImageComparisonConfig(environment);
   await mkdir(config.outputDirectory, { recursive: true, mode: 0o700 });
   const allUsers = JSON.parse(await readFile(config.usersFile, "utf8"));
@@ -266,6 +332,22 @@ export async function main(mode = process.argv[2], environment = process.env) {
   const health = await json(config, users[0], "/api/gateway/health");
   if (health.status !== 200 || health.payload.provider?.imageModel !== config.model || health.payload.provider?.imageQuality !== config.quality) {
     throw new Error("Gateway image model/quality does not match this comparison round.");
+  }
+  if (mode === "resume") {
+    const receipt = JSON.parse(await readFile(receiptPath, "utf8"));
+    validateResumeReceipt(config, users, receipt);
+    const save = createSaver(receiptPath, receipt);
+    for (const [index, entry] of receipt.entries.entries()) {
+      await reconcileCompletedGeneration(config, users[index], entry, save);
+    }
+    for (const entry of receipt.entries) entry.edit.sourceFilename = entry.generate.artifact.sourceFilename;
+    receipt.status = "generation_reconciled";
+    await save();
+    await Promise.all(receipt.entries.map((entry, index) => runTurn(config, users[index], entry, entry.edit, save)));
+    await finishComparison(receipt, save);
+    console.log(JSON.stringify({ model: receipt.model, quality: receipt.quality, status: receipt.status, resumedWithoutGeneration: true, ...receipt.summary }));
+    if (receipt.status !== "passed") process.exitCode = 1;
+    return receipt;
   }
   const receipt = {
     schemaVersion: 1,
@@ -285,16 +367,7 @@ export async function main(mode = process.argv[2], environment = process.env) {
     })),
   };
   await writeFile(receiptPath, JSON.stringify(receipt, null, 2), { flag: "wx", mode: 0o600 });
-  let writes = Promise.resolve();
-  const save = () => {
-    const snapshot = JSON.stringify(receipt, null, 2);
-    writes = writes.then(async () => {
-      const temporary = `${receiptPath}.${randomUUID()}.tmp`;
-      await writeFile(temporary, snapshot, { flag: "wx", mode: 0o600 });
-      await rename(temporary, receiptPath);
-    });
-    return writes;
-  };
+  const save = createSaver(receiptPath, receipt);
   await Promise.all(receipt.entries.map((entry, index) => runTurn(config, users[index], entry, entry.generate, save)));
   if (!receipt.entries.every((entry) => entry.generate.outcome === "completed_verified")) {
     receipt.status = "generation_failed_or_uncertain";
@@ -304,23 +377,7 @@ export async function main(mode = process.argv[2], environment = process.env) {
   for (const entry of receipt.entries) entry.edit.sourceFilename = entry.generate.artifact.sourceFilename;
   await save();
   await Promise.all(receipt.entries.map((entry, index) => runTurn(config, users[index], entry, entry.edit, save)));
-  const turns = receipt.entries.flatMap((entry) => [entry.generate, entry.edit]);
-  const metric = (kind, key) => percentile(receipt.entries.map((entry) => entry[kind][key]).filter(Number.isFinite), 0.95);
-  receipt.summary = {
-    logicalTurns: turns.length,
-    generationCompleted: receipt.entries.filter((entry) => entry.generate.outcome === "completed_verified").length,
-    editsCompleted: receipt.entries.filter((entry) => entry.edit.outcome === "completed_verified").length,
-    generationAcceptP95Ms: metric("generate", "acceptMs"),
-    generationFirstImageP95Ms: metric("generate", "firstImageMs"),
-    generationTotalP95Ms: metric("generate", "elapsedMs"),
-    editAcceptP95Ms: metric("edit", "acceptMs"),
-    editFirstImageP95Ms: metric("edit", "firstImageMs"),
-    editTotalP95Ms: metric("edit", "elapsedMs"),
-    streamErrors: receipt.entries.filter((entry) => entry.streamError).length,
-  };
-  receipt.status = turns.every((turn) => turn.outcome === "completed_verified") && receipt.summary.streamErrors === 0 ? "passed" : "failed";
-  receipt.completedAt = new Date().toISOString();
-  await save();
+  await finishComparison(receipt, save);
   console.log(JSON.stringify({ model: receipt.model, quality: receipt.quality, status: receipt.status, ...receipt.summary }));
   if (receipt.status !== "passed") process.exitCode = 1;
   return receipt;

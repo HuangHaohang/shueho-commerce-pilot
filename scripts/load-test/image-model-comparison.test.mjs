@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { readImageComparisonConfig } from "./image-model-comparison.mjs";
+import { readImageComparisonConfig, validateResumeReceipt } from "./image-model-comparison.mjs";
 
 const valid = {
   IMAGE_COMPARISON_AUTHORIZATION: "server244-image-model-comparison-2026-09-12",
@@ -32,4 +32,27 @@ test("rejects non-production targets, missing authorization and invalid fixture 
     { IMAGE_COMPARISON_USER_OFFSET: "95" },
     { IMAGE_COMPARISON_OUTPUT_DIR: "/tmp/results" },
   ]) assert.throws(() => readImageComparisonConfig({ ...valid, ...changed }));
+});
+
+test("resume accepts only the exact receipt and refuses to repeat a generation or edit", () => {
+  const config = readImageComparisonConfig(valid);
+  const users = Array.from({ length: 100 }, (_, index) => ({ cookie: `cookie-${index}`, threadId: `thread-${index}` }));
+  const receipt = {
+    schemaVersion: 1,
+    authorization: "server244-image-model-comparison-2026-09-12",
+    model: config.model,
+    quality: config.quality,
+    agentModel: config.agentModel,
+    userOffset: config.userOffset,
+    entries: users.slice(10, 20).map((user, index) => ({
+      threadId: user.threadId,
+      generate: { dispatchAttempted: true, clientRequestId: `generate-${index}`, turnId: `turn-${index}` },
+      edit: { dispatchAttempted: false, clientRequestId: `edit-${index}` },
+    })),
+  };
+  assert.doesNotThrow(() => validateResumeReceipt(config, users.slice(10, 20), receipt));
+  assert.throws(() => validateResumeReceipt(config, users.slice(10, 20), { ...receipt, model: "gpt-image-2" }));
+  const editAttempted = structuredClone(receipt);
+  editAttempted.entries[0].edit.dispatchAttempted = true;
+  assert.throws(() => validateResumeReceipt(config, users.slice(10, 20), editAttempted), /refuses/);
 });
