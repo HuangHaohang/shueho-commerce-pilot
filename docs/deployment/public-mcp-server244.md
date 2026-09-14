@@ -40,6 +40,36 @@ Nginx, PostgreSQL, pgvector and Elasticsearch images are digest-pinned. App and 
 
 `COMMERCE_PROXY_IMAGE` selects the release-tagged proxy image built from the pinned Nginx base. `Dockerfile.proxy` removes unused ACME, GeoIP, image-filter, NJS and XSLT modules and verifies that their unused `libuuid` dependency is absent. The service configurations use core HTTP/TLS proxying only. Use the same source commit for the app, jobs and proxy artifacts.
 
+### Model relay crash recovery
+
+`model-relay` starts through the image-owned `start-model-relay` entrypoint, not
+directly through Nginx. It holds an advisory kernel lock for the full process
+lifetime, checks `/proc/net/unix` in the host network namespace, and removes only
+the exact UID-owned stale `/run/model/relay.sock`. A live listener, symlink, regular
+file, unexpected owner or unreadable socket table fails closed. The lock file may
+remain after SIGKILL or a host reboot; the kernel releases its lock automatically.
+Operator-renamed socket backups are untouched. The directory remains dedicated to
+UID 1000; the client mount stays read-only. No sudo, host filesystem sweep or paid
+provider request is part of startup recovery.
+
+The relay healthcheck requests the existing `/health` through the Unix socket;
+healthy requires both the relay and its Mac upstream. An upstream outage does not
+cause socket removal or automatic model-call replay. `COMMERCE_MODEL_RELAY_IMAGE`
+optionally pins a separately reviewed relay hotfix image; without it the normal
+`COMMERCE_PROXY_IMAGE` is used. Do not point the new entrypoint at an older image
+that lacks the startup script.
+
+Before deployment, build `Dockerfile.proxy`, run `nginx -t` against the shipped
+relay/client configurations, and run
+`MODEL_RELAY_TEST_IMAGE=<built-image> node scripts/deployment/verify-model-relay.mjs`.
+The verification uses a disposable volume and exercises clean start, graceful
+restart, repeated SIGKILL recovery, duplicate instances, live unmanaged listeners,
+regular files and symlinks. Never inject crashes into the production relay as a
+test. Deploy only `model-relay` with `--no-deps`, preserving the existing Compose
+project, protected environment, socket directory and other service image pins.
+Read back its actual image/entrypoint, restart count, socket health, and the
+`model-client -> relay -> Mac /health` path before declaring recovery complete.
+
 ## Protected configuration contract
 
 The [unified JustOneAPI client](justoneapi-tokens.md) additionally requires the protected token-file overlay, migrations `030`–`032` and a validated quota import. Token/endpoint budgets are independent of provider prices, Commerce policy and MCP client credentials. Startup and readback must confirm the intended pool and initialized allowances before admitting new provider calls.

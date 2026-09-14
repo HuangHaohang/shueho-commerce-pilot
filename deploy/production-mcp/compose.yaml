@@ -158,7 +158,8 @@ services:
   # Only this small proxy shares the host network, to reach the SSH loopback
   # listener. It exposes a dedicated Unix socket, never a host TCP listener.
   model-relay:
-    image: ${COMMERCE_PROXY_IMAGE:?Set a release proxy image}
+    image: ${COMMERCE_MODEL_RELAY_IMAGE:-${COMMERCE_PROXY_IMAGE:?Set a release proxy image}}
+    entrypoint: ["/usr/local/bin/start-model-relay"]
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -170,6 +171,12 @@ services:
       - ./model-relay.conf:/etc/nginx/nginx.conf:ro
       - ${COMMERCE_CONFIG_DIR}/../run/model:/run/model
     mem_limit: 64m
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, --max-time, "5", --unix-socket, /run/model/relay.sock, http://localhost/health]
+      interval: 20s
+      timeout: 6s
+      start_period: 30s
+      retries: 3
     logging: *logging
 
   model-client:

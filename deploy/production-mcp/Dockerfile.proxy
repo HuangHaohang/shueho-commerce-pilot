@@ -5,3 +5,4 @@ LABEL org.opencontainers.image.revision=$COMMERCE_SOURCE_COMMIT
 # Removing image-filter also removes its unused X11/libuuid dependency chain.
 RUN apk del --no-network nginx-module-acme nginx-module-geoip nginx-module-image-filter nginx-module-njs nginx-module-xslt && \
     ! apk info -e libuuid
+COPY --chmod=0555 deploy/production-mcp/start-model-relay.sh /usr/local/bin/start-model-relay
