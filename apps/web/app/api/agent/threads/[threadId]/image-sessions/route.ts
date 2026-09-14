@@ -33,18 +33,26 @@ export async function POST(request: Request, route: RouteContext) {
     const assetFilename = await resolveRoot(body.filename);
     const roots = new Map(await Promise.all(existingSessions.map(async (item) => [item.threadId, await resolveRoot(item.sourceFilename)] as const)));
     const reusable = existingSessions.find((item) => roots.get(item.threadId) === assetFilename);
-    let expiredEmptyThread: string | null = null;
+    let unmaterializedEmptyThread: string | null = null;
     if (reusable) {
       const thread = await getAgentThreadForUser(reusable.threadId, scope);
       if (thread && !thread.turnStartedAt) {
         const probe = await fetch(gatewayUrl(`/api/threads/${encodeURIComponent(thread.threadId)}`), {
           headers: gatewayHeaders(undefined, scope), cache: "no-store", signal: AbortSignal.timeout(10_000),
         });
-        const result = await probe.json();
-        if (probe.status === 404 || (result.code === -32600 && result.error === `thread not loaded: ${thread.threadId}`)) expiredEmptyThread = thread.threadId;
+        const result = await probe.json().catch(() => null);
+        if (
+          probe.status === 404 ||
+          (result?.code === -32600 && result.error === `thread not loaded: ${thread.threadId}`)
+        ) {
+          // App Server intentionally has no persisted ThreadStore record before
+          // the first native Turn. This is only a recovery candidate: the
+          // transaction below must still prove that no request was accepted.
+          unmaterializedEmptyThread = thread.threadId;
+        }
         else if (!probe.ok) throw new Error("无法确认编辑会话状态，请稍后重试。");
       }
-      if (thread && !expiredEmptyThread) return NextResponse.json({ session: { ...reusable, assetFilename, thread } }, { headers: { "Cache-Control": "no-store" } });
+      if (thread && !unmaterializedEmptyThread) return NextResponse.json({ session: { ...reusable, assetFilename, thread } }, { headers: { "Cache-Control": "no-store" } });
     }
     const createAccess = await requireAgentContext(request, "thread.create");
     if (!createAccess.ok) return createAccess.response;
@@ -55,14 +63,39 @@ export async function POST(request: Request, route: RouteContext) {
       const deleting = await client.query(`SELECT 1 FROM commerce_thread_deletion_item i JOIN commerce_thread_deletion_job j ON j.id = i.job_id
         WHERE i.thread_id = $1 AND j.status IN ('queued', 'running') LIMIT 1`, [threadId]);
       if (deleting.rowCount) throw new Error("创作项目正在删除。");
-      if (expiredEmptyThread) {
-        const empty = await client.query("SELECT thread_id FROM commerce_agent_thread WHERE thread_id = $1 AND turn_started_at IS NULL FOR UPDATE", [expiredEmptyThread]);
-        const attempts = await client.query("SELECT 1 FROM commerce_agent_turn_lease WHERE thread_id = $1 LIMIT 1", [expiredEmptyThread]);
-        if (empty.rowCount && !attempts.rowCount) {
-          // Harness never persisted a user Turn; only replace the empty application binding.
-          await client.query("DELETE FROM commerce_creative_image_session WHERE thread_id = $1", [expiredEmptyThread]);
-          await client.query("DELETE FROM commerce_agent_thread WHERE thread_id = $1", [expiredEmptyThread]);
-        } else throw new Error("编辑会话已有执行记录，请恢复原会话。");
+      if (unmaterializedEmptyThread) {
+        const empty = await client.query(
+          "SELECT thread_id FROM commerce_agent_thread WHERE thread_id = $1 AND turn_started_at IS NULL FOR UPDATE",
+          [unmaterializedEmptyThread],
+        );
+        const evidence = await client.query<{
+          hasLiveReservation: boolean;
+          hasAcceptedTurn: boolean;
+        }>(
+          `SELECT
+            EXISTS (
+              SELECT 1 FROM commerce_agent_turn_lease
+              WHERE thread_id = $1 AND state IN ('reserved', 'active') AND expires_at > CURRENT_TIMESTAMP
+            ) AS "hasLiveReservation",
+            EXISTS (
+              SELECT 1 FROM commerce_agent_turn_lease WHERE thread_id = $1 AND turn_id IS NOT NULL
+            ) OR EXISTS (
+              SELECT 1 FROM commerce_agent_usage_event WHERE thread_id = $1
+            ) OR EXISTS (
+              SELECT 1 FROM commerce_agent_turn_completion WHERE root_thread_id = $1
+            ) AS "hasAcceptedTurn"`,
+          [unmaterializedEmptyThread],
+        );
+        const state = evidence.rows[0];
+        if (empty.rowCount && !state?.hasLiveReservation && !state?.hasAcceptedTurn) {
+          // A released/expired admission without a native Turn ID is only a
+          // local failed attempt. No Harness or paid image execution exists to
+          // preserve, so replace just this empty application binding.
+          await client.query("DELETE FROM commerce_creative_image_session WHERE thread_id = $1", [unmaterializedEmptyThread]);
+          await client.query("DELETE FROM commerce_agent_thread WHERE thread_id = $1", [unmaterializedEmptyThread]);
+        } else {
+          throw new Error("编辑会话仍有待核对或已接受的执行记录，请恢复原会话。");
+        }
       }
       // Reusing a generated revision continues its existing native editor thread.
       const existing = await client.query(`SELECT thread_id AS "threadId", project_thread_id AS "projectThreadId", source_filename AS "sourceFilename"
@@ -81,7 +114,7 @@ export async function POST(request: Request, route: RouteContext) {
       await registerAgentThreadOwner(editThreadId, scope, "图片编辑", "creative_project", "creative", client);
       await client.query(`INSERT INTO commerce_creative_image_session (tenant_id, workspace_id, user_id, project_thread_id, source_filename, thread_id)
         VALUES ($1,$2,$3,$4,$5,$6)`, [scope.tenantId, scope.workspaceId, scope.userId, threadId, assetFilename, editThreadId]);
-      return { threadId: editThreadId, projectThreadId: threadId, sourceFilename: assetFilename, assetFilename, replacedEmptyThreadId: expiredEmptyThread };
+      return { threadId: editThreadId, projectThreadId: threadId, sourceFilename: assetFilename, assetFilename, replacedEmptyThreadId: unmaterializedEmptyThread };
     });
     return NextResponse.json({ session: { ...session, thread: await getAgentThreadForUser(session.threadId, scope) } }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "图片编辑会话暂时不可用。" }, { status: 409 }); }

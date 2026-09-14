@@ -24,13 +24,37 @@ it("does not replace an empty editor on an uncertain upstream failure", async ()
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "timeout" }), { status: 503 })));
   expect((await call()).status).toBe(409); expect(m.register).not.toHaveBeenCalled(); expect(m.query).not.toHaveBeenCalled();
 });
-it("does not remove a missing editor with any recorded turn reservation", async () => {
+it("does not remove an unmaterialized editor with a live turn reservation", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 404 })));
-  m.query.mockImplementation(async (sql: string) => ({ rows: [], rowCount: sql.includes("FOR UPDATE") || sql.includes("commerce_agent_turn_lease") ? 1 : 0 }));
+  m.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("FOR UPDATE")) return { rows: [{ threadId: editor }], rowCount: 1 };
+    if (sql.includes('AS "hasLiveReservation"')) return { rows: [{ hasLiveReservation: true, hasAcceptedTurn: false }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  });
   expect((await call()).status).toBe(409); expect(m.query.mock.calls.some(([sql]) => sql.startsWith("DELETE"))).toBe(false); expect(m.register).not.toHaveBeenCalled();
 });
-it("replaces only a confirmed lost empty binding through native thread creation", async () => {
+it("does not remove an unmaterialized editor with an accepted Turn record", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 404 })));
+  m.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("FOR UPDATE")) return { rows: [{ threadId: editor }], rowCount: 1 };
+    if (sql.includes('AS "hasLiveReservation"')) return { rows: [{ hasLiveReservation: false, hasAcceptedTurn: true }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  });
+  expect((await call()).status).toBe(409); expect(m.query.mock.calls.some(([sql]) => sql.startsWith("DELETE"))).toBe(false); expect(m.register).not.toHaveBeenCalled();
+});
+it("rebuilds an unmaterialized editor after terminal pre-Turn reservations", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(new Response("{}", { status: 404 })).mockResolvedValueOnce(new Response(JSON.stringify({ result: { thread: { id: "new-editor123" } } }))));
+  m.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("FOR UPDATE")) return { rows: [{ threadId: editor }], rowCount: 1 };
+    if (sql.includes('AS "hasLiveReservation"')) return { rows: [{ hasLiveReservation: false, hasAcceptedTurn: false }], rowCount: 1 };
+    if (sql.includes("FROM commerce_creative_image_session")) return { rows: [], rowCount: 0 };
+    if (sql.includes("FOR KEY SHARE")) return { rows: [{ threadId: project }], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  });
   const result = await call(); expect(result.status).toBe(200); expect((await result.json()).session.replacedEmptyThreadId).toBe(editor);
+  expect(m.query.mock.calls.filter(([sql]) => sql.startsWith("DELETE")).map(([sql]) => sql)).toEqual([
+    "DELETE FROM commerce_creative_image_session WHERE thread_id = $1",
+    "DELETE FROM commerce_agent_thread WHERE thread_id = $1",
+  ]);
   expect(m.register).toHaveBeenCalledWith("new-editor123", expect.anything(), "图片编辑", "creative_project", "creative", expect.objectContaining({ query: m.query }));
 });

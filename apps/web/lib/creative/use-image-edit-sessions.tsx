@@ -4,8 +4,34 @@ import { useAgentThread, type AgentThreadSummary, type GeneratedImageItem } from
 
 import { imageAssetRoot } from "./image-assets";
 type Runtime = ReturnType<typeof useAgentThread>;
-type Session = { threadId: string; projectThreadId: string; sourceFilename: string; assetFilename?: string; thread: AgentThreadSummary };
+export type ImageEditSession = {
+  threadId: string;
+  projectThreadId: string;
+  sourceFilename: string;
+  assetFilename?: string;
+  thread: AgentThreadSummary;
+};
+type Session = ImageEditSession;
 type Options = Parameters<typeof useAgentThread>[0];
+
+/** A session belongs to the asset root, so every derived version reuses it. */
+export function findImageEditSession(
+  sessions: readonly ImageEditSession[],
+  projectThreadId: string,
+  assetFilename: string,
+): ImageEditSession | undefined {
+  return sessions.find(
+    (session) =>
+      session.projectThreadId === projectThreadId &&
+      (session.assetFilename ?? session.sourceFilename) === assetFilename,
+  );
+}
+
+/** Empty persisted editors need one server-side materialization check on open. */
+export function needsImageEditSessionReconciliation(session: ImageEditSession): boolean {
+  return session.thread.turnStartedAt === null;
+}
+
 function SessionRuntime({ session, options, onUpdate }: { session: Session; options: Options; onUpdate: (id: string, runtime: Runtime) => void }) {
   const runtime = useAgentThread(options);
   const load = useRef(runtime.loadThread);
@@ -61,8 +87,15 @@ export function useImageEditSessions(projectThreadId: string | null, options: Op
     setActiveFilename(filename);
     if (!projectThreadId) return;
     const root = imageAssetRoot(filename, [...projectImages, ...Object.values(runtimes).flatMap((runtime) => runtime.images), ...Object.values(copies).flat()]);
-    const known = sessions.find((session) => session.projectThreadId === projectThreadId && (session.assetFilename ?? session.sourceFilename) === root);
-    if (known && runtimes[known.threadId]?.status === "running") { setBindings((current) => ({ ...current, [filename]: known.threadId })); return; }
+    const known = findImageEditSession(sessions, projectThreadId, root);
+    if (known && !needsImageEditSessionReconciliation(known)) {
+      // A persisted editor remains authoritative across Gateway restarts. Its
+      // controller restores history now and resumes the native thread only
+      // when the user submits a new Turn.
+      setBindings((current) => ({ ...current, [filename]: known.threadId }));
+      setError(null);
+      return;
+    }
     const key = `${projectThreadId}:${filename}`;
     if (requests.current.has(key)) return;
     setError(null);
@@ -87,7 +120,18 @@ export function useImageEditSessions(projectThreadId: string | null, options: Op
     requests.current.set(key, operation);
   }, [projectThreadId, sessions, runtimes, options.model, projectImages, copies]);
   const currentSessions = sessions.filter((session) => session.projectThreadId === projectThreadId);
-  const activeId = activeFilename ? bindings[activeFilename] ?? currentSessions.find((session) => session.sourceFilename === activeFilename)?.threadId : undefined;
+  const fallbackActiveSession = activeFilename
+    ? currentSessions.find(
+      (session) => session.sourceFilename === activeFilename || session.assetFilename === activeFilename,
+    )
+    : undefined;
+  const activeId = activeFilename
+    ? bindings[activeFilename] ?? (
+      fallbackActiveSession && !needsImageEditSessionReconciliation(fallbackActiveSession)
+        ? fallbackActiveSession.threadId
+        : undefined
+    )
+    : undefined;
   const active = activeId ? runtimes[activeId] : undefined;
   const ready = Boolean(active && active.threadId === activeId && !active.loadingHistory && active.status !== "connecting");
   const images = [...currentSessions.flatMap((session) => runtimes[session.threadId]?.images ?? []), ...(projectThreadId ? copies[projectThreadId] ?? [] : [])];

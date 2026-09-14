@@ -60,6 +60,15 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
     const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
     if (!response.ok || !payload) {
       const upstreamMessage = payload && typeof payload.error === "string" ? payload.error : "";
+      if (record.turnStartedAt === null && isUnmaterializedThreadRead(payload, threadId)) {
+        // App Server does not materialize a just-created thread in its durable
+        // ThreadStore until its first native Turn. Opening an image editor is
+        // read-only, so expose the owned empty conversation rather than
+        // resuming it or reporting a recoverable blank editor as broken.
+        return NextResponse.json(emptyThreadHistory(record), {
+          headers: { "Cache-Control": "no-store" },
+        });
+      }
       const status = /thread not found/i.test(upstreamMessage) ? 404 : response.status;
       if (status === 404) {
         await deleteAgentThreadRecord(threadId, enterpriseContext);
@@ -102,6 +111,29 @@ export async function GET(request: Request, routeContext: { params: Promise<{ th
   } catch {
     return NextResponse.json({ error: "Agent Gateway 暂时不可用。" }, { status: 503 });
   }
+}
+
+function isUnmaterializedThreadRead(payload: Record<string, unknown> | null, threadId: string): boolean {
+  return payload?.code === -32600 && payload.error === `thread not loaded: ${threadId}`;
+}
+
+function emptyThreadHistory(record: NonNullable<Awaited<ReturnType<typeof getAgentThreadForUser>>>) {
+  return {
+    thread: {
+      id: record.threadId,
+      title: record.title,
+      lastTurnId: null,
+      status: "completed" as const,
+      durationMs: null,
+      startedAt: null,
+      recipeId: record.recipeId,
+      category: record.category,
+    },
+    messages: [],
+    activities: [],
+    images: [],
+    nextCursor: null,
+  };
 }
 
 function normalizeThreadHistory(

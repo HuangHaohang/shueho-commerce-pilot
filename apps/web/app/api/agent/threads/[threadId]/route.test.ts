@@ -149,6 +149,43 @@ describe("agent thread history product context", () => {
       .not.toHaveProperty("products");
   });
 
+  it("returns an owned empty history for an unmaterialized editor without resuming or deleting it", async () => {
+    mocks.getAgentThreadForUser.mockResolvedValue({
+      threadId,
+      title: "图片编辑",
+      createdAt: "2026-09-14T00:00:00.000Z",
+      updatedAt: "2026-09-14T00:00:00.000Z",
+      status: "completed",
+      activeTurnId: null,
+      turnStartedAt: null,
+      durationMs: null,
+      recipeId: "creative_project",
+      category: "creative",
+      toolContractVersion: 1,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: `thread not loaded: ${threadId}`,
+      code: -32600,
+    }), { status: 400, headers: { "Content-Type": "application/json" } })));
+
+    const response = await GET(
+      new Request(`http://localhost/api/agent/threads/${threadId}`),
+      { params: Promise.resolve({ threadId }) },
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body).toMatchObject({
+      thread: { id: threadId, title: "图片编辑", status: "completed", lastTurnId: null },
+      messages: [],
+      activities: [],
+      images: [],
+      nextCursor: null,
+    });
+    expect(mocks.deleteAgentThreadRecord).not.toHaveBeenCalled();
+    expect(mocks.updateAgentThreadStatus).not.toHaveBeenCalled();
+  });
+
   it("fails closed without hiding Harness history when the Product projection is unavailable", async () => {
     mocks.listBoundProductContextsByTurnIds.mockRejectedValue(new Error("catalog unavailable"));
 

@@ -217,7 +217,7 @@ Focused image submissions use exactly the currently displayed source filename; c
 
 ### 独立图片编辑会话与项目汇集
 
-`commerce_creative_image_session` 持久化项目 thread、原图 filename 与原生编辑 thread 的关系，按 tenant/workspace/user 强制 RLS。首次打开原图通过现有受控 thread.create 入口创建 Harness thread，同一原图复用会话，编辑产物重新打开时回到其生成会话。项目锁防止重复创建，并与项目删除排队互斥。应用只持久化关联，不复制或改写原生对话历史。
+`commerce_creative_image_session` 持久化项目 thread、原图 filename 与原生编辑 thread 的关系，按 tenant/workspace/user 强制 RLS。首次打开原图通过现有受控 thread.create 入口创建 Harness thread，同一原图复用会话，编辑产物重新打开时回到其生成会话。Gateway 重启后的 `thread/read` “未加载”不能单独作为会话丢失证据：已持久化的关联仍须绑定到原编辑控制器，且只在用户提交新 Turn 时恢复原生 thread。项目锁防止重复创建，并与项目删除排队互斥。应用只持久化关联，不复制或改写原生对话历史。
 
 图片编辑窗口中的发送、附件、原生提问回答、停止操作均指向编辑 thread。各会话挂载独立的原生事件订阅和恢复适配器，关闭窗口不停止任务，离开项目仅断开 UI 订阅，重新进入从 Harness 加载状态。项目主对话继续使用自己的 thread；项目画布按服务端授权关系汇集原生图片产物，外层编辑入口仅显示可点击记录卡片。图片编辑 thread 从顶层项目列表隐藏，删除项目时由原有持久删除 worker 先清理关联编辑 thread。
 
@@ -241,6 +241,6 @@ Focused image submissions use exactly the currently displayed source filename; c
 
 运行中的图片编辑通过受所有权检查的 `GET /api/agent/threads/:threadId/images` 同步产物库存，不再为找新图每三秒读取整段 Harness 历史。项目画布读取子编辑会话的图片也使用库存；完整对话继续由 Harness 分页管理。Gateway 对自己的图片元数据建立按线程索引，冷读合并并发请求且限制文件并发，原子元数据写入和目录变化使缓存失效；该缓存不能替代每个 BFF 请求的授权检查。
 
-图片版本祖先查询仅在单次请求内共享已验证元数据；重开已有编辑会话不消耗新建会话的限流预算。迁移 052 为会话关系增加租户、工作区、用户、线程的复合外键。已有会话的原生历史不得被替换；仅对 Harness 确认丢失、没有首次执行时间且没有任何 Turn 预留的空会话，在数据库锁保护下替换应用绑定并调用原生 thread/start。网络错误或已接受过执行的会话不走空会话重建。
+图片版本祖先查询仅在单次请求内共享已验证元数据；重开已有编辑会话不消耗新建会话的限流预算。迁移 052 为会话关系增加租户、工作区、用户、线程的复合外键。已有会话的原生历史不得被替换；仅对 Harness 确认未物化、没有首次执行时间、没有活动 Turn 预留、没有已接受 Turn ID、没有用量或完成回执的空会话，在数据库锁保护下替换应用绑定并调用原生 thread/start。已释放或过期但从未获得 Turn ID 的预留只是本地失败痕迹，不得永久阻塞该恢复；网络错误或任何已接受过执行的会话不走空会话重建。
 
 本地压测的实测范围、结果与生产未验收项见 [2026-09-11 报告](../reports/2026-09-11-local-launch-load-test.md)。
