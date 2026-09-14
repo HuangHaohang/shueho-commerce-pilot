@@ -95,6 +95,10 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/scripts/codex-runtime ./scripts/codex-runtime
 COPY --from=build /app/vendor ./vendor
+# Release archives may preserve a restrictive source-directory mode. The
+# Gateway is intentionally non-root, so normalize only the shipped, public
+# Codex metadata tree before dropping privileges.
+RUN chmod -R a+rX ./vendor/codex
 COPY AGENTS.md README.md ./
 COPY docs ./docs
 COPY examples ./examples
