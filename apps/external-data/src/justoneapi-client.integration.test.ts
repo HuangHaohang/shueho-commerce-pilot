@@ -270,6 +270,38 @@ describe.skipIf(!enabled)("unified JustOneAPI client with real PostgreSQL quotas
     expect((await f.store.status(f.credentials.map(c=>c.id))).availablePairs).toBe(2);
   });
 
+  it('dispatches a fresh key without a quota import or invented balance', async () => {
+    const f = await fixture(1);
+    await owner.query('DELETE FROM justoneapi_token_endpoint_quota WHERE token_id=$1', [f.credentials[0]!.id]);
+    const call = await ownedRequest();
+    expect((await f.make().call(call.ep,call.request,call.identity)).state).toBe('succeeded');
+    expect(f.sent).toHaveLength(1);
+    expect((await f.counters())[0]).toMatchObject({ remaining_calls:null,used_calls:1,state:'active' });
+  });
+
+  it('switches fresh keys after a confirmed refusal without reviving an exhausted key', async () => {
+    const f = await fixture(2);
+    await owner.query('DELETE FROM justoneapi_token_endpoint_quota WHERE token_id=ANY($1)', [f.credentials.map(c=>c.id)]);
+    let calls = 0;
+    const call = await ownedRequest();
+    expect((await f.make(async()=>response(++calls === 1 ? 303 : 0),undefined,undefined,3)
+      .call(call.ep,call.request,call.identity)).state).toBe('succeeded');
+    expect(new Set(f.sent).size).toBe(2);
+    expect((await f.counters()).find(row=>row.token_id===f.sent[0]).state).toBe('exhausted');
+    const next = await ownedRequest();
+    await f.make().call(next.ep,next.request,next.identity);
+    expect(f.sent[2]).toBe(f.sent[1]);
+  });
+
+  it('does not switch fresh keys after an uncertain response', async () => {
+    const f = await fixture(2);
+    await owner.query('DELETE FROM justoneapi_token_endpoint_quota WHERE token_id=ANY($1)', [f.credentials.map(c=>c.id)]);
+    const call = await ownedRequest();
+    await expect(f.make(async()=>({...response(500),httpStatus:503}),undefined,undefined,3)
+      .call(call.ep,call.request,call.identity)).rejects.toMatchObject({ code:'RESULT_UNKNOWN',uncertain:true });
+    expect(f.sent).toHaveLength(1);
+  });
+
   it('retires only operator zero-cap blocks and preserves provider-confirmed exhaustion',async()=>{
     const f=await fixture(2,3,2,'operator_conservative_cap');
     const extra=f.credentials.map(()=>credentialForToken(`fixture-${randomUUID()}`));

@@ -82,6 +82,12 @@ export class PostgresJustOneApiTokenStore implements JustOneApiTokenStore {
       await this.lockExecution(client, identity, executionId);
       // Serializes only this endpoint's selection/debit across processes and tenants.
       await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [`justoneapi:${identity.apiPath}`]);
+      // First use creates eligibility only after the owned durable call is locked.
+      // Never reset provider-confirmed exhaustion, denial, cooldown or prior usage.
+      await client.query(`INSERT INTO justoneapi_token_endpoint_quota(token_id,api_path,state)
+        SELECT token_id,$1,'active' FROM justoneapi_token
+        WHERE token_id=ANY($2::text[]) AND state='active'
+        ON CONFLICT (token_id,api_path) DO NOTHING`, [identity.apiPath,tokenIds]);
       const selected = await client.query<{ token_id: string }>(`
         SELECT quota.token_id FROM justoneapi_token_endpoint_quota quota
         JOIN justoneapi_token token ON token.token_id=quota.token_id

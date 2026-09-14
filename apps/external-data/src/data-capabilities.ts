@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { database } from "./database.js";
-import { getJustOneApiClient } from "./justoneapi-runtime.js";
 import type { JsonObject } from "./types.js";
 
 export type DataCapabilityAuthorization = { allowedCatalogPlatforms?: string[]; allowedEndpointIds?: string[] };
@@ -10,7 +9,6 @@ export type DataCapabilityRow = {
   permission_status: string; request_schema: JsonObject; request_codec: JsonObject; response_family: string;
   source_catalog_import_id: string | null; openapi_sha256: string | null;
   market_options?: JsonObject[];
-  quota_pairs: number; quota_ready: number; quota_remaining: string | null;
 };
 
 export class DataCapabilityError extends Error {
@@ -44,7 +42,6 @@ export function capabilityView(row: DataCapabilityRow, authorization: DataCapabi
     ...(!workspaceAllowed ? ["WORKSPACE_PERMISSION_DENIED"] : []),
     ...(protectedInput ? ["PROTECTED_INPUT_REQUIRED"] : []),
     ...(!row.enabled && row.catalog_status === "active" && row.pricing_status === "priced" && row.permission_status === "allowed" ? ["CAPABILITY_DISABLED"] : []),
-    ...(row.quota_pairs === 0 ? ["TOKEN_QUOTA_UNCONFIGURED"] : row.quota_ready === 0 ? ["TOKEN_QUOTA_UNAVAILABLE"] : []),
   ];
   const text = `${row.platform_name} ${row.display_name} ${row.capability}`;
   const category = /\bAI\b|\bLLM\b|人工智能|语言模型/i.test(text) ? "ai_answers"
@@ -57,7 +54,7 @@ export function capabilityView(row: DataCapabilityRow, authorization: DataCapabi
     platform: row.platform_id, platform_name: row.platform_name, category, description: row.capability,
     registered: true, executable: reasons.length === 0, blocking_reasons: reasons,
     availability: { catalog: row.catalog_status, pricing: row.pricing_status, provider_permission: row.permission_status,
-      workspace_authorized: workspaceAllowed, local_quota: row.quota_pairs === 0 ? "unconfigured" : row.quota_ready > 0 ? "available" : "unavailable" },
+      workspace_authorized: workspaceAllowed, provider_key: "checked_at_dispatch" },
     ...(schema ? {
       revision: capabilityRevision(row),market_options:row.market_options ?? [], input_schema: {
         ...row.request_schema, properties: Object.fromEntries(Object.entries(properties).filter(([key]) => !isProtectedField(key))),
@@ -70,25 +67,19 @@ export function capabilityView(row: DataCapabilityRow, authorization: DataCapabi
 }
 
 async function catalogRows(): Promise<DataCapabilityRow[]> {
-  const tokenIds = await getJustOneApiClient().configuredCredentialIds().catch(() => []);
   const result = await database.query<DataCapabilityRow>(`
     SELECT endpoint.endpoint_id,endpoint.platform_id,endpoint.platform_name,endpoint.display_name,endpoint.capability,
       endpoint.api_path,endpoint.http_method,endpoint.enabled,endpoint.catalog_status,endpoint.pricing_status,
       endpoint.permission_status,endpoint.request_schema,endpoint.request_codec,endpoint.response_family,
       endpoint.source_catalog_import_id,endpoint.openapi_sha256,
-      count(quota.token_id)::int AS quota_pairs,
-      count(quota.token_id) FILTER(WHERE quota.state='active' AND quota.remaining_calls>0 AND token.state='active')::int AS quota_ready,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('parameter',option.parameter_name,'code',option.market_code,'label',option.display_name,
         'ready',option.localization_ready AND profile.id IS NOT NULL,'query_locales',profile.query_locales,'currency',profile.currency,'timezone',profile.timezone)
         ORDER BY option.parameter_name,option.sort_order)
         FROM provider_market_option option LEFT JOIN provider_market_profile profile ON profile.id=option.market_profile_id AND profile.enabled
-        WHERE option.endpoint_id=endpoint.endpoint_id AND option.enabled),'[]'::jsonb) AS market_options,
-      sum(quota.remaining_calls)::text AS quota_remaining
+        WHERE option.endpoint_id=endpoint.endpoint_id AND option.enabled),'[]'::jsonb) AS market_options
     FROM provider_endpoint endpoint
-    LEFT JOIN justoneapi_token_endpoint_quota quota ON quota.api_path=endpoint.api_path AND quota.token_id=ANY($1::text[])
-    LEFT JOIN justoneapi_token token ON token.token_id=quota.token_id
     WHERE endpoint.provider='justoneapi'
-    GROUP BY endpoint.endpoint_id ORDER BY endpoint.platform_id,endpoint.display_name,endpoint.endpoint_id`, [tokenIds]);
+    ORDER BY endpoint.platform_id,endpoint.display_name,endpoint.endpoint_id`);
   return result.rows;
 }
 

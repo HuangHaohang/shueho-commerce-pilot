@@ -6,17 +6,17 @@ import { normalizeProviderFields } from "./provider-data-observations.js";
 const row: DataCapabilityRow = {endpoint_id:"fixture.ask_ai",platform_id:"fixture",platform_name:"AI 服务",display_name:"问答 AI",capability:"问题探索",
   api_path:"/api/fixture/ask",http_method:"GET",enabled:true,catalog_status:"active",pricing_status:"priced",permission_status:"allowed",
   request_schema:{type:"object",required:["keyword"],properties:{keyword:{type:"string"},token:{type:"string"}}},request_codec:{},response_family:"generic_json_v1",
-  source_catalog_import_id:null,openapi_sha256:null,quota_pairs:6,quota_ready:0,quota_remaining:"0"};
+  source_catalog_import_id:null,openapi_sha256:null};
 
-it("distinguishes an existing AI capability with no local quota from a missing interface", () => {
+it("discovers a registered capability without prechecking key quota", () => {
   const view=capabilityView(row,{},true);
-  expect(view).toMatchObject({registered:true,executable:false,category:"ai_answers",blocking_reasons:["TOKEN_QUOTA_UNAVAILABLE"]});
+  expect(view).toMatchObject({registered:true,executable:true,category:"ai_answers",blocking_reasons:[],availability:{provider_key:"checked_at_dispatch"}});
   expect(JSON.stringify(view)).not.toContain("/api/fixture");
   expect((view.input_schema as {properties:object}).properties).not.toHaveProperty("token");
   expect(capabilityId(row.endpoint_id)).toMatch(/^cap_[a-f0-9]{24}$/);
 });
 it("reports pricing, provider permission and workspace permission independently", () => {
-  expect(capabilityView({...row,pricing_status:"missing",permission_status:"unavailable",quota_ready:1},
+  expect(capabilityView({...row,pricing_status:"missing",permission_status:"unavailable"},
     {allowedEndpointIds:["other.operation"]})).toMatchObject({blocking_reasons:["PRICING_UNAVAILABLE","PROVIDER_PERMISSION_UNAVAILABLE","WORKSPACE_PERMISSION_DENIED"]});
 });
 it("rejects nested credential and prototype inputs", () => {

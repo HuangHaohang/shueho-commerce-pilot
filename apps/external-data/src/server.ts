@@ -12,6 +12,7 @@ import { ExternalDataPipeline } from "./pipeline.js";
 import { closeJustOneApiProxyPool, getJustOneApiProxyPool, justOneApiProxyStatus } from "./justoneapi-proxy-runtime.js";
 import { getJustOneApiClient } from "./justoneapi-runtime.js";
 import { drainIndexOutbox, ensureSearchIndex, searchIndexHealth } from "./search-index.js";
+import { serviceIsReady } from "./service-readiness.js";
 
 const pipeline = new ExternalDataPipeline();
 const models = new LocalModelClient();
@@ -24,7 +25,7 @@ await ensureSearchIndex();
 await modelWarmup.attempt();
 modelWarmup.start();
 await getJustOneApiProxyPool();
-await getJustOneApiClient().initialize();
+// Credential eligibility is resolved at dispatch, not a process startup gate.
 
 const server = createServer(async (request, response) => {
   try {
@@ -33,15 +34,16 @@ const server = createServer(async (request, response) => {
     if (request.headers.origin) return sendJson(response, 403, { error: "Browser origins are not allowed." });
     const url = new URL(request.url ?? "/", `http://${host}`);
     if (request.method === "GET" && url.pathname === "/health") {
-      const [modelHealth, searchHealth, catalogHealth, tokenHealth] = await Promise.all([
+      const [modelHealth, searchHealth, catalogHealth, tokenHealth, databaseConnected] = await Promise.all([
         models.health()
           .then((health) => modelWarmup.isReady() ? health : { ...health, ok: false, error: "Local model warmup is incomplete." })
           .catch((error) => ({ ok: false, error: safeMessage(error) })),
         searchIndexHealth().catch((error) => ({ status: "unavailable", error: safeMessage(error) })),
         providerCatalogHealth().catch((error) => ({ totalEndpoints: 0, callableEndpoints: 0, error: safeMessage(error) })),
         getJustOneApiClient().status().catch(() => ({ tokens: 0, activeTokens: 0, endpoints: 0, availablePairs: 0 })),
+        database.query("SELECT 1").then(() => true).catch(() => false),
       ]);
-      const healthy = modelHealth.ok !== false && searchHealth.status !== "unavailable" && Number(catalogHealth.callableEndpoints) > 0;
+      const healthy = serviceIsReady({ databaseConnected, models: modelHealth, search: searchHealth });
       // Stored evidence remains readable during an egress outage. Paid calls fail closed in the adapter.
       const proxyHealth = justOneApiProxyStatus();
       return sendJson(response, healthy ? 200 : 503, {
@@ -50,9 +52,9 @@ const server = createServer(async (request, response) => {
         providerConfigured: pipeline.providerConfigured,
         justOneApiProxy: proxyHealth,
         justOneApiTokens: tokenHealth,
-        providerCallsReady: pipeline.providerConfigured && tokenHealth.availablePairs > 0 &&
-          (proxyHealth.mode === "off" || proxyHealth.healthyNodes > 0),
-        postgres: "connected",
+        // Only an actual provider response establishes key/endpoint availability.
+        providerAvailability: "checked_at_dispatch",
+        postgres: databaseConnected ? "connected" : "unavailable",
         localModels: modelHealth,
         elasticsearch: searchHealth,
         providerCatalog: catalogHealth,

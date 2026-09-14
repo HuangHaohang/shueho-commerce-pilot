@@ -1,5 +1,25 @@
 # SHUEHO External Data Service
 
+## Infrastructure readiness and provider key eligibility
+
+`/health` checks live database, search and local-model infrastructure. Empty
+catalogs, missing price imports and absent or exhausted provider keys are not
+service-readiness failures. Catalog and token counts are diagnostics, not a
+prediction of a paid call; `providerAvailability=checked_at_dispatch` replaces
+the misleading `providerCallsReady` field. Credential initialization is not a
+process-start gate. Capability discovery likewise does not read local quota
+counts or suppress a capability because a key has not yet called it; its
+`availability.provider_key` is `checked_at_dispatch`. Actual calls still require validated endpoint contracts,
+official pricing, authorization and budget admission.
+
+Migration `046` permits an unobserved provider balance to remain NULL. Under the
+owned durable-call lock, first use creates only missing key/endpoint eligibility
+rows; no quota import or invented local allowance is required. Existing denial,
+exhaustion and cooldown states are never reset by this path. Confirmed documented
+non-billable key refusals are archived before bounded key failover; uncertain
+responses remain non-replayable. Codex Harness and commerce approval contracts
+are unchanged.
+
 ## Connection and immutable-import recovery
 
 The warehouse keeps a maximum of ten PostgreSQL connections and bounds connection
