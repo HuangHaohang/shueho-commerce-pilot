@@ -21,6 +21,14 @@ Canvas editing state = tenant-owned nodes, layout and append-only revisions
 
 The PostgreSQL thread index remains an ownership and navigation index. Codex App Server is authoritative for conversation history and Turn state. Canvas tables do not create a second Agent loop or message store: they bind application editing state to immutable Harness source ids.
 
+### Recovery and media delivery
+
+New threads explicitly use native `historyMode: paginated`, retaining structured Skill inputs in Harness history. The `shueho.3` runtime patch restores legacy Skill expansion selections inside the native history builder; Gateway must not parse rollout files or maintain a parallel Skill/message registry. Browser labels are projected from the native `userMessage` Skill items after ownership checks.
+
+Read-only reopening does not wait for managed MCP readiness or resume a thread. Metadata and the newest five full Turns are read concurrently; older history remains available through the native cursor. SSE handshake waits are bounded (10 seconds BFF upstream, 15 seconds browser); accepted Turn state still comes only from Harness, never from a network timeout.
+
+Canvas and conversation thumbnails request an authenticated 640-pixel WebP preview of the existing generated artifact. Original viewing/downloading retains the original bytes. Preview creation does not invoke a model, change image-generation Items, or add a generation endpoint. Every response, including a cache revalidation/304, rechecks artifact permission and thread ownership. Browser private caches must revalidate; shared caching is forbidden. Images become visible after complete download and decode, with independent loading/failure feedback; native `turn/completed` is not delayed to conceal image transfer time.
+
 ## Managed Workflow
 
 The browser may request only the fixed `commerce-creative-project` workflow. The BFF maps it to:

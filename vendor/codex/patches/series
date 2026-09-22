@@ -3,3 +3,4 @@
 28a6ea7ab44c23696039a9aabe9b596890ee6e533cb5613c2b2a193be8e255fc  0001-project-provider-hosted-images-as-turn-items.patch
 31b688cb61bb4129c00b94d7f7bf7990c9f08837978da3779b11cc429430b0af  0002-normalize-cargo-lock-workspace-version.patch
 f822004daca02c41cc292a280d0e2a7edbc929cf9e50528d8329cd93f4a1f6a0  0003-configure-provider-image-model-and-quality.patch
+0e8ec3c1355ebb799685df0f6b5b7b0ae4dcfe694e5dc89798fdfa31377c2af3  0004-restore-legacy-skill-selection-in-native-history.patch

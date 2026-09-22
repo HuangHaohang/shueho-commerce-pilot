@@ -1,4 +1,5 @@
 "use client";
+import { ArtifactImage } from "@/components/agent/artifact-image";
 
 import { imageAssetRoot, imageAssetVersions } from "@/lib/creative/image-assets";
 import { ImageVersionsPanel } from "./image-versions-panel";
@@ -655,7 +656,7 @@ function CreativeImageNode({ data, selected }: NodeProps<CanvasFlowNode>) {
         >
           {/* Native Harness image URLs are tenant-checked BFF routes. */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <ArtifactImage preview
             src={content.image.url}
             alt={content.title}
             className="pointer-events-none h-full w-full select-none object-contain transition-opacity duration-[var(--cp-duration-fast)] group-hover:opacity-95"

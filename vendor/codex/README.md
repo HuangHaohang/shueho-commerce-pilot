@@ -6,6 +6,15 @@ Commerce Pilot runs OpenAI's open-source Codex Harness. When a reviewed upstream
 
 - `upstream.json` fixes the upstream repository, tag, commit, Rust toolchain, Cargo package, patch-set revision, and exact upstream LICENSE/NOTICE digests.
 - `patches/series` fixes patch order and the SHA-256 of every patch. Blank lines and lines beginning with `#` are ignored.
+
+The `shueho.3` patch set adds native legacy Skill-selection replay. Patch 0004
+recognizes Harness-owned Skill expansion messages in their rollout event sequence
+and adds the selection to the existing native user item, without duplicating its
+text, rewriting persisted sessions, or creating application-owned history. A raw
+user prompt followed by its `UserMessage` event, or an incomplete trailing record,
+is never promoted to a Skill invocation. New application threads request native
+paginated history so structured inputs are preserved directly. The runtime build
+must discover and pass both `legacy_skill_expansion_*` regression tests.
 - `runtime-manifest.schema.json` defines the manifest emitted beside every built binary.
 - `trusted-artifacts.json` is the reviewed allowlist for artifacts built elsewhere. `install.mjs` refuses a self-asserted manifest until its platform, upstream commit, patch revision, version and binary SHA-256 are registered here.
 

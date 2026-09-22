@@ -66,7 +66,7 @@ JUSTONEAPI_PROXY_MAX_CONNECT_ATTEMPTS=3
 
 Renew by importing a fresh revision and validating it with the pinned binary; pause new paid admission, drain active calls, stop external-data, switch both services to the same revision and restart. Repeat TLS/exit checks before new paid calls. Do not hot-reassign ports underneath running requests or replay uncertain calls. Retain the previous revision for rollback. Renewal requires no schema or provider master-data migration.
 
-## server244 Compose overlay
+## Production Compose overlay
 
 Import with `--proxy-host=justoneapi-egress --listen=0.0.0.0`; listeners remain on a dedicated Docker network. In the protected release environment set:
 

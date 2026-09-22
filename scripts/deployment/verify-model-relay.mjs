@@ -69,6 +69,10 @@ try {
     fixture("rm -- /run/model/relay.sock");
   }
   console.log(JSON.stringify({ firstStart: "passed", gracefulRestart: "passed", sigkillRecovery: 3, duplicateLock: "passed", liveListenerPreserved: "passed", regularFilePreserved: "passed", symlinkPreserved: "passed" }));
+} catch (error) {
+  // Preserve the actual failed assertion if the Docker host also fails cleanup.
+  console.error("Model relay validation failed:", error);
+  throw error;
 } finally {
   docker(["rm", "-f", id, `${id}-unmanaged`], true);
   docker(["volume", "rm", volume], true);

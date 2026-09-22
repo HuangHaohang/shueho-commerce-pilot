@@ -246,6 +246,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   const [activities, setActivities] = useState<AgentActivity[]>([]);
   const [images, setImages] = useState<GeneratedImageItem[]>([]);
   const [status, setStatus] = useState<AgentThreadStatus>("idle");
+  const [preparationLabel, setPreparationLabel] = useState<string | null>(null);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [lastTurnId, setLastTurnId] = useState<string | null>(null);
   const [durationMs, setDurationMs] = useState<number | null>(null);
@@ -696,9 +697,16 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         });
         streamRecoveryRef.current = recovery;
         let opened = false;
+        const handshakeTimeout = setTimeout(() => {
+          if (opened) return;
+          source.close();
+          if (eventSourceRef.current === source) eventSourceRef.current = null;
+          reject(new Error("连接 Agent 事件流超时，任务尚未提交，请重试。"));
+        }, 15_000);
         source.addEventListener("notification", handleGatewayEvent as EventListener);
         source.addEventListener("server_request", handleGatewayEvent as EventListener);
         source.onopen = () => {
+          clearTimeout(handshakeTimeout);
           if (eventSourceRef.current !== source) return;
           const reopening = opened;
           const recoveryTask = recovery.onOpen();
@@ -716,6 +724,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         source.onerror = () => {
           if (eventSourceRef.current !== source) return;
           if (!opened) {
+            clearTimeout(handshakeTimeout);
             source.close();
             eventSourceRef.current = null;
             reject(new Error("无法连接 Agent 事件流。"));
@@ -1291,6 +1300,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
       let currentThreadId = threadId;
       let turnStartAmbiguous = false;
       try {
+        setPreparationLabel("正在创建会话");
         if (!currentThreadId) {
           const response = await fetch("/api/agent/threads", {
             method: "POST",
@@ -1311,9 +1321,18 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
 
         // Both operations require the owned thread, but neither depends on the
         // other. Keep turn/start behind both so early native events cannot be lost.
+        let streamReady = false;
+        let attachmentsReady = pendingAttachments.length === 0;
+        const updatePreparation = () => setPreparationLabel(
+          !attachmentsReady ? (streamReady ? "正在上传附件" : "正在连接并上传附件")
+            : !streamReady ? "正在连接事件流" : "正在提交给 Harness",
+        );
+        updatePreparation();
         let [, uploadedAttachments] = await Promise.all([
-          connectEventStream(currentThreadId),
-          uploadThreadAttachments(currentThreadId, clientRequestId, pendingAttachments),
+          connectEventStream(currentThreadId).then(() => { streamReady = true; updatePreparation(); }),
+          uploadThreadAttachments(currentThreadId, clientRequestId, pendingAttachments).then((attachments) => {
+            attachmentsReady = true; updatePreparation(); return attachments;
+          }),
         ]);
         if (uploadedAttachments.length) {
           setMessages((current) => current.map((item) =>
@@ -1441,6 +1460,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         setError(submitError instanceof Error ? submitError.message : "Agent 请求失败。");
         setStatus("failed");
         return false;
+      } finally {
+        setPreparationLabel(null);
       }
     },
     [activateTurn, confirmPendingSubmit, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
@@ -2022,6 +2043,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     activeTurnId,
     interrupting,
     loadingHistory,
+    preparationLabel: status === "connecting" ? preparationLabel : null,
     loadingOlderHistory,
     hasOlderHistory: Boolean(historyCursor),
     compacting,

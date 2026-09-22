@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 import { cn } from "@/lib/utils";
+import { ArtifactImage } from "./artifact-image";
 
 export function ImagePreview({
   src,
@@ -55,7 +56,7 @@ export function ImagePreview({
       >
         {/* Authenticated image routes and local previews have dynamic dimensions. */}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={thumbnailAlt} className={imageClassName} />
+        <ArtifactImage src={src} alt={thumbnailAlt} className={imageClassName} preview />
       </button>
       {previewOpen
         ? createPortal(

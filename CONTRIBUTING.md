@@ -98,6 +98,12 @@ Select all rows affected by the change. Shared contracts require checks on both 
 | Database contracts | Apply owning-service migrations and run relevant isolation/catalog/service verifiers in an explicitly disposable database |
 | Load validation / browser edge | `npm run test:load-validation`; `nginx -t` for edge config changes; preserve actual failed and passed load results |
 
+Native history changes additionally run `npm run smoke:history`: a real pinned
+Harness talks only to a loopback fixture Provider from a disposable `CODEX_HOME`.
+It verifies legacy and paginated Skill selection after process restart and resume,
+with one user message per Turn and exactly one Provider request per Turn. It does
+not load production credentials or modify existing conversations.
+
 Research changes also require the failure, lifecycle, recovery and relevance checks below when those contracts are affected. Every change requires `git diff --check`.
 
 ### Database Verification Versus Operational Imports

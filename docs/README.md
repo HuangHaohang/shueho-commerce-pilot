@@ -30,7 +30,6 @@ Use this map to find the documents relevant to the affected feature. The task ro
 ## Development And Operations
 
 - [`deployment/company-readiness.md`](deployment/company-readiness.md) - 100-person rollout assumptions, availability gates, database budgets and reproducible validation.
-- [`reports/2026-09-13-production-image-model-comparison.md`](reports/2026-09-13-production-image-model-comparison.md) - server244 load, GPT Image 2/Flare/Sunburst comparison, recovery evidence and rollout blockers.
 
 - [`development/ai-collaboration.md`](development/ai-collaboration.md) - shared vibe-coding workflow for humans and coding agents.
 - [`development/agent-bootstrap-prompt.md`](development/agent-bootstrap-prompt.md) - copyable prompt that tells a coding agent how to clone, read rules, branch, implement, verify, and hand off.
@@ -44,3 +43,7 @@ Use this map to find the documents relevant to the affected feature. The task ro
 - [`research/competitive-commerce-workbench-2026-09-01.md`](research/competitive-commerce-workbench-2026-09-01.md) - official-source competitor review and the evidence-to-decision-to-campaign product direction implemented on 2026-09-01.
 
 When implementation changes one of these contracts, update the corresponding document in the same pull request.
+
+## Production host
+
+- [生产机器](deployment/production-host.md) - `192.168.50.144`，SSH 用户 `user`。

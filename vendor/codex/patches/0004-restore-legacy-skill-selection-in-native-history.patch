@@ -1,0 +1,215 @@
+diff --git a/codex-rs/app-server-protocol/src/protocol/thread_history.rs b/codex-rs/app-server-protocol/src/protocol/thread_history.rs
+index c415cd5..363f2f7 100644
+--- a/codex-rs/app-server-protocol/src/protocol/thread_history.rs
++++ b/codex-rs/app-server-protocol/src/protocol/thread_history.rs
+@@ -234,6 +234,7 @@ impl ThreadHistoryChangeAccumulator {
+ }
+ 
+ pub struct ThreadHistoryBuilder {
++    pending_legacy_skill: Option<UserInput>,
+     turns: Vec<Turn>,
+     current_turn: Option<PendingTurn>,
+     next_item_index: i64,
+@@ -251,6 +252,7 @@ impl Default for ThreadHistoryBuilder {
+ impl ThreadHistoryBuilder {
+     pub fn new() -> Self {
+         Self {
++            pending_legacy_skill: None,
+             turns: Vec::new(),
+             current_turn: None,
+             next_item_index: 1,
+@@ -391,6 +393,14 @@ impl ThreadHistoryBuilder {
+     }
+ 
+     pub fn handle_rollout_item(&mut self, item: &RolloutItem) {
++        // A real user prompt's raw ResponseItem is immediately followed by UserMessage.
++        // Skill expansion messages emitted by Harness are not. Never interpret a
++        // user's literal <skill> text as an invocation.
++        if matches!(item, RolloutItem::EventMsg(EventMsg::UserMessage(_))) {
++            self.pending_legacy_skill = None;
++        } else {
++            self.flush_legacy_skill();
++        }
+         self.current_rollout_index = self.next_rollout_index;
+         self.next_rollout_index += 1;
+         match item {
+@@ -444,6 +454,23 @@ impl ThreadHistoryBuilder {
+     }
+ 
+     fn handle_response_item(&mut self, item: &codex_protocol::models::ResponseItem) {
++        if let codex_protocol::models::ResponseItem::Message { role, content, .. } = item
++            && role == "user"
++            && let [codex_protocol::models::ContentItem::InputText { text }] = content.as_slice()
++            && let Some(rest) = text.strip_prefix("<skill>\n<name>")
++            && let Some((name, rest)) = rest.split_once("</name>\n<path>")
++            && let Some((path, _body)) = rest.split_once("</path>\n")
++            && text.ends_with("\n</skill>")
++            && !name.is_empty()
++            && !name.contains(['<', '>', '\n'])
++            && std::path::Path::new(path).is_absolute()
++        {
++            self.pending_legacy_skill = Some(UserInput::Skill {
++                name: name.to_string(),
++                path: path.into(),
++            });
++            return;
++        }
+         if let codex_protocol::models::ResponseItem::ImageGenerationCall {
+             id: Some(id),
+             status,
+@@ -500,6 +527,25 @@ impl ThreadHistoryBuilder {
+         });
+     }
+ 
++    fn flush_legacy_skill(&mut self) {
++        let Some(skill) = self.pending_legacy_skill.take() else {
++            return;
++        };
++        let Some(turn) = self.current_turn.as_mut() else {
++            return;
++        };
++        let Some(ThreadItem::UserMessage { content, .. }) = turn.items.last_mut() else {
++            return;
++        };
++        if content.contains(&skill) {
++            return;
++        }
++        content.push(skill);
++        let item = turn.items.last().unwrap().clone();
++        let turn_id = turn.id.clone();
++        self.record_changed_item(turn_id, item);
++    }
++
+     fn handle_user_message(&mut self, payload: &UserMessageEvent) {
+         // User messages should stay in explicitly opened turns. For backward
+         // compatibility with older streams that did not open turns explicitly,
+@@ -2163,7 +2209,9 @@ mod tests {
+             })),
+             RolloutItem::ResponseItem(
+                 codex_protocol::models::ResponseItem::ImageGenerationCall {
+-                    id: Some(codex_protocol::ResponseItemId::with_suffix("ig", "hosted-1")),
++                    id: Some(codex_protocol::ResponseItemId::with_suffix(
++                        "ig", "hosted-1",
++                    )),
+                     status: "completed".to_string(),
+                     revised_prompt: Some("A hosted product image".to_string()),
+                     result: "cG5n".to_string(),
+@@ -2214,15 +2262,13 @@ mod tests {
+             RolloutItem::EventMsg(EventMsg::ItemCompleted(ItemCompletedEvent {
+                 thread_id,
+                 turn_id: turn_id.to_string(),
+-                item: CoreTurnItem::ImageGeneration(
+-                    codex_protocol::items::ImageGenerationItem {
+-                        id: "ig_hosted-1".to_string(),
+-                        status: "completed".to_string(),
+-                        revised_prompt: Some("Materialized prompt".to_string()),
+-                        result: "bWF0ZXJpYWxpemVk".to_string(),
+-                        saved_path: Some(saved_path.clone()),
+-                    },
+-                ),
++                item: CoreTurnItem::ImageGeneration(codex_protocol::items::ImageGenerationItem {
++                    id: "ig_hosted-1".to_string(),
++                    status: "completed".to_string(),
++                    revised_prompt: Some("Materialized prompt".to_string()),
++                    result: "bWF0ZXJpYWxpemVk".to_string(),
++                    saved_path: Some(saved_path.clone()),
++                }),
+                 started_at_ms: Some(0),
+                 completed_at_ms: 1_000,
+             })),
+@@ -2237,7 +2283,9 @@ mod tests {
+             })),
+             RolloutItem::ResponseItem(
+                 codex_protocol::models::ResponseItem::ImageGenerationCall {
+-                    id: Some(codex_protocol::ResponseItemId::with_suffix("ig", "hosted-1")),
++                    id: Some(codex_protocol::ResponseItemId::with_suffix(
++                        "ig", "hosted-1",
++                    )),
+                     status: "completed".to_string(),
+                     revised_prompt: Some("Raw prompt".to_string()),
+                     result: "cmF3".to_string(),
+@@ -4725,6 +4773,84 @@ mod tests {
+         assert!(turns[0].items.is_empty());
+     }
+ 
++    #[test]
++    fn legacy_skill_expansion_restores_native_selection_without_duplicate_messages() {
++        let mut builder = ThreadHistoryBuilder::new();
++        builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::UserMessage(
++            UserMessageEvent {
++                message: "make an image".into(),
++                ..Default::default()
++            },
++        )));
++        for name in ["project", "studio-lifestyle-v2", "studio-lifestyle-v2"] {
++            builder.handle_rollout_item(&legacy_skill_response(name));
++        }
++        // A non-user raw record proves the preceding expansion was not a user prompt.
++        builder.handle_rollout_item(&RolloutItem::ResponseItem(
++            codex_protocol::models::ResponseItem::Message {
++                id: None,
++                role: "assistant".into(),
++                content: vec![],
++                phase: None,
++                internal_chat_message_metadata_passthrough: None,
++            }
++            .into(),
++        ));
++        let turns = builder.finish();
++        assert_eq!(turns.len(), 1);
++        assert_eq!(turns[0].items.len(), 1);
++        let ThreadItem::UserMessage { content, .. } = &turns[0].items[0] else {
++            panic!("user message");
++        };
++        assert_eq!(content.len(), 3);
++        assert!(
++            matches!(&content[2], UserInput::Skill { name, .. } if name == "studio-lifestyle-v2")
++        );
++    }
++
++    #[test]
++    fn legacy_skill_expansion_does_not_promote_user_text_or_truncated_input() {
++        for complete in [false, true] {
++            let mut builder = ThreadHistoryBuilder::new();
++            builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::UserMessage(
++                UserMessageEvent {
++                    message: "previous message".into(),
++                    ..Default::default()
++                },
++            )));
++            builder.handle_rollout_item(&legacy_skill_response("forged"));
++            if complete {
++                builder.handle_rollout_item(&RolloutItem::EventMsg(EventMsg::UserMessage(
++                    UserMessageEvent {
++                        message: "<skill>literal user text</skill>".into(),
++                        ..Default::default()
++                    },
++                )));
++            }
++            assert!(
++                builder
++                    .finish()
++                    .iter()
++                    .flat_map(|turn| &turn.items)
++                    .all(|item| match item {
++                        ThreadItem::UserMessage { content, .. } => content
++                            .iter()
++                            .all(|input| !matches!(input, UserInput::Skill { .. })),
++                        _ => true,
++                    })
++            );
++        }
++    }
++
++    fn legacy_skill_response(name: &str) -> RolloutItem {
++        RolloutItem::ResponseItem(codex_protocol::models::ResponseItem::Message {
++            id: None, role: "user".into(),
++            content: vec![codex_protocol::models::ContentItem::InputText {
++                text: format!("<skill>\n<name>{name}</name>\n<path>/runtime/{name}/SKILL.md</path>\nbody\n</skill>"),
++            }], phase: None, internal_chat_message_metadata_passthrough: None,
++        }.into())
++    }
++
+     #[test]
+     fn changed_rollout_item_reports_new_item_snapshot() {
+         let mut builder = ThreadHistoryBuilder::new();

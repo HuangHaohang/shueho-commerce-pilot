@@ -1,4 +1,5 @@
 "use client";
+import { ArtifactImage } from "@/components/agent/artifact-image";
 
 import { imageAssetRoot } from "@/lib/creative/image-assets";
 import { useImageEditSessions } from "@/lib/creative/use-image-edit-sessions";
@@ -1221,6 +1222,7 @@ export function CommerceWorkbenchShell({
         activities={agentThread.activities}
         images={agentThread.images}
         status={agentThread.status}
+        preparationLabel={agentThread.preparationLabel}
         currentTurnId={agentThread.currentTurnId}
         pendingUserInput={agentThread.pendingUserInput}
         answeringUserInput={agentThread.answeringUserInput}
@@ -1704,6 +1706,7 @@ function ComplianceFooter() {
 }
 
 function ConversationWorkspace({
+  preparationLabel,
   title,
   messages,
   activities,
@@ -1773,6 +1776,7 @@ function ConversationWorkspace({
   activities: AgentActivity[];
   images: GeneratedImageItem[];
   status: "idle" | "connecting" | "running" | "completed" | "interrupted" | "failed";
+  preparationLabel?: string | null;
   currentTurnId: string | null;
   pendingUserInput: PendingRequestUserInput | null;
   answeringUserInput: boolean;
@@ -2147,6 +2151,7 @@ function ConversationWorkspace({
                 key={startedAt ?? "no-active-turn"}
                 running={running && !currentImageEdit}
                 preparing={status === "connecting"}
+                preparationLabel={preparationLabel}
                 retrying={Boolean(retryingMessageId)}
                 compacting={compacting}
                 durationMs={currentImageEdit ? null : durationMs}
@@ -3688,6 +3693,7 @@ function QueuedSubmissionList({
 }
 
 function ProcessingStatus({
+  preparationLabel,
   running,
   preparing = false,
   retrying = false,
@@ -3697,6 +3703,7 @@ function ProcessingStatus({
 }: {
   running: boolean;
   preparing?: boolean;
+  preparationLabel?: string | null;
   retrying?: boolean;
   compacting: boolean;
   durationMs: number | null;
@@ -3716,7 +3723,7 @@ function ProcessingStatus({
 
   if (preparing) {
     return <div role="status" className="cp-running-shimmer min-h-5 text-sm text-[var(--cp-text-muted)]">
-      正在思考 {formatDuration(elapsedMs)}
+      {preparationLabel ?? "正在同步 Harness 状态"} {formatDuration(elapsedMs)}
     </div>;
   }
   if (!running && durationMs === null) {
@@ -3774,7 +3781,7 @@ function GeneratedImageCard({ image }: { image: GeneratedImageItem }) {
           })}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={image.url} alt="AI 生成内容" className={imageClassName} />
+          <ArtifactImage src={image.url} alt="AI 生成内容" className={imageClassName} preview />
         </button>
       ) : (
         <ImagePreview

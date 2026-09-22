@@ -679,6 +679,7 @@ const server = createServer(async (req, res) => {
         config: createRuntimeRequestConfig(),
         developerInstructions: createRuntimeDeveloperInstructions(),
         ephemeral: false,
+        historyMode: "paginated",
         experimentalRawEvents: true,
         dynamicTools: createCommerceDynamicToolSpecs(),
       });
@@ -719,12 +720,11 @@ const server = createServer(async (req, res) => {
       bindRequestRuntimeScope(req, threadId);
       // App Server read/list APIs can inspect persisted history without
       // resuming the execution session. A new Turn owns resume/tool readiness.
-      await ensureCommerceWebMcpReady();
       const cursor = url.searchParams.get("cursor");
-      const requestedLimit = Number(url.searchParams.get("limit") ?? "30");
+      const requestedLimit = Number(url.searchParams.get("limit") ?? "5");
       const limit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 100
         ? requestedLimit
-        : 30;
+        : 5;
       const [page, attachments] = await Promise.all([
         readThreadPageWithStartupRetry(threadId, cursor, limit),
         threadArtifacts.listForThread(threadId),
@@ -757,9 +757,10 @@ const server = createServer(async (req, res) => {
         return;
       }
       bindRequestRuntimeScope(req, threadId);
-      await ensureCommerceWebMcpReady();
-      const metadata = await readThreadWithStartupRetry(threadId, false);
-      const latest = await readTurnsPageWithStartupRetry(threadId, null, 1, "summary");
+      const [metadata, latest] = await Promise.all([
+        readThreadWithStartupRetry(threadId, false),
+        readTurnsPageWithStartupRetry(threadId, null, 1, "summary"),
+      ]);
       sendJson(res, 200, {
         result: metadata,
         lastTurn: latest.data[0] ?? null,
@@ -2848,8 +2849,10 @@ async function readThreadPageWithStartupRetry(
   cursor: string | null,
   limit: number,
 ): Promise<{ result: Record<string, unknown>; nextCursor: string | null }> {
-  const metadata = await readThreadWithStartupRetry(threadId, false);
-  const page = await readTurnsPageWithStartupRetry(threadId, cursor, limit, "full");
+  const [metadata, page] = await Promise.all([
+    readThreadWithStartupRetry(threadId, false),
+    readTurnsPageWithStartupRetry(threadId, cursor, limit, "full"),
+  ]);
   if (!isRecord(metadata) || !isRecord(metadata.thread)) {
     throw new Error("Codex App Server returned invalid thread metadata.");
   }

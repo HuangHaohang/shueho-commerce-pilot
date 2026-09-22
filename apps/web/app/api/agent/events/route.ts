@@ -45,6 +45,8 @@ export async function GET(request: Request) {
 
   try {
     const revocation = new AbortController();
+    // Bound only the handshake, not the lifetime of the native event stream.
+    const handshakeTimeout = setTimeout(() => revocation.abort(), 10_000);
     const upstream = await fetch(
       gatewayUrl(`/api/codex/events?threadId=${encodeURIComponent(threadId)}`),
       {
@@ -52,7 +54,7 @@ export async function GET(request: Request) {
         cache: "no-store",
         signal: AbortSignal.any([request.signal, revocation.signal]),
       },
-    );
+    ).finally(() => clearTimeout(handshakeTimeout));
     if (!upstream.ok || !upstream.body) {
       releaseConnection();
       return NextResponse.json({ error: "事件流不可用。" }, { status: 502 });

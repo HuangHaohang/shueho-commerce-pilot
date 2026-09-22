@@ -1,4 +1,6 @@
-# Full browser workbench on server244
+# Production browser workbench
+
+Deployment target: `user@192.168.50.144`; see [production host](../../docs/deployment/production-host.md).
 
 This overlay adds the Next.js workbench and tenant-dedicated open-source Codex
 Harness Gateway to the existing public MCP deployment. It keeps the existing MCP
@@ -50,7 +52,8 @@ Compose file order (paths relative to the release root):
 
 Use `deploy/production-web/compose.sh` as the full deployment wrapper. It preserves
 the existing supplier overlays and reads protected configuration from
-`COMMERCE_CONFIG_DIR` (the server244 configuration directory by default).
+`COMMERCE_CONFIG_DIR`. Set it explicitly to the protected configuration directory
+provisioned on the production host before invoking the wrapper.
 
 Set release image variables in protected `deployment.env`, including
 `COMMERCE_GATEWAY_IMAGE` and `COMMERCE_JOBS_IMAGE`. Validate with `docker compose

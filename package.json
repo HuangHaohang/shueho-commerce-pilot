@@ -24,6 +24,7 @@
     "test:gateway": "npm run build && npm run codex:runtime:test && node --test dist/src/codex/*.test.js dist/src/gateway/*.test.js dist/src/integrations/*.test.js dist/src/provider/*.test.js dist/src/mcp/*.test.js",
     "dev": "npm run build && node dist/src/gateway/server.js",
     "smoke:codex": "npm run build && node dist/scripts/smoke-codex-app-server.js",
+    "smoke:history": "npm run build && node scripts/smoke-harness-history.mjs",
     "smoke:image-tool": "npm run build && node dist/scripts/smoke-native-image-tool.js",
     "smoke:provider": "npm run build && node dist/scripts/smoke-commerce-provider.js",
     "smoke:web-search": "npm run build && node dist/scripts/smoke-commerce-web-mcp.js",

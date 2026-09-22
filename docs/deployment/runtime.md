@@ -56,7 +56,14 @@ The current Next.js BFF has one static `COMMERCE_GATEWAY_URL`; a general tenant-
 
 ## Container Deployment
 
-Build (the Dockerfile first compiles and tests the exact `rust-v0.150.1` + `shueho.2` Harness patch in a pinned Rust stage, then verifies the artifact again in Node build and runtime stages):
+Build (the Dockerfile first compiles and tests the exact `rust-v0.150.1` + `shueho.3` Harness patch in a pinned Rust stage, then verifies the artifact again in Node build and runtime stages):
+
+The `shueho.3` creative-history fix requires rebuilding the Gateway runtime, not
+only the Web image. Never relabel a `shueho.2` binary or reuse its manifest. Existing
+threads remain in their original Harness history format; no database or rollout
+rewrite is needed. Verify a legacy Skill-selected message after Gateway restart,
+and verify a newly created paginated thread after reopening it. Web preview routes
+derive thumbnails from existing artifacts and do not require regenerating images.
 
 ```bash
 docker build -t shueho-commerce-pilot .
@@ -94,7 +101,7 @@ Port `8787` is an internal service port. Connect the correct tenant's Next.js BF
 
 The optional customer-facing Commerce Pilot MCP process runs separately with `npm run start:mcp` on port `8790` by default. Publish only that listener behind TLS, request-size limits, connection limits and an ingress that preserves `Authorization`; do not expose BFF internal callbacks or port `8787`. It requires `COMMERCE_MCP_AUTH_URL`, `COMMERCE_EXTERNAL_DATA_CONTROL_URL`, and the private SHUEHO external-data MCP credential. It never receives the JustOneAPI REST Token.
 
-The [server244 public MCP deployment](public-mcp-server244.md) supplies a separate digest-pinned Compose unit and Mac Metal worker connected through restricted SSH forwarding. Its public transport uses native SDK SSE keepalive frames to preserve long tool calls through Cloudflare. It does not deploy the browser Agent/Gateway or change Harness ownership.
+The [public MCP deployment](../../deploy/production-mcp/README.md) supplies a separate Compose unit. Its public transport uses native SDK SSE keepalive frames to preserve long tool calls through Cloudflare. It does not deploy the browser Agent/Gateway or change Harness ownership. See [the production host](production-host.md) for the deployment target.
 
 The mounted `CODEX_HOME` directory should contain app-owned Codex configuration, including custom provider definitions when needed:
 
@@ -255,7 +262,7 @@ The browser still receives the intersection of this server-owned selection and t
 Native image generation still uses the Harness `image_gen` extension / supported Provider-hosted path and native `imageGeneration` Items. Provider routing, tenant authorization and the hosted tool allowlist remain unchanged. Restart Gateway/App Server after changing this metadata; do not replay image requests automatically. Gateway's live upstream catalog remains the model-availability authority.
 
 `COMMERCE_IMAGE_MODEL` and `COMMERCE_IMAGE_QUALITY` are fixed per tenant-dedicated Gateway.
-The application-owned `shueho.2` Harness patch supports Provider image models such as GPT Image
+The application-owned `shueho.3` Harness patch supports Provider image models such as GPT Image
 2.5 Flare and Sunburst and the qualities `low`, `medium`, `high`, `xhigh`, `max`, and `auto` for
 both generation and editing. Roll out one drained setting at a time; never change it inside an
 active Turn or retry an uncertain paid image request after a restart.
@@ -266,7 +273,7 @@ Managed Hook commands pin their event identity as an application-generated CLI a
 
 图片独立编辑会话需要先执行 Web migration runner 中的 `20260911_051_creative_image_sessions`，再更新 Gateway 与 Web。Gateway 的 generated image metadata 卷需要保留 `.grant` 和 `.sources` 文件，这是同项目编辑 thread 对原图的应用授权引用，不是新图片产物；常规 thread 删除会清理相关授权。发布前等待正在执行的原生任务结束，不通过重启强行终止图片任务。
 
-## Full server244 browser rollout
+## Full browser rollout
 
 The [production Web overlay](../../deploy/production-web/README.md) extends the
 existing public MCP deployment with a private tenant-dedicated Gateway, persistent

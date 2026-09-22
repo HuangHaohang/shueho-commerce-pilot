@@ -12,7 +12,7 @@ and existing attempt history, not restore the obsolete balance constraint.
 
 This deployment publishes the Commerce Pilot business-tool MCP boundary. Commerce Pilot's agent foundation remains the open-source Codex Harness. This unit contains no agent loop and does not start a Gateway/App Server or publish the browser workbench. External agents use their own MCP-capable Harness; the existing Next.js BFF runs privately for Enterprise token authentication, authorization, quotes, audit and billing.
 
-See [the server244 runbook](../../docs/deployment/public-mcp-server244.md) for the installed topology, configuration, validation and rollback.
+See [the production host](../../docs/deployment/production-host.md) for the deployment target and [runtime deployment](../../docs/deployment/runtime.md) for configuration and validation requirements.
 
 Build the application, operator-job and proxy artifacts from one reviewed commit:
 
