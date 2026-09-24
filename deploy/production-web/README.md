@@ -47,13 +47,15 @@ pending; retain immutable imports and provider quotas.
 Compose file order (paths relative to the release root):
 
 1. `deploy/production-mcp/compose.yaml`
-2. existing `compose.justoneapi-proxy.yaml` and `compose.justoneapi-tokens.yaml`
-3. `deploy/production-web/compose.yaml`
+2. `deploy/production-web/compose.yaml`
+3. protected `windows.yaml` and `jobs.yaml` on the production host
 
-Use `deploy/production-web/compose.sh` as the full deployment wrapper. It preserves
-the existing supplier overlays and reads protected configuration from
+Use `deploy/production-web/compose.ps1` on the Windows production host. It preserves
+the installed Compose project and Windows overlays and reads protected configuration from
 `COMMERCE_CONFIG_DIR`. Set it explicitly to the protected configuration directory
-provisioned on the production host before invoking the wrapper.
+provisioned on the production host before invoking the wrapper. The shell wrapper
+is for Unix deployments and includes supplier overlays that require separate protected
+configuration; those overlays are not installed in the Windows Compose project.
 
 Set release image variables in protected `deployment.env`, including
 `COMMERCE_GATEWAY_IMAGE` and `COMMERCE_JOBS_IMAGE`. Validate with `docker compose

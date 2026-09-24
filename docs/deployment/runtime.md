@@ -77,7 +77,7 @@ docker run --rm \
   -e NODE_ENV="production" \
   -e COMMERCE_RUNTIME_TENANT_ID="00000000-0000-4000-8000-000000000001" \
   -e COMMERCE_PROVIDER_API_KEY="..." \
-  -e COMMERCE_PROVIDER_BASE_URL="https://cpa.luusmosh.com/v1" \
+  -e COMMERCE_PROVIDER_BASE_URL="http://host.docker.internal:8317/v1" \
   -e COMMERCE_IMAGE_MODEL="gpt-image-2" \
   -e COMMERCE_IMAGE_QUALITY="auto" \
   -e COMMERCE_GATEWAY_INTERNAL_TOKEN="a-random-secret-of-at-least-32-characters" \
@@ -101,7 +101,7 @@ Port `8787` is an internal service port. Connect the correct tenant's Next.js BF
 
 The optional customer-facing Commerce Pilot MCP process runs separately with `npm run start:mcp` on port `8790` by default. Publish only that listener behind TLS, request-size limits, connection limits and an ingress that preserves `Authorization`; do not expose BFF internal callbacks or port `8787`. It requires `COMMERCE_MCP_AUTH_URL`, `COMMERCE_EXTERNAL_DATA_CONTROL_URL`, and the private SHUEHO external-data MCP credential. It never receives the JustOneAPI REST Token.
 
-The [public MCP deployment](../../deploy/production-mcp/README.md) supplies a separate Compose unit. Its public transport uses native SDK SSE keepalive frames to preserve long tool calls through Cloudflare. It does not deploy the browser Agent/Gateway or change Harness ownership. See [the production host](production-host.md) for the deployment target.
+The [public MCP deployment](../../deploy/production-mcp/README.md) supplies a separate Compose unit. Its public transport uses native SDK SSE keepalive frames to preserve long tool calls through Cloudflare. It does not deploy the browser Agent/Gateway or change Harness ownership. The [production host](production-host.md) runs the browser workbench and private Gateway; Docker Desktop routes the Gateway's Provider traffic to the CPA on that same host through `host.docker.internal:8317`.
 
 The mounted `CODEX_HOME` directory should contain app-owned Codex configuration, including custom provider definitions when needed:
 

@@ -40,7 +40,7 @@ web_search = true
 view_image = false
 
 [model_providers.luusmosh_cpa]
-name = "Luusmosh CPA"
+name = "CLI Proxy API"
 base_url = "http://127.0.0.1:8787/api/internal/provider/v1"
 wire_api = "responses"
 requires_openai_auth = false
@@ -83,7 +83,7 @@ last-known catalog during such an outage; a forced refresh reports the failure.
 stale success. Invalid catalogs never publish a partial model-id set. These
 policies apply only to `GET /models`, never model generation or commerce writes.
 
-The gateway fetches `GET https://cpa.luusmosh.com/v1/models` with the provider key and caches the result. It separates:
+In production, the Gateway fetches `GET http://host.docker.internal:8317/v1/models` from the CPA on `192.168.50.144` with the service-owned provider key and caches the result. This address is reachable from Docker Desktop containers on the same host; the browser never receives it. It separates:
 
 - agent models that can be selected for Codex `thread/start`;
 - image models;

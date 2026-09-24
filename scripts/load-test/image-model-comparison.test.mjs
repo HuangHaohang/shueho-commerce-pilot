@@ -4,7 +4,7 @@ import test from "node:test";
 import { readImageComparisonConfig, validateResumeReceipt } from "./image-model-comparison.mjs";
 
 const valid = {
-  IMAGE_COMPARISON_AUTHORIZATION: "server244-image-model-comparison-2026-09-12",
+  IMAGE_COMPARISON_AUTHORIZATION: "production-host-image-model-comparison-2026-09-24",
   IMAGE_COMPARISON_MODEL: "gpt-image-2.5-flare",
   IMAGE_COMPARISON_QUALITY: "high",
   IMAGE_COMPARISON_BASE_URL: "https://commerce.shueho.com",
@@ -19,7 +19,7 @@ test("accepts exactly the three requested comparison models and six provider qua
       assert.equal(readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_MODEL: model, IMAGE_COMPARISON_QUALITY: quality }).model, model);
     }
   }
-  assert.equal(readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_BASE_URL: "http://web-edge:8080" }).transport, "server244_internal_bff");
+  assert.equal(readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_BASE_URL: "http://web-edge:8080" }).transport, "production_internal_bff");
   assert.throws(() => readImageComparisonConfig({ ...valid, IMAGE_COMPARISON_MODEL: "gpt-image-2.5" }), /Compare only/);
 });
 
@@ -39,7 +39,7 @@ test("resume accepts only the exact receipt and refuses to repeat a generation o
   const users = Array.from({ length: 100 }, (_, index) => ({ cookie: `cookie-${index}`, threadId: `thread-${index}` }));
   const receipt = {
     schemaVersion: 1,
-    authorization: "server244-image-model-comparison-2026-09-12",
+    authorization: "production-host-image-model-comparison-2026-09-24",
     model: config.model,
     quality: config.quality,
     agentModel: config.agentModel,

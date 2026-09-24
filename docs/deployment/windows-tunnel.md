@@ -2,7 +2,7 @@
 
 Commerce Pilot remains a browser application backed by the application-owned
 Codex Harness container. Windows is the deployment host, not a desktop product
-shell. The installed release on 2026-09-14 uses application/jobs/Gateway source
+shell. The initial release on 2026-09-14 used application/jobs/Gateway source
 `0c5bee6e3af74eb9f84d044f0f595698ea4231c7` and the unchanged reviewed proxy image
 from `23ed8ca0fea00437359408c13a8252a0acf799cd`.
 
@@ -14,7 +14,8 @@ from `23ed8ca0fea00437359408c13a8252a0acf799cd`.
 - Compose project: `commerce-pilot-mcp`; dedicated database, search, runtime,
   Linux TLS and model-socket volumes. Never run `down -v` during an update.
 - Compose order: production-mcp base, production-web overlay, protected
-  `windows.yaml`, and opt-in `jobs.yaml` for operator jobs only.
+  `windows.yaml`, and `jobs.yaml` (its jobs profile is opt-in). Supplier overlays
+  require separate protected configuration and are not in this installed project.
 - SSH operations use the project-specific `DOCKER_CONFIG` and
   `DOCKER_HOST=npipe:////./pipe/dockerDesktopLinuxEngine`. Do not overwrite the
   desktop user's credential-helper settings.

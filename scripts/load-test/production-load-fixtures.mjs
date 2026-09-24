@@ -5,14 +5,14 @@ import { pathToFileURL } from "node:url";
 import { makeSignature } from "better-auth/crypto";
 import { Pool } from "pg";
 
-const AUTHORIZATION = "server244-company-load-and-image-comparison-2026-09-12";
+const AUTHORIZATION = "production-host-company-load-and-image-comparison-2026-09-24";
 const USER_COUNT = 100;
 const PUBLIC_HOST = "commerce.shueho.com";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export function readProductionFixtureConfig(environment) {
   if (environment.PRODUCTION_LOAD_AUTHORIZATION !== AUTHORIZATION) {
-    throw new Error("Explicit server244 production-load authorization is required.");
+    throw new Error("Explicit production-host load-test authorization is required.");
   }
   if (!UUID.test(environment.COMMERCE_RUNTIME_TENANT_ID ?? "")) {
     throw new Error("COMMERCE_RUNTIME_TENANT_ID must identify the dedicated production tenant.");
@@ -28,7 +28,7 @@ export function readProductionFixtureConfig(environment) {
   const publicHttps = base.protocol === "https:" && base.hostname === PUBLIC_HOST && !base.port;
   const serverInternal = base.protocol === "http:" && base.hostname === "web-edge" && base.port === "8080";
   if ((!publicHttps && !serverInternal) || base.pathname !== "/" || base.search || base.hash || base.username || base.password) {
-    throw new Error(`Production fixture BFF must be https://${PUBLIC_HOST} or the server244-internal web-edge:8080 service.`);
+    throw new Error(`Production fixture BFF must be https://${PUBLIC_HOST} or the production-host-internal web-edge:8080 service.`);
   }
   const outputDirectory = resolve(environment.PRODUCTION_LOAD_OUTPUT_DIR ?? "");
   if (!environment.PRODUCTION_LOAD_OUTPUT_DIR || !outputDirectory.includes("production-load")) {
@@ -37,7 +37,7 @@ export function readProductionFixtureConfig(environment) {
   return {
     baseUrl: base.origin,
     originUrl: `https://${PUBLIC_HOST}`,
-    transport: publicHttps ? "public_https" : "server244_internal_bff",
+    transport: publicHttps ? "public_https" : "production_internal_bff",
     databaseUrl: database.toString(),
     outputDirectory,
     statePath: resolve(outputDirectory, "fixture-state.json"),

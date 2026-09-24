@@ -317,23 +317,24 @@ These direct Gateway examples are for loopback-only local development when the i
 
 ## Custom Model Providers
 
-Yes, custom providers can be used with App Server. This gateway configures `luusmosh_cpa` at `https://cpa.luusmosh.com/v1`, passes `modelProvider` to `thread/start`, and uses the Responses wire API required by current Codex.
+Yes, custom providers can be used with App Server. Production on `192.168.50.144` connects the Gateway container to the CPA on the same Windows host through `http://host.docker.internal:8317/v1`. The stable provider id `luusmosh_cpa` remains unchanged for persisted Codex threads and usage attribution. The Gateway passes that id as `modelProvider` to `thread/start` and uses the Responses wire API required by current Codex. Production requires an explicit `COMMERCE_PROVIDER_BASE_URL` and keeps its API key only in protected Gateway configuration.
 
 Provider definitions are generated into the app-owned `$CODEX_HOME/config.toml`. The application does not rely on a human user's `~/.codex/config.toml`, and deployment machines do not need a globally installed `codex`.
 
 Project `.codex/config.toml` is not the right place for production provider secrets. Treat provider definitions and credentials as deployment configuration.
 
-Example user-level config:
+The generated Codex provider points at the Gateway's actor-authorized loopback relay. Only the Gateway uses the host-local CPA address and upstream key:
 
 ```toml
 model_provider = "luusmosh_cpa"
 model = "gpt-5.6-luna"
 
 [model_providers.luusmosh_cpa]
-name = "Luusmosh CPA"
-base_url = "https://cpa.luusmosh.com/v1"
-env_key = "COMMERCE_PROVIDER_API_KEY"
+name = "CLI Proxy API"
+base_url = "http://127.0.0.1:8787/api/internal/provider/v1"
 wire_api = "responses"
+requires_openai_auth = false
+http_headers = { "x-openai-actor-authorization" = "<gateway-derived-runtime-actor>" }
 request_max_retries = 0
 stream_max_retries = 0
 stream_idle_timeout_ms = 120000

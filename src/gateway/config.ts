@@ -167,11 +167,15 @@ export function readCommerceProviderConfig(): CommerceProviderConfig {
   if (!/^[A-Za-z0-9_-]+$/.test(id)) {
     throw new Error("COMMERCE_PROVIDER_ID may contain only letters, numbers, underscores, and hyphens.");
   }
+  const configuredBaseUrl = process.env.COMMERCE_PROVIDER_BASE_URL?.trim();
+  if (process.env.NODE_ENV === "production" && !configuredBaseUrl) {
+    throw new Error("COMMERCE_PROVIDER_BASE_URL is required in production.");
+  }
 
   return {
     id,
-    name: process.env.COMMERCE_PROVIDER_NAME?.trim() || "Luusmosh CPA",
-    baseUrl: parseProviderBaseUrl(process.env.COMMERCE_PROVIDER_BASE_URL || "https://cpa.luusmosh.com/v1"),
+    name: process.env.COMMERCE_PROVIDER_NAME?.trim() || "CLI Proxy API",
+    baseUrl: parseProviderBaseUrl(configuredBaseUrl || "http://127.0.0.1:8317/v1"),
     apiKeyEnvName: "COMMERCE_PROVIDER_API_KEY",
     apiKey: emptyToUndefined(process.env.COMMERCE_PROVIDER_API_KEY),
     imageModel: parseImageModel(process.env.COMMERCE_IMAGE_MODEL),

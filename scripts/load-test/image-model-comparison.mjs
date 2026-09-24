@@ -13,7 +13,7 @@ import {
 } from "./mixed-ai-protocol.mjs";
 import { percentile } from "./read-load.mjs";
 
-const AUTHORIZATION = "server244-image-model-comparison-2026-09-12";
+const AUTHORIZATION = "production-host-image-model-comparison-2026-09-24";
 const MODELS = new Set(["gpt-image-2", "gpt-image-2.5-flare", "gpt-image-2.5-sunburst"]);
 const QUALITIES = new Set(["low", "medium", "high", "xhigh", "max", "auto"]);
 const PUBLIC_HOST = "commerce.shueho.com";
@@ -28,7 +28,7 @@ export function readImageComparisonConfig(environment) {
   const publicHttps = base.protocol === "https:" && base.hostname === PUBLIC_HOST && !base.port;
   const serverInternal = base.protocol === "http:" && base.hostname === "web-edge" && base.port === "8080";
   if ((!publicHttps && !serverInternal) || base.pathname !== "/" || base.search || base.hash || base.username || base.password) {
-    throw new Error(`Image comparison must use https://${PUBLIC_HOST} or the server244-internal web-edge:8080 service.`);
+    throw new Error(`Image comparison must use https://${PUBLIC_HOST} or the production-host-internal web-edge:8080 service.`);
   }
   const userOffset = Number(environment.IMAGE_COMPARISON_USER_OFFSET);
   if (!Number.isInteger(userOffset) || userOffset < 0 || userOffset + USERS_PER_ROUND > 100) throw new Error("Image comparison user offset must select ten fixture users.");
@@ -41,7 +41,7 @@ export function readImageComparisonConfig(environment) {
   return {
     baseUrl: base.origin,
     originUrl: `https://${PUBLIC_HOST}`,
-    transport: publicHttps ? "public_https" : "server244_internal_bff",
+    transport: publicHttps ? "public_https" : "production_internal_bff",
     model: environment.IMAGE_COMPARISON_MODEL,
     quality: environment.IMAGE_COMPARISON_QUALITY,
     agentModel: environment.IMAGE_COMPARISON_AGENT_MODEL?.trim() || "gpt-5.6-luna",
