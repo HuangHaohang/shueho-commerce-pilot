@@ -239,6 +239,14 @@ type WorkComposerProps = {
 - 输入聚焦时只增强外层胶囊边框，禁止在输入区域内部出现矩形 focus outline 或 ring。
 - 登录后切换为完整 `WorkComposer`，不得用访客样式替代工作模式。
 
+## Failed task recovery in the conversation
+
+- A failed persisted Turn has a **继续任务** action in its error notice even if no assistant message exists. Reopening a failed task retains this action.
+- Truncated model streams use a short Chinese explanation. Stream EOF and explicit idle timeout remain distinct; elapsed task duration is not evidence of a timeout.
+- Continuing first verifies the same failed Turn through server readback. The button is disabled during readback, and task navigation/submission is locked while verification is pending.
+- Continuing preserves prior messages, searches, native question answers and the current composer draft/attachments. It sends one visible user follow-up in the same Harness thread and uses normal authorization/approval boundaries. It is not automatic paid-operation replay or answer regeneration.
+- A streaming error while a Turn is still active must not show a continuation action. Browser transport loss alone is not a failed Turn.
+
 ## ProjectSelector
 
 职责：
