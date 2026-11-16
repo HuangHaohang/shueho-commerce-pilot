@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createEventStreamRecovery } from "./event-stream-recovery";
 import { AGENT_READ_TIMEOUT_MS, readAgentJson } from "./agent-read";
+import { continueFailedTask, presentRuntimeError } from "./failed-turn-recovery";
 
 import {
   findMatchingConversationMessage,
@@ -267,6 +268,8 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   );
   const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [retryingMessageId, setRetryingMessageId] = useState<string | null>(null);
+  const [continuingFailedTask, setContinuingFailedTask] = useState(false);
+  const continuingFailedTaskRef = useRef(false);
   const [streamRecoveryEpoch, setStreamRecoveryEpoch] = useState(0);
   const eventSourceRef = useRef<EventSource | null>(null);
   const streamRecoveryRef = useRef<ReturnType<typeof createEventStreamRecovery> | null>(null);
@@ -1253,10 +1256,11 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
   }, [historyCursor, loadingOlderHistory, threadId]);
 
   const submit = useCallback(
-    async (text: string, options?: AgentSubmitOptions): Promise<boolean> => {
+    async (text: string, options?: AgentSubmitOptions, preserveThread = false): Promise<boolean> => {
       const message = text.trim();
       const pendingAttachments = options?.attachments ?? [];
-      if ((!message && !pendingAttachments.length) || status === "running" || status === "connecting") {
+      if ((!message && !pendingAttachments.length) || status === "running" || status === "connecting" || pendingSubmitClientIdRef.current ||
+        (!preserveThread && continuingFailedTaskRef.current)) {
         return false;
       }
       unconfirmedSteerRef.current = null;
@@ -1357,6 +1361,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         if (!response.ok) {
           const responseError = readError(payload) || "无法启动 Agent 任务。";
           if (
+            !preserveThread &&
             !options?.imageEditSourceFilenames?.length &&
             (
               /thread not found|不可恢复|工具契约已更新/i.test(responseError) ||
@@ -1458,14 +1463,39 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         pendingSubmitStartedAtRef.current = null;
         setMessages((current) => current.filter((item) => item.id !== optimisticMessageId));
         setError(submitError instanceof Error ? submitError.message : "Agent 请求失败。");
+        if (preserveThread) setLastTurnId(lastTurnId);
         setStatus("failed");
         return false;
       } finally {
         setPreparationLabel(null);
       }
     },
-    [activateTurn, confirmPendingSubmit, connectEventStream, effort, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
+    [activateTurn, confirmPendingSubmit, connectEventStream, effort, lastTurnId, model, refreshQueue, runtimeHealth?.instanceId, status, threadId],
   );
+
+  const continueTask = useCallback(async (options?: AgentSubmitOptions): Promise<boolean> => {
+    if (!threadId || !lastTurnId || status !== "failed" || loadingHistory || compactingRef.current ||
+      continuingFailedTaskRef.current || retryingMessageIdRef.current || pendingSubmitClientIdRef.current) return false;
+    const recoveryThreadId = threadId;
+    continuingFailedTaskRef.current = true;
+    setContinuingFailedTask(true);
+    try {
+      return await continueFailedTask({
+        threadId,
+        turnId: lastTurnId,
+        isCurrent: () => threadIdRef.current === recoveryThreadId && !activeTurnIdRef.current && !pendingSubmitClientIdRef.current,
+        submit: (message) => submit(message, options, true),
+      });
+    } catch (recoveryError) {
+      if (threadIdRef.current === recoveryThreadId) {
+        setError(recoveryError instanceof Error ? recoveryError.message : "暂时无法继续任务。");
+      }
+      return false;
+    } finally {
+      continuingFailedTaskRef.current = false;
+      setContinuingFailedTask(false);
+    }
+  }, [lastTurnId, loadingHistory, status, submit, threadId]);
 
   const retryMessage = useCallback(
     async (
@@ -1480,6 +1510,7 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
         status === "running" ||
         status === "connecting" ||
         compactingRef.current ||
+        continuingFailedTaskRef.current ||
         retryingMessageIdRef.current
       ) {
         return false;
@@ -2059,6 +2090,9 @@ export function useAgentThread({ model, effort, runtimeHealth }: UseAgentThreadO
     feedbackError,
     feedbackSubmittingIds,
     retryingMessageId,
+    continuingFailedTask,
+    canContinueTask: status === "failed" && Boolean(threadId && lastTurnId) && !loadingHistory && !compacting && !retryingMessageId,
+    continueTask,
     submit,
     retryMessage,
     steerMessage,
@@ -2616,11 +2650,4 @@ export function readUserMessageSkillName(item: Record<string, unknown>): string 
     .filter((entry) => entry.type === "skill" && typeof entry.name === "string")
     .at(-1);
   return skill && typeof skill.name === "string" ? skill.name : null;
-}
-
-function presentRuntimeError(error: string | null): string | null {
-  if (!error) return null;
-  if (/\b524\b/.test(error)) return "图片服务响应超时（524）。请等待当前任务状态更新；若任务已失败，可手动重试。";
-  if (/<!doctype\s+html|<html[\s>]/i.test(error)) return "上游服务暂时不可用，请稍后重试。";
-  return error;
 }

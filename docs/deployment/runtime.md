@@ -8,6 +8,12 @@ replace Harness scheduling, persisted history, approvals or recovery.
 
 This is a web application. Deployment machines do not need a preinstalled global `codex` executable.
 
+## Diagnosing a truncated model response
+
+`stream closed before response.completed` means the Harness did not receive a successful terminal response. It does not by itself identify an idle timeout. Correlate the failed Harness Turn time with Provider request metadata and its terminal event/code; HTTP 200 can still carry an SSE `error`. Inspect only the necessary error fields, not raw prompts, credentials or customer payloads. Do not enable payload logging to diagnose this failure.
+
+The workbench's **继续任务** action reads back the failed Turn before submitting a visible continuation in the same thread. It preserves prior tool results and question answers; it does not replay a failed response or clear history. Provider retries remain zero for image-capable streams, and uncertain paid operations still require reconciliation. Increasing `stream_idle_timeout_ms` cannot fix an upstream `server_error` that closed the stream while it was active. This UI recovery change needs only a Web/control release; it introduces no environment variables, database migrations or Gateway/runtime restart.
+
 ## Runtime Ownership
 
 The application event-outbox writer uses a SQLite exclusive transaction as an

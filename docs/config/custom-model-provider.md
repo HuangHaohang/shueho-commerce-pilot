@@ -123,6 +123,13 @@ Harness imageGeneration Item -> tenant artifact storage
 
 The relay accepts only model listing, Responses, Responses compaction, image generation, and image edit routes. It validates the runtime actor, strips that header, injects the upstream CPA key, and streams the one upstream response. The application-owned `shueho.2` Harness patch projects completed hosted `image_generation_call` output in real time and during history replay; it never dispatches a second image call. The relay and Gateway do not create an application-owned image tool or synthesize an Item.
 
+The upstream must preserve the Harness-owned tool catalog, including declarations in
+`input` items of type `additional_tools`. CPA 8.0.12 requires
+`multimedia.disable-image-generation: passthrough` to avoid injecting a hosted
+`image_generation` tool alongside the native `image_gen.imagegen` namespace function.
+This preserves explicitly requested hosted tools and Image API routes. See the
+[production configuration and no-tool-call verification](../deployment/production-host.md#cpa-图片工具透传).
+
 Codex owns image intent detection, Skill instructions, provider execution, item lifecycle, usage and Turn continuation. Gateway consumes the completed native Item, saves the base64 result under `$CODEX_HOME/generated_images`, and stores non-PII metadata under `$CODEX_HOME/generated_image_metadata`. Before SSE or history reaches the BFF, Gateway removes image bytes and `savedPath`; the browser receives only an ownership-checked artifact URL. A Provider request or stream failure is treated as uncertain: retries are disabled and 120 seconds without SSE progress terminates the attempt for explicit reconciliation/retry.
 
 The image model and quality are application-owned deployment settings. `COMMERCE_IMAGE_MODEL`

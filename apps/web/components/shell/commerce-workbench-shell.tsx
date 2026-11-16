@@ -72,6 +72,7 @@ import { createPortal, flushSync } from "react-dom";
 
 import { AgentRequestUserInputPanel } from "@/components/agent/request-user-input-panel";
 import { AssistantMessageActions } from "@/components/agent/assistant-message-actions";
+import { TurnFailureNotice } from "@/components/agent/turn-failure-notice";
 import { AssistantMarkdown } from "@/components/agent/assistant-markdown";
 import { ImagePreview } from "@/components/agent/image-preview";
 import {
@@ -497,6 +498,7 @@ export function CommerceWorkbenchShell({
   const navigationLocked =
     (agentThread.status === "connecting" && !agentThread.loadingHistory) ||
     agentThread.queueSubmitting ||
+    agentThread.continuingFailedTask ||
     Boolean(agentThread.retryingMessageId);
   const deletingThreadIds = useMemo(
     () =>
@@ -638,7 +640,7 @@ export function CommerceWorkbenchShell({
     if (!value && !composerAttachments.length) {
       return;
     }
-    if (agentThread.status === "connecting" || agentThread.compacting) {
+    if (agentThread.status === "connecting" || agentThread.compacting || agentThread.continuingFailedTask) {
       return;
     }
     const steering = agentThread.status === "running" && Boolean(agentThread.activeTurnId);
@@ -1215,6 +1217,9 @@ export function CommerceWorkbenchShell({
   }
 
   function renderConversationWorkspace(layout: "default" | "creative-panel" = "default") {
+    const recoveryProducts = agentThread.messages.find((message) =>
+      message.role === "user" && message.turnId === agentThread.currentTurnId && message.products?.length,
+    )?.products ?? [];
     return (
       <ConversationWorkspace
         title={agentThread.threadTitle || (layout === "creative-panel" ? "未命名项目" : "新任务")}
@@ -1233,6 +1238,17 @@ export function CommerceWorkbenchShell({
         queueOperationId={agentThread.queueOperationId}
         feedbackSubmittingIds={agentThread.feedbackSubmittingIds}
         retryingMessageId={agentThread.retryingMessageId}
+        canContinueTask={agentThread.canContinueTask}
+        continuingFailedTask={agentThread.continuingFailedTask}
+        onContinueTask={() => agentThread.continueTask({
+          ...(activeView === "creative" ? { workflow: "commerce-creative-project" as const } :
+            activeView === "research" ? { workflow: "commerce-product-insight" as const, insightMethod: productInsightMethod } :
+              activeManagedEntryWorkflow ? { workflow: activeManagedEntryWorkflow } : {}),
+          externalDataApprovalMode: "always_ask",
+          productContextMode: recoveryProducts.length ? "selected" : "none",
+          productIds: recoveryProducts.map((product) => product.id),
+          displayProducts: recoveryProducts,
+        })}
         loadingHistory={agentThread.loadingHistory}
         hasOlderHistory={agentThread.hasOlderHistory}
         loadingOlderHistory={agentThread.loadingOlderHistory}
@@ -1722,6 +1738,9 @@ function ConversationWorkspace({
   queueOperationId,
   feedbackSubmittingIds,
   retryingMessageId,
+  canContinueTask,
+  continuingFailedTask,
+  onContinueTask,
   loadingHistory,
   hasOlderHistory,
   loadingOlderHistory,
@@ -1787,6 +1806,9 @@ function ConversationWorkspace({
   queueOperationId: string | null;
   feedbackSubmittingIds: ReadonlySet<string>;
   retryingMessageId: string | null;
+  canContinueTask: boolean;
+  continuingFailedTask: boolean;
+  onContinueTask: () => Promise<boolean>;
   loadingHistory: boolean;
   hasOlderHistory: boolean;
   loadingOlderHistory: boolean;
@@ -2192,11 +2214,7 @@ function ConversationWorkspace({
             </div>
           ) : null}
 
-          {error ? (
-            <div className="mt-6 rounded-[var(--cp-radius-item)] bg-[var(--cp-danger-bg)] px-4 py-3 text-sm text-[var(--cp-danger)]" role="alert">
-              {error}
-            </div>
-          ) : null}
+          <TurnFailureNotice error={error} canContinue={canContinueTask} continuing={continuingFailedTask} onContinue={onContinueTask} />
         </div>
       </div>
 
