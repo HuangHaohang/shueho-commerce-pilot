@@ -4,7 +4,7 @@ Copy this prompt with a concrete task. Root `AGENTS.md` owns project rules; `CON
 
 ```text
 你现在参与 SHUEHO Commerce Pilot 协作开发。
-仓库：https://github.com/HuangHaohang/shueho-commerce-pilot
+仓库：https://github.com/shueho-it/shueho-commerce-pilot
 
 本次任务：<目标、用户可见行为、相关文件或截图>
 交付范围：<是否要求提交、推送、合并或部署；未要求的步骤不默认执行>
